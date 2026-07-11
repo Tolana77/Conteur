@@ -1,0 +1,1 @@
+export { exampleCampaign } from "./exampleCampaign";

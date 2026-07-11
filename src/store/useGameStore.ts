@@ -1,0 +1,5035 @@
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { exampleCampaign } from "../features/campaign";
+import { rollDiceFormula } from "../features/dice";
+import {
+  canUseAbility,
+  createAbilityInstance,
+  createInitialAbilityInstances,
+  initialAbilityTemplates,
+  rechargeAbility as rechargeAbilityCharge,
+  setAbilityCharges as setAbilityChargeCount,
+  useAbilityCharge,
+} from "../features/abilities";
+import {
+  createInitialItemInstances,
+  initialItemTemplates,
+  isItemEquipable,
+  isItemUsable,
+  preventsUnequip,
+} from "../features/items";
+import {
+  getCombatantTargetPosition,
+  getSuggestedSide,
+  getTargetingRange,
+  resolveActionTargets,
+  toLegacyTargetingRule,
+} from "../features/combat/targeting";
+import { getCombatConditionTemplate } from "../features/combat/conditionTemplates";
+import { resolveEffectValue, type ValueExpressionContext } from "../features/items/valueExpressions";
+import { createMockGmResponse } from "../app/mockGameMaster";
+import type {
+  Campaign,
+  ActionTarget,
+  ActionTargetingRule,
+  AbilityInstance,
+  AbilityRechargeTrigger,
+  AbilityTemplate,
+  Character,
+  CharacterDerivedScores,
+  ChatActionIntent,
+  ChatActionIntentKind,
+  Combatant,
+  CombatLogEntry,
+  CombatScene,
+  CombatPosition,
+  DiceRoll,
+  DiceVisibility,
+  Entity,
+  ItemInstance,
+  ItemTemplate,
+  Message,
+  CharacterStats,
+} from "../app/types";
+
+export const GAME_STORAGE_KEY = "le-conteur:game-state";
+export const GAME_STORAGE_VERSION = 20;
+export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
+export const MAX_PLAYER_ACTION_INTENTS = 2;
+
+const diceStatColors = {
+  FOR: "#661309",
+  DEX: "#5FA85A",
+  CON: "#E0792A",
+  INT: "#C7007E",
+  SAG: "#5B4FCB",
+  CHA: "#F5D24A",
+} as const;
+
+interface UiSettings {
+  showItemTags: boolean;
+}
+
+interface GameState {
+  storageVersion: number;
+  campaign: Campaign;
+  characters: Character[];
+  selectedCharacterId: string;
+  messages: Message[];
+  pendingActionIntents: ChatActionIntent[];
+  diceRolls: DiceRoll[];
+  characterPortraits: Record<string, string>;
+  uiSettings: UiSettings;
+  characterDerivedScores: Record<string, CharacterDerivedScores>;
+  itemTemplates: ItemTemplate[];
+  itemInstances: ItemInstance[];
+  abilityTemplates: AbilityTemplate[];
+  abilityInstances: AbilityInstance[];
+  combat: CombatScene;
+  selectCharacter: (characterId: string) => void;
+  setCharacterPortrait: (characterId: string, portrait: string) => void;
+  dealDamage: (characterId: string, amount: number, damageType?: string) => void;
+  healCharacter: (characterId: string, amount: number) => void;
+  setCharacterPv: (characterId: string, pv: number) => void;
+  changeCharacterStat: (
+    characterId: string,
+    stat: keyof Character["stats"],
+    value: number,
+    mode: "add" | "set",
+  ) => void;
+  equipItem: (itemId: string) => void;
+  unequipItem: (itemId: string) => void;
+  moveItemToBag: (itemId: string) => void;
+  giveItem: (characterId: string, templateId: string, quantity?: number) => ItemInstance | null;
+  removeItem: (itemId: string) => void;
+  useItem: (itemId: string) => void;
+  useAbility: (abilityId: string) => boolean;
+  rechargeAbility: (abilityId: string) => void;
+  setAbilityCharges: (abilityId: string, charges: number) => void;
+  rest: (characterId: string, type: "short" | "long") => void;
+  startEncounter: (characterId: string) => void;
+  startCombat: () => void;
+  endCombat: () => void;
+  addCharacterToCombat: (characterId: string) => void;
+  addEntityToCombat: (entityId: string, side?: Combatant["side"]) => void;
+  revealMapDetail: (detailId: string) => void;
+  hideMapDetail: (detailId: string) => void;
+  moveCombatant: (combatantId: string, position: CombatPosition) => void;
+  disengageCombatant: (combatantId: string) => void;
+  nextCombatTurn: () => void;
+  attackCombatant: (attackerId: string, targetId: string, weaponName: string, damage: number) => void;
+  addAttackIntent: (weaponId: string, label: string, target?: ActionTarget) => boolean;
+  addActionIntent: (kind: ChatActionIntentKind, targetId: string, label: string, target?: ActionTarget) => boolean;
+  updateActionIntentTarget: (intentId: string, target: ActionTarget) => void;
+  removeActionIntent: (intentId: string) => void;
+  clearActionIntents: () => void;
+  moveItemBefore: (itemId: string, beforeItemId: string) => void;
+  setShowItemTags: (showItemTags: boolean) => void;
+  clearCharacterPortraits: () => void;
+  resetGameState: () => void;
+  addGmMessage: (content: string) => void;
+  sendPlayerMessage: (content: string) => void;
+  roll: (sides: number) => DiceRoll;
+  rollFormula: (formula: string, visibility?: DiceVisibility, reason?: string) => DiceRoll;
+  updateWorldFact: (index: number, value: string) => void;
+  addWorldFact: (value: string) => void;
+  removeWorldFact: (index: number) => void;
+  updateEntity: (entity: Entity) => void;
+}
+
+const initialMessages: Message[] = [
+  {
+    id: "message-gm-intro",
+    sender: "gm",
+    content: "Bienvenue aux Marches d'Argelune. Que faites-vous ?",
+    timestamp: 1_735_689_601_000,
+  },
+];
+
+function createInitialCombatScene(): CombatScene {
+  return {
+    id: "combat-initial",
+    status: "inactive",
+    round: 1,
+    turnIndex: 0,
+    map: {
+      width: 30,
+      height: 20,
+      unit: "meter",
+      cellSize: 0.5,
+      obstacles: [
+        {
+          id: "obstacle-ruined-wall",
+          name: "Muret écroulé",
+          x: 13,
+          y: 7,
+          width: 4,
+          height: 1.2,
+          blocksMovement: true,
+          blocksLineOfSight: true,
+        },
+        {
+          id: "obstacle-stone-pillar",
+          name: "Pilier",
+          x: 21,
+          y: 13,
+          width: 2,
+          height: 2,
+          blocksMovement: true,
+          blocksLineOfSight: true,
+        },
+      ],
+      details: [
+        {
+          id: "detail-heavy-stones",
+          name: "Pierres lourdes",
+          description: "Des pierres détachées du muret, assez massives pour être lancées à deux mains.",
+          x: 12.2,
+          y: 8.8,
+          kind: "looseObject",
+          tags: ["stone", "heavy", "throwable", "improvised-weapon"],
+          quantity: 4,
+          visible: false,
+          interactable: true,
+          usableAs: ["projectile", "cover-wedge"],
+          rule: "Peut servir de projectile improvisé si le MJ valide l'action.",
+        },
+        {
+          id: "detail-glass-shards",
+          name: "Éclats de verre",
+          description: "Un tapis de petits éclats translucides près d'une ancienne vitrine.",
+          x: 18.5,
+          y: 4.5,
+          kind: "looseObject",
+          tags: ["glass", "sharp", "fragile", "improvised-trap"],
+          quantity: 1,
+          visible: false,
+          interactable: true,
+          usableAs: ["distraction", "trap-component"],
+          rule: "Peut être ramassé ou dispersé pour créer un danger mineur.",
+        },
+        {
+          id: "detail-rope-coil",
+          name: "Corde poussiéreuse",
+          description: "Une corde rêche enroulée près d'un pilier.",
+          x: 22.8,
+          y: 12.2,
+          kind: "resource",
+          tags: ["rope", "tool", "binding", "climb"],
+          quantity: 1,
+          visible: false,
+          interactable: true,
+          usableAs: ["tool", "restraint"],
+          rule: "Peut aider à grimper, lier ou tirer un objet léger.",
+        },
+        {
+          id: "detail-dusty-tracks",
+          name: "Traces dans la poussière",
+          description: "Des marques récentes contournent le nuage de fumée.",
+          x: 14,
+          y: 15.5,
+          kind: "clue",
+          tags: ["tracks", "clue", "recent", "investigation"],
+          visible: false,
+          interactable: false,
+          usableAs: ["clue"],
+          rule: "Peut apparaître après une recherche ou un jet de Perception/Investigation.",
+        },
+      ],
+      elements: [
+        {
+          id: "element-burning-ground",
+          name: "Sol enflammé",
+          kind: "hazard",
+          x: 8,
+          y: 12,
+          width: 3,
+          height: 2,
+          cells: [
+            { x: 8, y: 12 },
+            { x: 8.5, y: 12 },
+            { x: 9, y: 12 },
+            { x: 9.5, y: 12 },
+            { x: 8.5, y: 12.5 },
+            { x: 9, y: 12.5 },
+            { x: 9.5, y: 12.5 },
+            { x: 10, y: 12.5 },
+            { x: 9, y: 13 },
+            { x: 9.5, y: 13 },
+          ],
+          description: "Des braises courent entre les dalles et lèchent les bottes de ceux qui s'y attardent.",
+          rule: "Début de tour : 1d6 dégâts de feu à toute créature dans la zone.",
+          color: "#7A1F2E",
+          effects: [
+            { trigger: "startTurn", type: "damage", value: "1d6", damageType: "feu", label: "Brûlure" },
+            { trigger: "enter", type: "damage", value: 2, damageType: "feu", label: "Contact brûlant" },
+          ],
+        },
+        {
+          id: "element-acid-puddle",
+          name: "Flaque acide",
+          kind: "hazard",
+          x: 6.5,
+          y: 7.5,
+          width: 2,
+          height: 1,
+          cells: [
+            { x: 6.5, y: 7.5 },
+            { x: 7, y: 7.5 },
+            { x: 7.5, y: 7.5 },
+            { x: 8, y: 8 },
+          ],
+          description: "Une flaque verdâtre fume lentement et attaque le cuir comme le métal.",
+          rule: "Entrée ou début de tour : 1d4 dégâts d'acide.",
+          color: "#3F5641",
+          effects: [
+            { trigger: "startTurn", type: "damage", value: "1d4", damageType: "acide", label: "Acide" },
+            { trigger: "enter", type: "damage", value: "1d4", damageType: "acide", label: "Acide" },
+          ],
+        },
+        {
+          id: "element-caltrops",
+          name: "Chausse-trappes",
+          kind: "hazard",
+          x: 4,
+          y: 13,
+          width: 3,
+          height: 2,
+          description: "De petites pointes noires sont dispersées au sol.",
+          rule: "Entrer dans la zone arrête le mouvement. DEX DD 12 pour éviter 1 dégât perforant. Traverser coûte +1 m par mètre.",
+          color: "#5C5566",
+          effects: [
+            { trigger: "enter", type: "stopMovement", label: "Sol piégé" },
+            { trigger: "enter", type: "damage", value: 1, damageType: "perforant", label: "Pointes", savingThrow: { stat: "dexterite", dc: 12, success: "none" } },
+            { trigger: "passive", type: "movementCost", value: 2, label: "Sol piégé" },
+          ],
+        },
+        {
+          id: "element-difficult-rubble",
+          name: "Décombres instables",
+          kind: "terrain",
+          x: 12,
+          y: 10,
+          width: 5,
+          height: 2,
+          cells: [
+            { x: 12, y: 10 },
+            { x: 12.5, y: 10 },
+            { x: 13, y: 10 },
+            { x: 14, y: 10 },
+            { x: 15, y: 10 },
+            { x: 16, y: 10 },
+            { x: 13, y: 10.5 },
+            { x: 13.5, y: 10.5 },
+            { x: 14, y: 10.5 },
+            { x: 15.5, y: 10.5 },
+            { x: 16, y: 10.5 },
+            { x: 14.5, y: 11 },
+            { x: 15, y: 11 },
+          ],
+          description: "Pierres, poutres fendues et poussière rendent les appuis incertains.",
+          rule: "Terrain difficile : le déplacement coûte le double.",
+          color: "#6E5A3C",
+          effects: [
+            { trigger: "passive", type: "movementCost", value: 2, label: "Terrain difficile" },
+          ],
+        },
+        {
+          id: "element-oil-slick",
+          name: "Huile répandue",
+          kind: "terrain",
+          x: 6,
+          y: 7,
+          width: 3,
+          height: 2,
+          description: "Une couche huileuse reflète faiblement l'or des torches.",
+          rule: "Risque de chute lors d'une course ou d'un déplacement brutal. Devient Sol enflammé si exposée au feu.",
+          color: "#8C3F73",
+          effects: [
+            { trigger: "enter", type: "condition", condition: "slippery-footing", label: "Huile" },
+            { trigger: "passive", type: "movementCost", value: 1.5, label: "Sol glissant" },
+          ],
+        },
+        {
+          id: "element-low-cover",
+          name: "Barricade basse",
+          kind: "cover",
+          x: 19,
+          y: 8,
+          width: 3,
+          height: 1,
+          description: "Des planches clouées à la hâte offrent une protection partielle.",
+          rule: "Couvert partiel contre les attaques venant de l'autre côté.",
+          color: "#2F5C7A",
+          effects: [
+            { trigger: "passive", type: "cover", value: 2, label: "Couvert partiel" },
+          ],
+        },
+        {
+          id: "element-high-ground",
+          name: "Estrade surélevée",
+          kind: "terrain",
+          x: 2,
+          y: 3,
+          width: 5,
+          height: 3,
+          description: "Une estrade fissurée domine légèrement la salle.",
+          rule: "Avantage narratif pour observer, tirer ou intimider depuis la zone.",
+          color: "#9C7A2E",
+          effects: [
+            { trigger: "startTurn", type: "condition", condition: "high-ground", label: "Hauteur" },
+          ],
+        },
+        {
+          id: "element-smoke-cloud",
+          name: "Nuage de fumée",
+          kind: "darkness",
+          x: 15,
+          y: 14,
+          width: 4,
+          height: 3,
+          cells: [
+            { x: 15.5, y: 14 },
+            { x: 16, y: 14 },
+            { x: 16.5, y: 14 },
+            { x: 17, y: 14.5 },
+            { x: 18, y: 14.5 },
+            { x: 15, y: 15 },
+            { x: 15.5, y: 15 },
+            { x: 16, y: 15 },
+            { x: 17, y: 15 },
+            { x: 17.5, y: 15 },
+            { x: 18.5, y: 15 },
+            { x: 16, y: 15.5 },
+            { x: 16.5, y: 15.5 },
+            { x: 17, y: 16 },
+          ],
+          description: "Une fumée grasse roule entre les silhouettes.",
+          rule: "La zone bloque fortement la visibilité mais pas le déplacement.",
+          color: "#6B4A5C",
+          blocksLineOfSight: true,
+          effects: [
+            { trigger: "passive", type: "lineOfSightBlock", label: "Fumée opaque" },
+            { trigger: "startTurn", type: "condition", condition: "hidden", label: "Fumée" },
+          ],
+        },
+        {
+          id: "element-bright-lantern",
+          name: "Lanterne vive",
+          kind: "light",
+          x: 24,
+          y: 3,
+          width: 2,
+          height: 2,
+          description: "Une lanterne suspendue projette un cercle de lumière stable.",
+          rule: "Révèle les créatures cachées dans ou près de la zone.",
+          color: "#F5D24A",
+          effects: [
+            { trigger: "startTurn", type: "revealHidden", label: "Lumière vive" },
+          ],
+        },
+        {
+          id: "element-shadowed-alcove",
+          name: "Alcôve obscure",
+          kind: "darkness",
+          x: 25,
+          y: 15,
+          width: 3,
+          height: 3,
+          description: "Les angles de pierre avalent presque toute la lumière.",
+          rule: "Facilite la discrétion et peut masquer une menace immobile.",
+          color: "#4B3B66",
+          effects: [
+            { trigger: "startTurn", type: "condition", condition: "hidden", label: "Obscurité" },
+          ],
+        },
+        {
+          id: "element-alarm-rune",
+          name: "Rune d'alarme",
+          kind: "trigger",
+          x: 10,
+          y: 4,
+          width: 1.5,
+          height: 1.5,
+          description: "Une marque anguleuse pulse à peine sous la poussière.",
+          rule: "Déclenchement : attire les ennemis proches ou renforce l'initiative ennemie.",
+          color: "#C7007E",
+          effects: [
+            { trigger: "enter", type: "alert", condition: "alert", label: "Rune d'alarme", oncePerCombat: true },
+          ],
+        },
+        {
+          id: "element-healing-circle",
+          name: "Cercle sanctifié",
+          kind: "resource",
+          x: 3,
+          y: 17,
+          width: 3,
+          height: 2,
+          description: "Des lignes d'or terni dessinent une géométrie protectrice.",
+          rule: "Une fois par combat : une créature dans la zone récupère 1d6 PV.",
+          color: "#9C7A2E",
+          effects: [
+            { trigger: "startTurn", type: "heal", value: "1d6", label: "Cercle sanctifié", oncePerCombat: true },
+          ],
+        },
+        {
+          id: "element-objective-gate",
+          name: "Levier de herse",
+          kind: "objective",
+          x: 27,
+          y: 9,
+          width: 1,
+          height: 2,
+          description: "Un levier rouillé contrôle un mécanisme derrière le mur.",
+          rule: "Action principale : ouvrir ou fermer la herse de la scène.",
+          color: "#9C7A2E",
+          effects: [
+            { trigger: "interact", type: "objective", label: "Levier de herse" },
+          ],
+        },
+        {
+          id: "element-ice-sheet",
+          name: "Plaque de givre",
+          kind: "terrain",
+          x: 11,
+          y: 2,
+          width: 4,
+          height: 2,
+          description: "Une peau de glace mince rend le sol traître.",
+          rule: "Déplacement rapide : risque de glissade. Les poussées déplacent plus loin.",
+          color: "#3F6C8A",
+          effects: [
+            { trigger: "enter", type: "condition", condition: "fragile-balance", label: "Givre" },
+            { trigger: "passive", type: "movementCost", value: 1.5, label: "Sol glissant" },
+          ],
+        },
+        {
+          id: "element-shallow-water",
+          name: "Eau peu profonde",
+          kind: "water",
+          x: 17,
+          y: 2,
+          width: 4,
+          height: 3,
+          cells: [
+            { x: 17, y: 2 },
+            { x: 17.5, y: 2 },
+            { x: 18, y: 2 },
+            { x: 18.5, y: 2 },
+            { x: 19, y: 2.5 },
+            { x: 19.5, y: 2.5 },
+            { x: 20, y: 2.5 },
+            { x: 17.5, y: 3 },
+            { x: 18, y: 3 },
+            { x: 18.5, y: 3 },
+            { x: 19, y: 3 },
+            { x: 20, y: 3.5 },
+            { x: 18, y: 4 },
+            { x: 18.5, y: 4 },
+            { x: 19, y: 4 },
+          ],
+          description: "Une nappe d'eau sombre couvre les dalles et ralentit les appuis.",
+          rule: "Terrain aquatique : le déplacement coûte le double. Entrer dans la zone arrête le mouvement et impose l'état Submergé.",
+          color: "#2F5C7A",
+          effects: [
+            { trigger: "enter", type: "stopMovement", label: "Eau profonde" },
+            { trigger: "enter", type: "condition", condition: "submerged", label: "Submersion" },
+            { trigger: "passive", type: "movementCost", value: 2, label: "Eau peu profonde" },
+          ],
+        },
+        {
+          id: "element-lava-flow",
+          name: "Coulée de lave",
+          kind: "lava",
+          x: 23,
+          y: 16,
+          width: 3,
+          height: 2,
+          cells: [
+            { x: 23, y: 16 },
+            { x: 23.5, y: 16 },
+            { x: 24, y: 16 },
+            { x: 24.5, y: 16.5 },
+            { x: 25, y: 16.5 },
+            { x: 23.5, y: 17 },
+            { x: 24, y: 17 },
+            { x: 24.5, y: 17 },
+          ],
+          description: "La pierre fendue laisse couler une lave lente et suffocante.",
+          rule: "Entrée : 6d6 dégâts de feu, DEX DD 15 pour moitié. Début de tour : 10d6 dégâts de feu. Le mouvement s'arrête dans la lave.",
+          color: "#B5612A",
+          effects: [
+            { trigger: "enter", type: "stopMovement", label: "Lave" },
+            { trigger: "enter", type: "damage", value: "6d6", damageType: "feu", label: "Lave", savingThrow: { stat: "dexterite", dc: 15, success: "half" } },
+            { trigger: "startTurn", type: "damage", value: "10d6", damageType: "feu", label: "Lave" },
+            { trigger: "enter", type: "condition", condition: "burning", label: "Lave" },
+            { trigger: "passive", type: "movementCost", value: 2, label: "Roche en fusion" },
+          ],
+        },
+      ],
+    },
+    combatants: [createHazardCombatant({
+      id: "combatant-hazard-explosive-barrel",
+      sourceId: "hazard-explosive-barrel",
+      name: "Baril instable",
+      hp: 8,
+      defense: 10,
+      position: { x: 21.5, y: 6.5 },
+      attackDamage: 0,
+    })],
+    log: [],
+  };
+}
+
+
+type GameDataState = Pick<
+  GameState,
+  | "storageVersion"
+  | "campaign"
+  | "characters"
+  | "selectedCharacterId"
+  | "messages"
+  | "pendingActionIntents"
+  | "diceRolls"
+  | "characterPortraits"
+  | "uiSettings"
+  | "characterDerivedScores"
+  | "itemTemplates"
+  | "itemInstances"
+  | "abilityTemplates"
+  | "abilityInstances"
+  | "combat"
+>;
+
+function createInitialState(): GameDataState {
+  const characterId = exampleCampaign.characters[0]?.id ?? "";
+  const itemInstances = createInitialItemInstances(characterId);
+
+  return {
+    storageVersion: GAME_STORAGE_VERSION,
+    campaign: exampleCampaign,
+    characters: exampleCampaign.characters,
+    selectedCharacterId: characterId,
+    messages: initialMessages,
+    pendingActionIntents: [],
+    diceRolls: [],
+    characterPortraits: {},
+    uiSettings: {
+      showItemTags: true,
+    },
+    itemTemplates: initialItemTemplates,
+    itemInstances,
+    abilityTemplates: initialAbilityTemplates,
+    abilityInstances: createInitialAbilityInstances(characterId, initialAbilityTemplates),
+    combat: createInitialCombatScene(),
+    characterDerivedScores: createCharacterDerivedScores(
+      exampleCampaign.characters,
+      itemInstances,
+      initialItemTemplates,
+    ),
+  };
+}
+
+function normalizePersistedState(persistedState: unknown): ReturnType<typeof createInitialState> {
+  const initialState = createInitialState();
+
+  if (!persistedState || typeof persistedState !== "object") {
+    return initialState;
+  }
+
+  const candidate = persistedState as Partial<GameState>;
+  const hasCurrentCharacterModel =
+    Array.isArray(candidate.characters) &&
+    candidate.characters.every(
+      (character) =>
+        character &&
+        typeof character.id === "string" &&
+        "espece" in character &&
+        "classe" in character &&
+        "pv" in character &&
+        "maxPv" in character,
+    );
+
+  if (!hasCurrentCharacterModel) {
+    return {
+      ...initialState,
+      messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
+      pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
+        ? candidate.pendingActionIntents
+        : [],
+      diceRolls: Array.isArray(candidate.diceRolls) ? candidate.diceRolls : [],
+      characterPortraits:
+        candidate.characterPortraits && typeof candidate.characterPortraits === "object"
+          ? candidate.characterPortraits
+          : {},
+      uiSettings: normalizeUiSettings(candidate.uiSettings, initialState.uiSettings),
+      itemTemplates: Array.isArray(candidate.itemTemplates)
+        ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
+        : initialState.itemTemplates,
+      itemInstances: Array.isArray(candidate.itemInstances)
+        ? mergeById(candidate.itemInstances, initialState.itemInstances)
+        : initialState.itemInstances,
+      abilityTemplates: Array.isArray(candidate.abilityTemplates)
+        ? mergeAbilityTemplates(candidate.abilityTemplates, initialState.abilityTemplates)
+        : initialState.abilityTemplates,
+      abilityInstances: Array.isArray(candidate.abilityInstances)
+        ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
+        : initialState.abilityInstances,
+      combat: normalizeCombatScene(candidate.combat, initialState.combat),
+      characterDerivedScores: createCharacterDerivedScores(
+        initialState.characters,
+        Array.isArray(candidate.itemInstances)
+          ? mergeById(candidate.itemInstances, initialState.itemInstances)
+          : initialState.itemInstances,
+        Array.isArray(candidate.itemTemplates)
+          ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
+          : initialState.itemTemplates,
+      ),
+    };
+  }
+
+  const selectedCharacterExists = candidate.characters?.some(
+    (character) => character.id === candidate.selectedCharacterId,
+  );
+  const itemTemplates = Array.isArray(candidate.itemTemplates)
+    ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
+    : initialState.itemTemplates;
+  const itemInstances = Array.isArray(candidate.itemInstances)
+    ? mergeById(candidate.itemInstances, initialState.itemInstances)
+    : initialState.itemInstances;
+  const characters = candidate.characters ?? initialState.characters;
+
+  return {
+    ...initialState,
+    campaign: candidate.campaign ?? initialState.campaign,
+    characters,
+    selectedCharacterId: selectedCharacterExists
+      ? candidate.selectedCharacterId ?? initialState.selectedCharacterId
+      : candidate.characters?.[0]?.id ?? initialState.selectedCharacterId,
+    messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
+    pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
+      ? candidate.pendingActionIntents
+      : [],
+    diceRolls: Array.isArray(candidate.diceRolls) ? candidate.diceRolls : [],
+    characterPortraits:
+      candidate.characterPortraits && typeof candidate.characterPortraits === "object"
+        ? candidate.characterPortraits
+        : {},
+    uiSettings: normalizeUiSettings(candidate.uiSettings, initialState.uiSettings),
+    itemTemplates,
+    itemInstances,
+    abilityTemplates: Array.isArray(candidate.abilityTemplates)
+      ? mergeAbilityTemplates(candidate.abilityTemplates, initialState.abilityTemplates)
+      : initialState.abilityTemplates,
+    abilityInstances: Array.isArray(candidate.abilityInstances)
+      ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
+      : initialState.abilityInstances,
+    combat: normalizeCombatScene(candidate.combat, initialState.combat),
+    characterDerivedScores: createCharacterDerivedScores(characters, itemInstances, itemTemplates),
+  };
+}
+
+function normalizeCombatScene(
+  combat: CombatScene | undefined,
+  fallback: CombatScene,
+): CombatScene {
+  if (!combat || typeof combat !== "object" || !Array.isArray(combat.combatants)) {
+    return fallback;
+  }
+
+  return {
+    ...fallback,
+    ...combat,
+    map: {
+      ...fallback.map,
+      ...(combat.map ?? {}),
+      obstacles: Array.isArray(combat.map?.obstacles) ? combat.map.obstacles : fallback.map.obstacles,
+      elements: Array.isArray(combat.map?.elements)
+        ? mergeCombatMapElements(combat.map.elements, fallback.map.elements)
+        : fallback.map.elements,
+      details: Array.isArray(combat.map?.details)
+        ? mergeById(combat.map.details, fallback.map.details ?? [])
+        : fallback.map.details,
+    },
+    combatants: mergeCombatants(combat.combatants, fallback.combatants).map(normalizeCombatant),
+    log: Array.isArray(combat.log) ? combat.log : [],
+  };
+}
+
+function mergeCombatMapElements(
+  currentElements: CombatScene["map"]["elements"],
+  defaultElements: CombatScene["map"]["elements"],
+): CombatScene["map"]["elements"] {
+  const deprecatedElementIds = new Set([
+    "element-shadow-over-oil",
+    "element-cracked-sanctum-floor",
+    "element-explosive-barrel",
+  ]);
+  const forcedDefaultGeometryIds = new Set(["element-acid-puddle"]);
+  const forcedDefaultEffectIds = new Set(["element-caltrops"]);
+  const currentById = new Map(currentElements.map((element) => [element.id, element]));
+  const defaultIds = new Set(defaultElements.map((element) => element.id));
+  const mergedDefaults = defaultElements.map((defaultElement) => {
+    const currentElement = currentById.get(defaultElement.id);
+
+    if (!currentElement) {
+      return defaultElement;
+    }
+
+    const mergedElement = {
+      ...defaultElement,
+      ...currentElement,
+      cells: Array.isArray(currentElement.cells) && currentElement.cells.length > 0
+        ? currentElement.cells
+        : defaultElement.cells,
+      effects: Array.isArray(currentElement.effects) && currentElement.effects.length > 0
+        ? currentElement.effects
+        : defaultElement.effects,
+      state: {
+        ...(defaultElement.state ?? {}),
+        ...(currentElement.state ?? {}),
+      },
+    };
+    const mergedWithEffects = forcedDefaultEffectIds.has(defaultElement.id)
+      ? {
+          ...mergedElement,
+          effects: defaultElement.effects,
+        }
+      : mergedElement;
+
+    return forcedDefaultGeometryIds.has(defaultElement.id)
+      ? {
+          ...mergedWithEffects,
+          x: defaultElement.x,
+          y: defaultElement.y,
+          width: defaultElement.width,
+          height: defaultElement.height,
+          cells: defaultElement.cells,
+        }
+      : mergedWithEffects;
+  });
+  const customElements = currentElements.filter(
+    (element) => !defaultIds.has(element.id) && !deprecatedElementIds.has(element.id),
+  );
+
+  return [...mergedDefaults, ...customElements];
+}
+
+function normalizeCombatant(combatant: Combatant): Combatant {
+  return {
+    ...combatant,
+    reach: typeof combatant.reach === "number" ? combatant.reach : 1.5,
+    resources: {
+      ...getDefaultCombatResources(combatant.speed),
+      ...(combatant.resources ?? {}),
+      disengaged: typeof combatant.resources?.disengaged === "boolean"
+        ? combatant.resources.disengaged
+        : false,
+    },
+  };
+}
+
+function normalizeUiSettings(
+  settings: Partial<UiSettings> | undefined,
+  fallback: UiSettings,
+): UiSettings {
+  return {
+    ...fallback,
+    ...(settings && typeof settings === "object" ? settings : {}),
+    showItemTags:
+      typeof settings?.showItemTags === "boolean" ? settings.showItemTags : fallback.showItemTags,
+  };
+}
+
+function mergeById<T extends { id: string }>(currentItems: T[], defaultItems: T[]): T[] {
+  const currentIds = new Set(currentItems.map((item) => item.id));
+  const missingDefaults = defaultItems.filter((item) => !currentIds.has(item.id));
+
+  return [...currentItems, ...missingDefaults];
+}
+
+function mergeCombatants(currentCombatants: Combatant[], defaultCombatants: Combatant[]): Combatant[] {
+  const deprecatedCombatantIds = new Set<string>();
+  const currentIds = new Set(currentCombatants.map((combatant) => combatant.id));
+  const missingDefaults = defaultCombatants.filter((combatant) => !currentIds.has(combatant.id));
+
+  return [
+    ...currentCombatants.filter((combatant) => !deprecatedCombatantIds.has(combatant.id)),
+    ...missingDefaults,
+  ];
+}
+
+function mergeItemTemplates(
+  currentTemplates: ItemTemplate[],
+  defaultTemplates: ItemTemplate[],
+): ItemTemplate[] {
+  const mergedTemplates = currentTemplates.map((template) => {
+    const defaultTemplate = defaultTemplates.find((item) => item.id === template.id);
+
+    if (!defaultTemplate) {
+      return normalizeItemTemplateModules(template);
+    }
+
+    const currentModules = normalizeItemTemplateModules(template).modules;
+    const defaultModules = normalizeItemTemplateModules(defaultTemplate).modules;
+
+    return {
+      ...template,
+      type: defaultTemplate.type,
+      types: defaultTemplate.types,
+      tags: defaultTemplate.tags,
+      base: defaultTemplate.base,
+      effects: defaultTemplate.effects,
+      attacks: defaultTemplate.attacks,
+      attackModifiers: defaultTemplate.attackModifiers,
+      targeting: defaultTemplate.targeting,
+      targetingV2: defaultTemplate.targetingV2,
+      modules: {
+        ...defaultModules,
+        ...currentModules,
+        item: {
+          ...currentModules.item,
+          ...defaultModules.item,
+        },
+      },
+    };
+  });
+
+  return mergeById(mergedTemplates, defaultTemplates);
+}
+
+function mergeAbilityTemplates(
+  currentTemplates: AbilityTemplate[],
+  defaultTemplates: AbilityTemplate[],
+): AbilityTemplate[] {
+  const mergedTemplates = currentTemplates.map((template) => {
+    const defaultTemplate = defaultTemplates.find((item) => item.id === template.id);
+
+    return defaultTemplate
+      ? {
+          ...template,
+          types: defaultTemplate.types,
+          tags: defaultTemplate.tags,
+          combatRole: defaultTemplate.combatRole,
+          activation: defaultTemplate.activation,
+          resourceCost: defaultTemplate.resourceCost,
+          targeting: defaultTemplate.targeting,
+          targetingV2: defaultTemplate.targetingV2,
+          charges: defaultTemplate.charges,
+          scaling: defaultTemplate.scaling,
+          requirements: defaultTemplate.requirements,
+          duration: defaultTemplate.duration,
+          effects: defaultTemplate.effects,
+          modules: {
+            ...template.modules,
+            ...defaultTemplate.modules,
+          },
+        }
+      : template;
+  });
+
+  return mergeById(mergedTemplates, defaultTemplates);
+}
+
+function normalizeItemTemplateModules(template: ItemTemplate): ItemTemplate {
+  const { equipment: _equipment, ...modules } = template.modules;
+  const { role: _role, roles: _roles, ...item } = modules.item ?? {};
+  const normalizedTypes = getTemplateTypes(template);
+  const normalizedTags = getTemplateMetadataTags(template, normalizedTypes);
+
+  return {
+    ...template,
+    types: normalizedTypes,
+    tags: normalizedTags,
+    modules: {
+      ...modules,
+      item,
+    },
+  };
+}
+
+function createMessage(
+  sender: Message["sender"],
+  content: string,
+  actions: ChatActionIntent[] = [],
+): Message {
+  return {
+    id: `message-${crypto.randomUUID()}`,
+    sender,
+    content,
+    timestamp: Date.now(),
+    ...(actions.length > 0 ? { actions } : {}),
+  };
+}
+
+function createActionIntent(
+  kind: ChatActionIntentKind,
+  targetId: string,
+  label: string,
+  targeting: ActionTargetingRule | undefined,
+  target: ActionTarget | undefined,
+): ChatActionIntent {
+  return {
+    id: `intent-${crypto.randomUUID()}`,
+    kind,
+    targetId,
+    label,
+    command: `${kind} ${targetId}`,
+    ...(targeting ? { targeting } : {}),
+    ...(target ? { target } : {}),
+    createdAt: Date.now(),
+  };
+}
+
+function getActionTargetingRule(
+  state: GameDataState,
+  kind: ChatActionIntentKind,
+  targetId: string,
+): ActionTargetingRule | undefined {
+  if (kind === "useItem") {
+    const item = state.itemInstances.find((candidate) => candidate.id === targetId);
+    const template = item
+      ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
+      : undefined;
+
+    return toLegacyTargetingRule(template?.targetingV2) ?? template?.targeting ?? {
+      allowed: ["self"],
+      required: false,
+      defaultPriority: ["self"],
+    };
+  }
+
+  if (kind === "attack") {
+    const weapon = getEquippedWeaponData(
+      state.itemInstances,
+      state.itemTemplates,
+      state.selectedCharacterId,
+      targetId,
+    );
+
+    return weapon
+      ? toLegacyTargetingRule(weapon.targetingV2) ?? {
+          allowed: ["entity", "character", "position", "free"],
+          required: true,
+          defaultPriority: ["nearestEnemy"],
+          range: weapon.range,
+          lineOfSight: true,
+        }
+      : undefined;
+  }
+
+  const ability = state.abilityInstances.find((candidate) => candidate.id === targetId);
+  const template = ability
+    ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
+    : undefined;
+
+  return toLegacyTargetingRule(template?.targetingV2) ?? template?.targeting;
+}
+
+function getActionTargetingV2(
+  state: GameDataState,
+  kind: ChatActionIntentKind,
+  targetId: string,
+) {
+  if (kind === "useItem") {
+    const item = state.itemInstances.find((candidate) => candidate.id === targetId);
+    const template = item
+      ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
+      : undefined;
+
+    return template?.targetingV2;
+  }
+
+  if (kind === "attack") {
+    const weapon = getEquippedWeaponData(
+      state.itemInstances,
+      state.itemTemplates,
+      state.selectedCharacterId,
+      targetId,
+    );
+
+    return weapon?.targetingV2;
+  }
+
+  const ability = state.abilityInstances.find((candidate) => candidate.id === targetId);
+  const template = ability
+    ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
+    : undefined;
+
+  return template?.targetingV2;
+}
+
+function createSelfTarget(state: GameDataState): ActionTarget | undefined {
+  const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
+
+  return character
+    ? { kind: "self", id: character.id, label: character.name, source: "default" }
+    : undefined;
+}
+
+function createNearestEnemyTarget(state: GameDataState): ActionTarget | undefined {
+  const npc = state.campaign.world.entities.npcs[0];
+
+  return npc
+    ? { kind: "entity", id: npc.id, label: npc.name, source: "default" }
+    : undefined;
+}
+
+function createFallbackPositionTarget(): ActionTarget {
+  return {
+    kind: "position",
+    id: "position:farthest-point-ahead",
+    label: "Position libre",
+    source: "default",
+  };
+}
+
+function createDefaultActionTarget(
+  state: GameDataState,
+  targeting: ActionTargetingRule | undefined,
+  intent?: Pick<ChatActionIntent, "kind" | "targetId" | "targeting">,
+): ActionTarget | undefined {
+  if (!targeting || targeting.allowed.length === 0) {
+    return undefined;
+  }
+
+  const actor = state.combat.combatants.find(
+    (combatant) =>
+      combatant.sourceType === "character" && combatant.sourceId === state.selectedCharacterId,
+  );
+
+  if (state.combat.status === "active" && actor && intent) {
+    const priorities = targeting.defaultPriority ?? ["self"];
+
+    if (priorities.includes("self") && targeting.allowed.includes("self")) {
+      const target = createSelfTarget(state);
+
+      if (target) {
+        return target;
+      }
+    }
+
+    const candidates = state.combat.combatants
+      .filter((combatant) => {
+        if (combatant.id === actor.id) {
+          return (
+            targeting.allowed.includes("self") &&
+            (!targeting.suggestedSides || targeting.suggestedSides.includes("self"))
+          );
+        }
+
+        if (targeting.suggestedSides && !targeting.suggestedSides.includes(getSuggestedSide(actor, combatant))) {
+          return false;
+        }
+
+        if (combatant.sourceType === "character") {
+          return targeting.allowed.includes("character");
+        }
+
+        if (combatant.sourceType === "entity") {
+          return targeting.allowed.includes("entity");
+        }
+
+        return false;
+      })
+      .map((combatant) => ({
+        combatant,
+        distance: getDistance(actor.position, combatant.position),
+        visible: hasLineOfSight(state.combat, actor.position, combatant.position),
+      }))
+      .filter((candidate) => {
+        if (candidate.combatant.id === actor.id) {
+          return true;
+        }
+
+        return candidate.visible && candidate.distance <= getActionRange(state, intent as ChatActionIntent);
+      })
+      .sort((a, b) => {
+        const aEnemy = a.combatant.side === "enemies" ? 0 : 1;
+        const bEnemy = b.combatant.side === "enemies" ? 0 : 1;
+
+        return aEnemy - bEnemy || a.distance - b.distance;
+      });
+
+    const best = candidates[0]?.combatant;
+
+    if (best) {
+      if (best.id === actor.id) {
+        return { kind: "self", id: best.sourceId, label: best.name, source: "default" };
+      }
+
+      return {
+        kind: best.sourceType === "character" ? "character" : "entity",
+        id: best.sourceId,
+        label: best.name,
+        source: "default",
+      };
+    }
+  }
+
+  const priorities = targeting.defaultPriority ?? ["self"];
+
+  for (const priority of priorities) {
+    if (priority === "self" && targeting.allowed.includes("self")) {
+      const target = createSelfTarget(state);
+
+      if (target) {
+        return target;
+      }
+    }
+
+    if (priority === "nearestEnemy" && targeting.allowed.includes("entity")) {
+      const target = createNearestEnemyTarget(state);
+
+      if (target) {
+        return target;
+      }
+    }
+
+    if (priority === "farthestPointAhead" && targeting.allowed.includes("position")) {
+      return createFallbackPositionTarget();
+    }
+  }
+
+  if (targeting.allowed.includes("self")) {
+    return createSelfTarget(state);
+  }
+
+  if (targeting.allowed.includes("position")) {
+    return createFallbackPositionTarget();
+  }
+
+  return undefined;
+}
+
+function isActionTargetAllowed(
+  targeting: ActionTargetingRule | undefined,
+  target: ActionTarget | undefined,
+): boolean {
+  if (!targeting) {
+    return true;
+  }
+
+  if (!target) {
+    return targeting.required !== true;
+  }
+
+  return targeting.allowed.includes(target.kind);
+}
+
+function updateCharacter(
+  characters: Character[],
+  characterId: string,
+  updater: (character: Character) => Character,
+): Character[] {
+  return characters.map((character) => (character.id === characterId ? updater(character) : character));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
+}
+
+function updateItem(
+  itemInstances: ItemInstance[],
+  itemId: string,
+  updater: (item: ItemInstance) => ItemInstance,
+): ItemInstance[] {
+  return itemInstances.map((item) => (item.id === itemId ? updater(item) : item));
+}
+
+function updateAbility(
+  abilityInstances: AbilityInstance[],
+  abilityId: string,
+  updater: (ability: AbilityInstance) => AbilityInstance,
+): AbilityInstance[] {
+  return abilityInstances.map((ability) => (ability.id === abilityId ? updater(ability) : ability));
+}
+
+function getAbilityTemplate(
+  abilityTemplates: AbilityTemplate[],
+  templateId: string,
+): AbilityTemplate | undefined {
+  return abilityTemplates.find((template) => template.id === templateId);
+}
+
+function rechargeCharacterAbilities(
+  abilityInstances: AbilityInstance[],
+  abilityTemplates: AbilityTemplate[],
+  characterId: string,
+  trigger: AbilityRechargeTrigger,
+): AbilityInstance[] {
+  return abilityInstances.map((ability) => {
+    if (ability.ownerId !== characterId) {
+      return ability;
+    }
+
+    return rechargeAbilityCharge(ability, getAbilityTemplate(abilityTemplates, ability.templateId), trigger);
+  });
+}
+
+function getEffectNumber(value: number | string | boolean | undefined): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getEffectString(value: number | string | boolean | undefined, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function createValueExpressionContext(
+  character: Character,
+  itemInstances: ItemInstance[] = [],
+  itemTemplates: ItemTemplate[] = [],
+): ValueExpressionContext {
+  const stats = { ...character.stats };
+
+  getEquippedEffects(itemInstances, itemTemplates, character.id).forEach((effect) => {
+    if (effect.effectId !== "modifyStat") {
+      return;
+    }
+
+    const stat = effect.variables?.stat;
+
+    if (
+      stat !== "force" &&
+      stat !== "dexterite" &&
+      stat !== "constitution" &&
+      stat !== "intelligence" &&
+      stat !== "sagesse" &&
+      stat !== "charisme"
+    ) {
+      return;
+    }
+
+    stats[stat] += getEffectNumber(effect.variables?.value);
+  });
+
+  return {
+    level: character.niveau,
+    stats,
+    modifiers: createStatModifiers(stats),
+  };
+}
+
+function createStatModifiers(stats: Character["stats"]): Character["stats"] {
+  return {
+    force: getStatModifier(stats.force),
+    dexterite: getStatModifier(stats.dexterite),
+    constitution: getStatModifier(stats.constitution),
+    intelligence: getStatModifier(stats.intelligence),
+    sagesse: getStatModifier(stats.sagesse),
+    charisme: getStatModifier(stats.charisme),
+  };
+}
+
+type DiceFormulaVariableMap = Record<string, number | { value: number; color?: string }>;
+
+function createDiceFormulaVariables(character: Character | undefined): DiceFormulaVariableMap {
+  if (!character) {
+    return {};
+  }
+
+  const modifiers = createStatModifiers(character.stats);
+
+  return {
+    FOR: { value: modifiers.force, color: diceStatColors.FOR },
+    DEX: { value: modifiers.dexterite, color: diceStatColors.DEX },
+    CON: { value: modifiers.constitution, color: diceStatColors.CON },
+    INT: { value: modifiers.intelligence, color: diceStatColors.INT },
+    SAG: { value: modifiers.sagesse, color: diceStatColors.SAG },
+    CHA: { value: modifiers.charisme, color: diceStatColors.CHA },
+    NIV: character.niveau,
+  };
+}
+
+function createDiceFormulaVariablesFromContext(context: ValueExpressionContext): DiceFormulaVariableMap {
+  return {
+    FOR: { value: context.modifiers.force, color: diceStatColors.FOR },
+    DEX: { value: context.modifiers.dexterite, color: diceStatColors.DEX },
+    CON: { value: context.modifiers.constitution, color: diceStatColors.CON },
+    INT: { value: context.modifiers.intelligence, color: diceStatColors.INT },
+    SAG: { value: context.modifiers.sagesse, color: diceStatColors.SAG },
+    CHA: { value: context.modifiers.charisme, color: diceStatColors.CHA },
+    NIV: context.level,
+  };
+}
+
+function getProficiencyBonus(level: number): number {
+  return 2 + Math.floor((Math.max(1, level) - 1) / 4);
+}
+
+type WeaponAttackKind = "melee" | "ranged" | "magic";
+
+function combineDamageValues(
+  baseDamage: number | string | boolean | undefined,
+  modifierDamage: number | string | boolean | undefined,
+): number | string | undefined {
+  return formatDamageFormula([baseDamage, modifierDamage]);
+}
+
+function formatDamageFormula(parts: Array<number | string | boolean | undefined>): string | undefined {
+  const tokens = parts.flatMap((part) => tokenizeDamageFormula(part));
+
+  if (tokens.length === 0) {
+    return undefined;
+  }
+
+  const dice = tokens
+    .filter((token) => /^\d*d\d+$/i.test(token))
+    .sort((a, b) => Number(b.toLowerCase().split("d")[1]) - Number(a.toLowerCase().split("d")[1]));
+  const variables = tokens.filter((token) => ["FOR", "DEX", "CON", "INT", "SAG", "CHA", "NIV"].includes(token.toUpperCase()));
+  const fixed = tokens
+    .filter((token) => !dice.includes(token) && !variables.includes(token) && Number.isFinite(Number(token)))
+    .sort((a, b) => Number(a) - Number(b));
+  const others = tokens.filter((token) => !dice.includes(token) && !variables.includes(token) && !fixed.includes(token));
+
+  return [...dice, ...variables.map((token) => token.toUpperCase()), ...fixed, ...others].join(" + ");
+}
+
+function tokenizeDamageFormula(value: number | string | boolean | undefined): string[] {
+  if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
+    return [String(value)];
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+
+  return value
+    .replace(/\b(niv|niveau|level|lvl)\b/gi, "NIV")
+    .replace(/\b(for|force)\b/gi, "FOR")
+    .replace(/\b(dex|dextérité|dexterite)\b/gi, "DEX")
+    .replace(/\b(con|constitution)\b/gi, "CON")
+    .replace(/\b(int|intelligence)\b/gi, "INT")
+    .replace(/\b(sag|sagesse)\b/gi, "SAG")
+    .replace(/\b(cha|charisme)\b/gi, "CHA")
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function getDefaultDamageModifier(
+  attackKind: WeaponAttackKind,
+  weaponTemplate: ItemTemplate,
+  context: ValueExpressionContext | null,
+): string | undefined {
+  if (attackKind !== "melee") {
+    return undefined;
+  }
+
+  if (!context) {
+    return weaponTemplate.tags.includes("finesse") || weaponTemplate.tags.includes("light") ? "DEX" : "FOR";
+  }
+
+  if (
+    (weaponTemplate.tags.includes("finesse") || weaponTemplate.tags.includes("light")) &&
+    context.modifiers.dexterite > context.modifiers.force
+  ) {
+    return "DEX";
+  }
+
+  return "FOR";
+}
+
+function createCharacterDerivedScore(
+  character: Character,
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+): CharacterDerivedScores {
+  const context = createValueExpressionContext(character, itemInstances, itemTemplates);
+  const proficiencyBonus = getProficiencyBonus(context.level);
+
+  return {
+    modifiers: context.modifiers,
+    proficiencyBonus,
+    defense: 10 + context.modifiers.dexterite,
+    initiative: context.modifiers.dexterite,
+    speed: character.espece.toLowerCase().includes("nain") ? 7.5 : 9,
+    mana: Math.max(0, context.modifiers.charisme + character.niveau),
+    attacks: {
+      melee: context.modifiers.force + proficiencyBonus,
+      ranged: context.modifiers.dexterite + proficiencyBonus,
+      magic: Math.max(context.modifiers.intelligence, context.modifiers.sagesse, context.modifiers.charisme) + proficiencyBonus,
+    },
+    updatedAt: Date.now(),
+  };
+}
+
+function createCharacterDerivedScores(
+  characters: Character[],
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+): Record<string, CharacterDerivedScores> {
+  return Object.fromEntries(
+    characters.map((character) => [
+      character.id,
+      createCharacterDerivedScore(character, itemInstances, itemTemplates),
+    ]),
+  );
+}
+
+function withCharacterDerivedScores(
+  state: Pick<GameState, "characters" | "itemInstances" | "itemTemplates">,
+): { characterDerivedScores: Record<string, CharacterDerivedScores> } {
+  return {
+    characterDerivedScores: createCharacterDerivedScores(
+      state.characters,
+      state.itemInstances,
+      state.itemTemplates,
+    ),
+  };
+}
+
+function getCharacterAttackScore(
+  scores: Record<string, CharacterDerivedScores>,
+  characterId: string | undefined,
+  attackKind: WeaponAttackKind,
+): number | null {
+  return characterId ? scores[characterId]?.attacks[attackKind] ?? null : null;
+}
+
+function getWeaponAttackModifier(
+  character: Character | undefined,
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+  attackKind: WeaponAttackKind,
+): number {
+  if (!character) {
+    return 0;
+  }
+
+  const context = createValueExpressionContext(character, itemInstances, itemTemplates);
+  const proficiency = getProficiencyBonus(context.level);
+
+  if (attackKind === "ranged") {
+    return context.modifiers.dexterite + proficiency;
+  }
+
+  if (attackKind === "magic") {
+    return Math.max(context.modifiers.intelligence, context.modifiers.sagesse, context.modifiers.charisme) + proficiency;
+  }
+
+  return context.modifiers.force + proficiency;
+}
+
+function formatRollModifier(value: number): string {
+  return value >= 0 ? `+ ${value}` : `- ${Math.abs(value)}`;
+}
+
+function createEffectDiceRoll(
+  effect: ItemInstance["effects"][number],
+  contextCharacter: Character | undefined,
+  sourceLabel?: string,
+): DiceRoll | null {
+  const value = effect.variables?.value;
+
+  if (typeof value !== "string" || !/\d*d\d+/i.test(value)) {
+    return null;
+  }
+
+  try {
+    const roll = rollDiceFormula(value, {
+      visibility: "public",
+      reason: sourceLabel ?? getEffectString(effect.variables?.source, "Jet du joueur"),
+      variables: createDiceFormulaVariables(contextCharacter),
+    });
+    const level = Math.max(1, getEffectNumber(effect.variables?.level) || 1);
+    const perLevel = getEffectNumber(effect.variables?.perLevel);
+    const levelBonus = Math.max(0, level - 1) * perLevel;
+
+    if (levelBonus <= 0) {
+      return roll;
+    }
+
+    return {
+      ...roll,
+      modifier: roll.modifier + levelBonus,
+      terms: [
+        ...roll.terms,
+        {
+          kind: "modifier",
+          label: `Niv.${level}`,
+          value: levelBonus,
+        },
+      ],
+      result: roll.result + levelBonus,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getStatModifier(score: number): number {
+  return Math.floor((score - 10) / 2);
+}
+
+function createCombatLog(type: CombatScene["log"][number]["type"], text: string): CombatLogEntry {
+  return {
+    id: `combat-log-${crypto.randomUUID()}`,
+    type,
+    text,
+    timestamp: Date.now(),
+  };
+}
+
+function getDefaultCombatResources(speed: number): Combatant["resources"] {
+  return {
+    action: 1,
+    bonus: 1,
+    reaction: 1,
+    movement: speed,
+    disengaged: false,
+  };
+}
+
+function resetCombatantTurnResources(combatant: Combatant): Combatant {
+  return {
+    ...combatant,
+    resources: getDefaultCombatResources(combatant.speed),
+  };
+}
+
+function createCharacterCombatant(
+  character: Character,
+  index: number,
+): Combatant {
+  const dexterityModifier = getStatModifier(character.stats.dexterite);
+  const speed = character.espece.toLowerCase().includes("nain") ? 7.5 : 9;
+
+  return {
+    id: `combatant-character-${character.id}`,
+    sourceType: "character",
+    sourceId: character.id,
+    name: character.name,
+    side: "players",
+    hp: character.pv,
+    maxHp: character.maxPv,
+    defense: 10 + dexterityModifier,
+    initiative: dexterityModifier,
+    speed,
+    position: {
+      x: 5,
+      y: 5 + index * 3,
+    },
+    conditions: [],
+    resources: getDefaultCombatResources(speed),
+    reach: 1.5,
+    attackRange: 18,
+    attackDamage: 3,
+  };
+}
+
+function createEntityCombatant(
+  entity: Entity,
+  side: Combatant["side"],
+  index: number,
+): Combatant {
+  const maxHp = side === "enemies" ? 8 : 6;
+  const speed = 9;
+
+  return {
+    id: `combatant-entity-${entity.id}`,
+    sourceType: "entity",
+    sourceId: entity.id,
+    name: entity.name,
+    side,
+    hp: maxHp,
+    maxHp,
+    defense: side === "enemies" ? 12 : 10,
+    initiative: side === "enemies" ? 1 : 0,
+    speed,
+    position: {
+      x: side === "enemies" ? 23 : 15,
+      y: 5 + index * 4,
+    },
+    conditions: [],
+    resources: getDefaultCombatResources(speed),
+    reach: 1.5,
+    attackRange: side === "enemies" ? 12 : 3,
+    attackDamage: side === "enemies" ? 2 : 1,
+  };
+}
+
+function createHazardCombatant(options: {
+  id: string;
+  sourceId: string;
+  name: string;
+  hp: number;
+  defense: number;
+  position: CombatPosition;
+  attackDamage?: number;
+}): Combatant {
+  return {
+    id: options.id,
+    sourceType: "hazard",
+    sourceId: options.sourceId,
+    name: options.name,
+    side: "neutral",
+    hp: options.hp,
+    maxHp: options.hp,
+    defense: options.defense,
+    initiative: -99,
+    speed: 0,
+    position: options.position,
+    conditions: [],
+    resources: getDefaultCombatResources(0),
+    reach: 0,
+    attackRange: 0,
+    attackDamage: options.attackDamage ?? 0,
+  };
+}
+
+function clampCombatPosition(position: CombatPosition, combat: CombatScene): CombatPosition {
+  return {
+    x: clamp(position.x, 0, combat.map.width),
+    y: clamp(position.y, 0, combat.map.height),
+  };
+}
+
+function getDistance(a: CombatPosition, b: CombatPosition): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function isPointInsideObstacle(
+  point: CombatPosition,
+  obstacle: CombatScene["map"]["obstacles"][number],
+): boolean {
+  return (
+    point.x >= obstacle.x &&
+    point.x <= obstacle.x + obstacle.width &&
+    point.y >= obstacle.y &&
+    point.y <= obstacle.y + obstacle.height
+  );
+}
+
+function getCombatMapElementCells(
+  element: CombatScene["map"]["elements"][number],
+  cellSize: number,
+): Array<{ x: number; y: number; width: number; height: number }> {
+  if (Array.isArray(element.cells) && element.cells.length > 0) {
+    return element.cells.map((cell) => ({
+      x: cell.x,
+      y: cell.y,
+      width: cellSize,
+      height: cellSize,
+    }));
+  }
+
+  return [{ x: element.x, y: element.y, width: element.width, height: element.height }];
+}
+
+function isPointInsideMapElement(
+  point: CombatPosition,
+  element: CombatScene["map"]["elements"][number],
+  cellSize: number,
+): boolean {
+  return getCombatMapElementCells(element, cellSize).some(
+    (cell) =>
+      point.x >= cell.x &&
+      point.x <= cell.x + cell.width &&
+      point.y >= cell.y &&
+      point.y <= cell.y + cell.height,
+  );
+}
+
+function doesSegmentHitMapElement(
+  from: CombatPosition,
+  to: CombatPosition,
+  element: CombatScene["map"]["elements"][number],
+  cellSize: number,
+): boolean {
+  const steps = Math.max(8, Math.ceil(getDistance(from, to) * 2));
+
+  for (let index = 0; index <= steps; index += 1) {
+    const ratio = index / steps;
+    const point = {
+      x: from.x + (to.x - from.x) * ratio,
+      y: from.y + (to.y - from.y) * ratio,
+    };
+
+    if (isPointInsideMapElement(point, element, cellSize)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function doesSegmentHitObstacle(
+  from: CombatPosition,
+  to: CombatPosition,
+  obstacle: CombatScene["map"]["obstacles"][number],
+  mode: "lineOfSight" | "movement" = "lineOfSight",
+): boolean {
+  if (mode === "lineOfSight" && !obstacle.blocksLineOfSight) {
+    return false;
+  }
+
+  if (mode === "movement" && !obstacle.blocksMovement) {
+    return false;
+  }
+
+  const steps = Math.max(8, Math.ceil(getDistance(from, to) * 2));
+
+  for (let index = 1; index < steps; index += 1) {
+    const ratio = index / steps;
+    const point = {
+      x: from.x + (to.x - from.x) * ratio,
+      y: from.y + (to.y - from.y) * ratio,
+    };
+
+    if (isPointInsideObstacle(point, obstacle)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasLineOfSight(
+  combat: CombatScene,
+  from: CombatPosition,
+  to: CombatPosition,
+): boolean {
+  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
+
+  return (
+    !combat.map.obstacles.some((obstacle) => doesSegmentHitObstacle(from, to, obstacle)) &&
+    !combat.map.elements.some((element) => {
+      const blocksLineOfSight =
+        element.blocksLineOfSight ||
+        element.effects?.some((effect) => effect.type === "lineOfSightBlock");
+
+      return blocksLineOfSight && doesSegmentHitMapElement(from, to, element, cellSize);
+    })
+  );
+}
+
+function hasMovementPath(combat: CombatScene, from: CombatPosition, to: CombatPosition): boolean {
+  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
+
+  return (
+    !combat.map.obstacles.some((obstacle) => doesSegmentHitObstacle(from, to, obstacle, "movement")) &&
+    !combat.map.elements.some(
+      (element) => element.blocksMovement && doesSegmentHitMapElement(from, to, element, cellSize),
+    )
+  );
+}
+
+function hasStopMovementEffect(element: CombatScene["map"]["elements"][number]): boolean {
+  return element.effects?.some((effect) => effect.type === "stopMovement") ?? false;
+}
+
+function getFirstStopMovementPoint(
+  combat: CombatScene,
+  from: CombatPosition,
+  to: CombatPosition,
+): CombatPosition | null {
+  const distance = getDistance(from, to);
+
+  if (distance <= 0) {
+    return null;
+  }
+
+  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
+  const stopElements = combat.map.elements.filter(hasStopMovementEffect);
+  const steps = Math.max(8, Math.ceil(distance / cellSize) * 2);
+
+  for (let index = 1; index <= steps; index += 1) {
+    const ratio = index / steps;
+    const point = {
+      x: from.x + (to.x - from.x) * ratio,
+      y: from.y + (to.y - from.y) * ratio,
+    };
+    const entersStopElement = stopElements.some((element) =>
+      !isPointInsideMapElement(from, element, cellSize) && isPointInsideMapElement(point, element, cellSize),
+    );
+
+    if (entersStopElement) {
+      return clampCombatPosition(point, combat);
+    }
+  }
+
+  return null;
+}
+
+function clampPositionToFirstStopMovement(
+  combat: CombatScene,
+  from: CombatPosition,
+  requestedPosition: CombatPosition,
+): CombatPosition {
+  return getFirstStopMovementPoint(combat, from, requestedPosition) ?? requestedPosition;
+}
+
+function getActionRange(
+  state: GameDataState,
+  intent: ChatActionIntent,
+): number {
+  const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+  const v2Range = getTargetingRange(targetingV2, intent.kind === "useAbility" ? 18 : 1.5);
+
+  if (v2Range > 0) {
+    return v2Range;
+  }
+
+  const targeting = intent.targeting ?? getActionTargetingRule(state, intent.kind, intent.targetId);
+  const parsedRange = Number(targeting?.range);
+
+  if (Number.isFinite(parsedRange) && parsedRange > 0) {
+    return parsedRange;
+  }
+
+  if (intent.kind === "useAbility") {
+    return 18;
+  }
+
+  return 1.5;
+}
+
+function getTargetCombatantFromIntent(
+  combat: CombatScene,
+  intent: ChatActionIntent,
+): Combatant | undefined {
+  const target = intent.target;
+
+  if (!target) {
+    return undefined;
+  }
+
+  if (target.kind === "self" || target.kind === "character") {
+    return combat.combatants.find(
+      (combatant) => combatant.sourceType === "character" && combatant.sourceId === target.id,
+    );
+  }
+
+  if (target.kind === "entity") {
+    return combat.combatants.find(
+      (combatant) =>
+        (combatant.sourceType === "entity" || combatant.sourceType === "hazard") &&
+        combatant.sourceId === target.id,
+    );
+  }
+
+  return undefined;
+}
+
+function getTargetCombatantFromActionTarget(
+  combat: CombatScene,
+  target: ActionTarget | undefined,
+  fallbackCharacterId: string,
+): Combatant | undefined {
+  if (!target) {
+    return combat.combatants.find(
+      (combatant) => combatant.sourceType === "character" && combatant.sourceId === fallbackCharacterId,
+    );
+  }
+
+  if (target.kind === "self" || target.kind === "character") {
+    return combat.combatants.find(
+      (combatant) => combatant.sourceType === "character" && combatant.sourceId === target.id,
+    );
+  }
+
+  if (target.kind === "entity") {
+    return combat.combatants.find(
+      (combatant) =>
+        (combatant.sourceType === "entity" || combatant.sourceType === "hazard") &&
+        combatant.sourceId === target.id,
+    );
+  }
+
+  return undefined;
+}
+
+function syncCharacterCombatant(combat: CombatScene, character: Character | undefined): CombatScene {
+  if (!character) {
+    return combat;
+  }
+
+  return {
+    ...combat,
+    combatants: combat.combatants.map((combatant) =>
+      combatant.sourceType === "character" && combatant.sourceId === character.id
+        ? {
+            ...normalizeCombatantAfterHpChange(combatant, character.pv),
+            maxHp: character.maxPv,
+          }
+        : combatant,
+    ),
+  };
+}
+
+function normalizeCombatantAfterHpChange(combatant: Combatant, hp: number): Combatant {
+  const reviveLabels = new Set([
+    "hors de combat",
+    "hors d'etat de nuire",
+    "hors d'état de nuire",
+    "inconscient",
+    "inconsciente",
+    "ko",
+  ]);
+  const nextConditions = hp > 0
+    ? combatant.conditions.filter((condition) => !reviveLabels.has(condition.toLowerCase().trim()))
+    : combatant.conditions;
+
+  return {
+    ...combatant,
+    hp,
+    conditions: nextConditions,
+  };
+}
+
+function updateCombatantHp(
+  combat: CombatScene,
+  combatantId: string | undefined,
+  updater: (hp: number, maxHp: number) => number,
+): CombatScene {
+  if (!combatantId) {
+    return combat;
+  }
+
+  return {
+    ...combat,
+    combatants: combat.combatants.map((combatant) => {
+      if (combatant.id !== combatantId) {
+        return combatant;
+      }
+
+      const hp = clamp(updater(combatant.hp, combatant.maxHp), 0, combatant.maxHp);
+      return normalizeCombatantAfterHpChange(combatant, hp);
+    }),
+  };
+}
+
+function rollCombatMapEffectValue(
+  element: CombatScene["map"]["elements"][number],
+  effect: NonNullable<CombatScene["map"]["elements"][number]["effects"]>[number],
+): { value: number; diceRoll?: DiceRoll } {
+  if (typeof effect.value === "string" && /\d*d\d+/i.test(effect.value)) {
+    const diceRoll = rollDiceFormula(effect.value, {
+      visibility: "public",
+      reason: element.name,
+    });
+
+    return { value: diceRoll.result, diceRoll };
+  }
+
+  if (typeof effect.value === "number") {
+    return { value: effect.value };
+  }
+
+  return { value: 0 };
+}
+
+const savingThrowLabels: Record<keyof CharacterStats, string> = {
+  force: "FOR",
+  dexterite: "DEX",
+  constitution: "CON",
+  intelligence: "INT",
+  sagesse: "SAG",
+  charisme: "CHA",
+};
+
+function getCombatantSavingThrowModifier(
+  combatant: Combatant,
+  characters: Character[],
+  stat: keyof CharacterStats,
+): number {
+  if (combatant.sourceType !== "character") {
+    return 0;
+  }
+
+  const character = characters.find((candidate) => candidate.id === combatant.sourceId);
+
+  if (!character) {
+    return 0;
+  }
+
+  return getStatModifier(character.stats[stat]);
+}
+
+function applyCombatMapEffectSavingThrow({
+  effect,
+  combatant,
+  characters,
+  rawValue,
+  reason,
+}: {
+  effect: NonNullable<CombatScene["map"]["elements"][number]["effects"]>[number];
+  combatant: Combatant;
+  characters: Character[];
+  rawValue: number;
+  reason: string;
+}): { value: number; diceRoll?: DiceRoll; logSuffix: string } {
+  if (!effect.savingThrow || rawValue <= 0) {
+    return { value: rawValue, logSuffix: "" };
+  }
+
+  const statLabel = savingThrowLabels[effect.savingThrow.stat];
+  const modifier = getCombatantSavingThrowModifier(combatant, characters, effect.savingThrow.stat);
+  const diceRoll = rollDiceFormula(`1d20 ${formatRollModifier(modifier)}`, {
+    visibility: "public",
+    reason: `${reason} · sauvegarde ${statLabel}`,
+  });
+  const success = diceRoll.result >= effect.savingThrow.dc;
+  const adjustedValue = success
+    ? effect.savingThrow.success === "none"
+      ? 0
+      : Math.floor(rawValue / 2)
+    : rawValue;
+
+  return {
+    value: adjustedValue,
+    diceRoll,
+    logSuffix: success
+      ? ` Sauvegarde ${statLabel} réussie (${diceRoll.result} >= ${effect.savingThrow.dc}).`
+      : ` Sauvegarde ${statLabel} ratée (${diceRoll.result} < ${effect.savingThrow.dc}).`,
+  };
+}
+
+function addCombatantCondition(combatant: Combatant, condition: string): Combatant {
+  const canonicalCondition = getCombatConditionTemplate(condition)?.id ?? condition.trim();
+
+  if (
+    !canonicalCondition ||
+    combatant.conditions.some((item) => (getCombatConditionTemplate(item)?.id ?? item.trim()).toLowerCase() === canonicalCondition.toLowerCase())
+  ) {
+    return combatant;
+  }
+
+  return {
+    ...combatant,
+    conditions: [...combatant.conditions, canonicalCondition],
+  };
+}
+
+function removeCombatantConditions(combatant: Combatant, conditions: string[]): Combatant {
+  const normalized = new Set(
+    conditions.map((condition) => (getCombatConditionTemplate(condition)?.id ?? condition.trim()).toLowerCase()),
+  );
+
+  return {
+    ...combatant,
+    conditions: combatant.conditions.filter((condition) =>
+      !normalized.has((getCombatConditionTemplate(condition)?.id ?? condition.trim()).toLowerCase()),
+    ),
+  };
+}
+
+function updateCharactersFromCombatantHp(characters: Character[], combatant: Combatant): Character[] {
+  if (combatant.sourceType !== "character") {
+    return characters;
+  }
+
+  return updateCharacter(characters, combatant.sourceId, (character) => ({
+    ...character,
+    pv: clamp(combatant.hp, 0, character.maxPv),
+  }));
+}
+
+function applyHazardDestructionEffects({
+  combat,
+  characters,
+  hazardId,
+}: {
+  combat: CombatScene;
+  characters: Character[];
+  hazardId: string;
+}): { combat: CombatScene; characters: Character[]; diceRolls: DiceRoll[] } {
+  const hazard = combat.combatants.find((combatant) => combatant.id === hazardId);
+
+  if (!hazard || hazard.sourceType !== "hazard" || hazard.hp > 0 || hazard.conditions.includes("destroyed")) {
+    return { combat, characters, diceRolls: [] };
+  }
+
+  if (hazard.sourceId !== "hazard-explosive-barrel") {
+    return {
+      combat: {
+        ...combat,
+        combatants: combat.combatants.map((combatant) =>
+          combatant.id === hazard.id ? addCombatantCondition(combatant, "destroyed") : combatant,
+        ),
+      },
+      characters,
+      diceRolls: [],
+    };
+  }
+
+  const damageRoll = rollDiceFormula("2d6", {
+    visibility: "public",
+    reason: `${hazard.name} · explosion`,
+  });
+  const radius = 2;
+  let nextCharacters = characters;
+  const diceRolls: DiceRoll[] = [damageRoll];
+  const saveLogs: string[] = [];
+  let nextCombat = {
+    ...combat,
+    combatants: combat.combatants.map((combatant) =>
+      combatant.id === hazard.id ? addCombatantCondition(combatant, "destroyed") : combatant,
+    ),
+  };
+
+  nextCombat.combatants
+    .filter((combatant) => combatant.id !== hazard.id && combatant.hp > 0)
+    .filter((combatant) => getDistance(combatant.position, hazard.position) <= radius)
+    .forEach((target) => {
+      const save = applyCombatMapEffectSavingThrow({
+        effect: {
+          trigger: "interact",
+          type: "damage",
+          value: "2d6",
+          damageType: "feu",
+          savingThrow: { stat: "dexterite", dc: 13, success: "half" },
+        },
+        combatant: target,
+        characters: nextCharacters,
+        rawValue: damageRoll.result,
+        reason: `${hazard.name} · explosion`,
+      });
+      const nextHp = clamp(target.hp - save.value, 0, target.maxHp);
+      const nextTarget = normalizeCombatantAfterHpChange(target, nextHp);
+
+      if (save.diceRoll) {
+        diceRolls.push(save.diceRoll);
+      }
+      saveLogs.push(`${target.name} subit ${save.value} dégâts.${save.logSuffix}`);
+      nextCombat = {
+        ...nextCombat,
+        combatants: nextCombat.combatants.map((combatant) =>
+          combatant.id === target.id ? nextTarget : combatant,
+        ),
+      };
+      nextCharacters = updateCharactersFromCombatantHp(nextCharacters, nextTarget);
+    });
+
+  return {
+    combat: {
+      ...nextCombat,
+      log: [
+        createCombatLog(
+          "damage",
+          `${hazard.name} explose : ${damageRoll.result} dégâts de feu dans un rayon de ${radius} m, DEX DD 13 pour moitié.${saveLogs.length > 0 ? ` ${saveLogs.join(" ")}` : ""}`,
+        ),
+        ...nextCombat.log,
+      ].slice(0, 30),
+    },
+    characters: nextCharacters,
+    diceRolls,
+  };
+}
+
+function applyCombatMapElementEffects({
+  combat,
+  characters,
+  combatantId,
+  trigger,
+  from,
+  to,
+}: {
+  combat: CombatScene;
+  characters: Character[];
+  combatantId: string;
+  trigger: "startTurn" | "enter";
+  from?: CombatPosition;
+  to?: CombatPosition;
+}): { combat: CombatScene; characters: Character[]; diceRolls: DiceRoll[] } {
+  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
+  let nextCombat = combat;
+  let nextCharacters = characters;
+  const diceRolls: DiceRoll[] = [];
+  const logs: CombatLogEntry[] = [];
+  const combatant = nextCombat.combatants.find((candidate) => candidate.id === combatantId);
+
+  if (!combatant || combatant.hp <= 0) {
+    return { combat, characters, diceRolls };
+  }
+
+  nextCombat.map.elements.forEach((element) => {
+    const effects = element.effects?.filter((effect) => effect.trigger === trigger) ?? [];
+
+    if (effects.length === 0) {
+      return;
+    }
+
+    const affectsCombatant =
+      trigger === "startTurn"
+        ? isPointInsideMapElement(combatant.position, element, cellSize)
+        : from && to
+          ? !isPointInsideMapElement(from, element, cellSize) && doesSegmentHitMapElement(from, to, element, cellSize)
+          : false;
+
+    if (!affectsCombatant) {
+      return;
+    }
+
+    effects.forEach((effect) => {
+      if (effect.oncePerCombat && element.state?.used) {
+        return;
+      }
+
+      const currentCombatant = nextCombat.combatants.find((candidate) => candidate.id === combatantId);
+
+      if (!currentCombatant || currentCombatant.hp <= 0) {
+        return;
+      }
+
+      if (effect.type === "damage" || effect.type === "heal") {
+        const rolled = rollCombatMapEffectValue(element, effect);
+        const resolved = effect.type === "damage"
+          ? applyCombatMapEffectSavingThrow({
+              effect,
+              combatant: currentCombatant,
+              characters: nextCharacters,
+              rawValue: Math.abs(rolled.value),
+              reason: element.name,
+            })
+          : { value: Math.abs(rolled.value), logSuffix: "", diceRoll: undefined };
+        const signedValue = effect.type === "heal" ? Math.abs(resolved.value) : -Math.abs(resolved.value);
+        const nextHp = clamp(currentCombatant.hp + signedValue, 0, currentCombatant.maxHp);
+        const nextCombatant = normalizeCombatantAfterHpChange(currentCombatant, nextHp);
+
+        if (rolled.diceRoll) {
+          diceRolls.push(rolled.diceRoll);
+        }
+        if (resolved.diceRoll) {
+          diceRolls.push(resolved.diceRoll);
+        }
+
+        nextCombat = {
+          ...nextCombat,
+          combatants: nextCombat.combatants.map((candidate) =>
+            candidate.id === combatantId ? nextCombatant : candidate,
+          ),
+        };
+        nextCharacters = updateCharactersFromCombatantHp(nextCharacters, nextCombatant);
+        logs.push(createCombatLog(
+          effect.type === "heal" ? "heal" : "damage",
+          effect.type === "heal"
+            ? `${currentCombatant.name} profite de ${element.name} et récupère ${Math.abs(resolved.value)} PV.`
+            : `${currentCombatant.name} subit ${Math.abs(resolved.value)} dégâts${effect.damageType ? ` ${effect.damageType}` : ""} à cause de ${element.name}.${resolved.logSuffix}`,
+        ));
+      }
+
+      if (effect.type === "condition" && effect.condition) {
+        nextCombat = {
+          ...nextCombat,
+          combatants: nextCombat.combatants.map((candidate) =>
+            candidate.id === combatantId ? addCombatantCondition(candidate, effect.condition ?? "") : candidate,
+          ),
+        };
+        logs.push(createCombatLog("condition", `${currentCombatant.name} subit l'état ${effect.condition} (${element.name}).`));
+      }
+
+      if (effect.type === "removeCondition" && effect.condition) {
+        nextCombat = {
+          ...nextCombat,
+          combatants: nextCombat.combatants.map((candidate) =>
+            candidate.id === combatantId ? removeCombatantConditions(candidate, [effect.condition ?? ""]) : candidate,
+          ),
+        };
+      }
+
+      if (effect.type === "stopMovement") {
+        logs.push(createCombatLog("move", `${element.name} arrête le déplacement de ${currentCombatant.name}.`));
+      }
+
+      if (effect.type === "revealHidden") {
+        nextCombat = {
+          ...nextCombat,
+          combatants: nextCombat.combatants.map((candidate) =>
+            candidate.id === combatantId
+              ? removeCombatantConditions(candidate, ["hidden", "Dissimulé", "Dans l'ombre", "Caché", "Invisible"])
+              : candidate,
+          ),
+        };
+        logs.push(createCombatLog("condition", `${element.name} révèle ${currentCombatant.name}.`));
+      }
+
+      if (effect.type === "alert") {
+        nextCombat = {
+          ...nextCombat,
+          combatants: nextCombat.combatants.map((candidate) =>
+            candidate.side === "enemies" ? addCombatantCondition(candidate, effect.condition ?? "alert") : candidate,
+          ),
+        };
+        logs.push(createCombatLog("system", `${element.name} se déclenche : les ennemis sont alertés.`));
+      }
+
+      if (effect.oncePerCombat) {
+        nextCombat = {
+          ...nextCombat,
+          map: {
+            ...nextCombat.map,
+            elements: nextCombat.map.elements.map((candidate) =>
+              candidate.id === element.id
+                ? { ...candidate, state: { ...(candidate.state ?? {}), used: true } }
+                : candidate,
+            ),
+          },
+        };
+      }
+    });
+  });
+
+  return {
+    combat: logs.length > 0
+      ? {
+          ...nextCombat,
+          log: [...logs, ...nextCombat.log].slice(0, 30),
+        }
+      : nextCombat,
+    characters: nextCharacters,
+    diceRolls,
+  };
+}
+
+function applyCombatMapInteractionEffects({
+  combat,
+  characters,
+  position,
+}: {
+  combat: CombatScene;
+  characters: Character[];
+  position: CombatPosition;
+}): { combat: CombatScene; characters: Character[]; diceRolls: DiceRoll[]; applied: boolean } {
+  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
+  let nextCombat = combat;
+  let nextCharacters = characters;
+  const diceRolls: DiceRoll[] = [];
+  const logs: CombatLogEntry[] = [];
+  let applied = false;
+
+  combat.map.elements.forEach((element) => {
+    if (!isPointInsideMapElement(position, element, cellSize)) {
+      return;
+    }
+
+    const effects = element.effects?.filter((effect) => effect.trigger === "interact") ?? [];
+
+    effects.forEach((effect) => {
+      if (effect.oncePerCombat && element.state?.used) {
+        return;
+      }
+
+      if (effect.type === "damage" || effect.type === "heal") {
+        const rolled = rollCombatMapEffectValue(element, effect);
+        const radius = typeof effect.radius === "number" ? effect.radius : Number(effect.radius ?? 0);
+        const cells = getCombatMapElementCells(element, cellSize);
+        const center = cells.reduce(
+          (accumulator, cell, _index, cells) => ({
+            x: accumulator.x + (cell.x + cell.width / 2) / cells.length,
+            y: accumulator.y + (cell.y + cell.height / 2) / cells.length,
+          }),
+          { x: 0, y: 0 },
+        );
+        const targets = nextCombat.combatants.filter(
+          (combatant) =>
+            combatant.hp > 0 &&
+            (radius <= 0
+              ? isPointInsideMapElement(combatant.position, element, cellSize)
+              : getDistance(combatant.position, center) <= radius),
+        );
+
+        if (rolled.diceRoll) {
+          diceRolls.push(rolled.diceRoll);
+        }
+
+        targets.forEach((target) => {
+          const resolved = effect.type === "damage"
+            ? applyCombatMapEffectSavingThrow({
+                effect,
+                combatant: target,
+                characters: nextCharacters,
+                rawValue: Math.abs(rolled.value),
+                reason: element.name,
+              })
+            : { value: Math.abs(rolled.value), logSuffix: "", diceRoll: undefined };
+          const signedValue = effect.type === "heal" ? Math.abs(resolved.value) : -Math.abs(resolved.value);
+          const nextHp = clamp(target.hp + signedValue, 0, target.maxHp);
+          const nextTarget = normalizeCombatantAfterHpChange(target, nextHp);
+
+          if (resolved.diceRoll) {
+            diceRolls.push(resolved.diceRoll);
+          }
+          nextCombat = {
+            ...nextCombat,
+            combatants: nextCombat.combatants.map((candidate) =>
+              candidate.id === target.id ? nextTarget : candidate,
+            ),
+          };
+          nextCharacters = updateCharactersFromCombatantHp(nextCharacters, nextTarget);
+        });
+
+        logs.push(createCombatLog(
+          effect.type === "heal" ? "heal" : "damage",
+          `${element.name} se déclenche${targets.length > 0 ? ` sur ${targets.length} cible(s)` : ""}.`,
+        ));
+        applied = true;
+      }
+
+      if (effect.type === "objective") {
+        logs.push(createCombatLog("action", `${element.name} est activé.`));
+        applied = true;
+      }
+
+      if (effect.oncePerCombat) {
+        nextCombat = {
+          ...nextCombat,
+          map: {
+            ...nextCombat.map,
+            elements: nextCombat.map.elements.map((candidate) =>
+              candidate.id === element.id
+                ? { ...candidate, state: { ...(candidate.state ?? {}), used: true } }
+                : candidate,
+            ),
+          },
+        };
+      }
+    });
+  });
+
+  return {
+    combat: logs.length > 0
+      ? {
+          ...nextCombat,
+          log: [...logs, ...nextCombat.log].slice(0, 30),
+        }
+      : nextCombat,
+    characters: nextCharacters,
+    diceRolls,
+    applied,
+  };
+}
+
+function getMovementCostMultiplierAtPoint(combat: CombatScene, point: CombatPosition): number {
+  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
+  const multipliers = combat.map.elements.flatMap((element) => {
+    if (!isPointInsideMapElement(point, element, cellSize)) {
+      return [];
+    }
+
+    return (element.effects ?? [])
+      .filter((effect) => effect.type === "movementCost")
+      .map((effect) => (typeof effect.value === "number" ? effect.value : Number(effect.value ?? 1)))
+      .filter((value) => Number.isFinite(value) && value > 0);
+  });
+
+  return Math.max(0.25, multipliers.reduce((total, multiplier) => total * multiplier, 1));
+}
+
+function calculateMovementCost(combat: CombatScene, from: CombatPosition, to: CombatPosition): number {
+  const distance = getDistance(from, to);
+
+  if (distance <= 0) {
+    return 0;
+  }
+
+  const steps = Math.max(1, Math.ceil(distance / Math.max(0.1, combat.map.cellSize || 0.5)));
+  let cost = 0;
+
+  for (let index = 0; index < steps; index += 1) {
+    const startRatio = index / steps;
+    const endRatio = (index + 1) / steps;
+    const middleRatio = (startRatio + endRatio) / 2;
+    const point = {
+      x: from.x + (to.x - from.x) * middleRatio,
+      y: from.y + (to.y - from.y) * middleRatio,
+    };
+
+    cost += distance / steps * getMovementCostMultiplierAtPoint(combat, point);
+  }
+
+  return cost;
+}
+
+function clampPositionToMovementBudget(
+  combat: CombatScene,
+  from: CombatPosition,
+  requestedPosition: CombatPosition,
+  movementBudget: number,
+): CombatPosition {
+  const stoppedRequestedPosition = clampPositionToFirstStopMovement(combat, from, requestedPosition);
+
+  if (movementBudget <= 0 || getDistance(from, requestedPosition) <= 0) {
+    return from;
+  }
+
+  if (
+    calculateMovementCost(combat, from, stoppedRequestedPosition) <= movementBudget &&
+    hasMovementPath(combat, from, stoppedRequestedPosition)
+  ) {
+    return stoppedRequestedPosition;
+  }
+
+  let low = 0;
+  let high = 1;
+  let best = from;
+
+  for (let index = 0; index < 16; index += 1) {
+    const ratio = (low + high) / 2;
+    const candidate = clampCombatPosition(
+      {
+        x: from.x + (stoppedRequestedPosition.x - from.x) * ratio,
+        y: from.y + (stoppedRequestedPosition.y - from.y) * ratio,
+      },
+      combat,
+    );
+
+    if (hasMovementPath(combat, from, candidate) && calculateMovementCost(combat, from, candidate) <= movementBudget) {
+      best = candidate;
+      low = ratio;
+    } else {
+      high = ratio;
+    }
+  }
+
+  return best;
+}
+
+function moveCombatantBy(
+  combat: CombatScene,
+  combatantId: string | undefined,
+  distance: number,
+): CombatScene {
+  if (!combatantId || distance <= 0) {
+    return combat;
+  }
+
+  return {
+    ...combat,
+    combatants: combat.combatants.map((combatant) =>
+      combatant.id === combatantId
+        ? {
+            ...combatant,
+            position: clampCombatPosition(
+              {
+                x: combatant.position.x + distance,
+                y: combatant.position.y,
+              },
+              combat,
+            ),
+          }
+        : combatant,
+    ),
+  };
+}
+
+function moveCombatantTo(
+  combat: CombatScene,
+  combatantId: string | undefined,
+  position: CombatPosition | undefined,
+): CombatScene {
+  if (!combatantId || !position) {
+    return combat;
+  }
+
+  return {
+    ...combat,
+    combatants: combat.combatants.map((combatant) =>
+      combatant.id === combatantId
+        ? {
+            ...combatant,
+            position: clampCombatPosition(position, combat),
+          }
+        : combatant,
+    ),
+  };
+}
+
+function getIntentCombatCost(
+  state: GameDataState,
+  intent: ChatActionIntent,
+): "action" | "bonus" | "reaction" {
+  if (intent.kind === "useAbility") {
+    const ability = state.abilityInstances.find((candidate) => candidate.id === intent.targetId);
+    const template = ability
+      ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
+      : undefined;
+
+    if (template?.activation.timing === "bonus") {
+      return "bonus";
+    }
+
+    if (template?.activation.timing === "reaction") {
+      return "reaction";
+    }
+
+    if (template?.combatRole === "attack") {
+      return "action";
+    }
+  }
+
+  return "action";
+}
+
+function canSpendCombatCost(combatant: Combatant, cost: "action" | "bonus" | "reaction"): boolean {
+  return combatant.resources[cost] > 0;
+}
+
+function canCombatantTakeTurn(combatant: Combatant | undefined): boolean {
+  return Boolean(combatant && combatant.hp > 0 && combatant.sourceType !== "hazard");
+}
+
+function areHostileCombatants(a: Combatant, b: Combatant): boolean {
+  const aTeam = a.side === "players" || a.side === "allies" ? "players" : a.side;
+  const bTeam = b.side === "players" || b.side === "allies" ? "players" : b.side;
+
+  return aTeam !== bTeam && aTeam !== "neutral" && bTeam !== "neutral";
+}
+
+function canCombatActionReachTarget(
+  state: GameDataState,
+  combat: CombatScene,
+  actor: Combatant,
+  intent: ChatActionIntent,
+): boolean {
+  const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+
+  if (targetingV2) {
+    const resolved = resolveActionTargets({
+      actor,
+      combat,
+      fallbackCharacterId: state.selectedCharacterId,
+      target: intent.target,
+      targeting: targetingV2,
+    });
+
+    return !resolved.invalidReason;
+  }
+
+  const targetPosition = getCombatantTargetPosition(combat, intent.target, state.selectedCharacterId);
+
+  if (targetPosition) {
+    return (
+      hasLineOfSight(combat, actor.position, targetPosition) &&
+      getDistance(actor.position, targetPosition) <= getActionRange(state, intent)
+    );
+  }
+
+  const targetCombatant = getTargetCombatantFromIntent(combat, intent);
+
+  if (!targetCombatant) {
+    return true;
+  }
+
+  return (
+    hasLineOfSight(combat, actor.position, targetCombatant.position) &&
+    getDistance(actor.position, targetCombatant.position) <= getActionRange(state, intent)
+  );
+}
+
+function spendCombatAction(
+  combat: CombatScene,
+  combatantId: string,
+  cost: "action" | "bonus" | "reaction",
+): CombatScene {
+  return {
+    ...combat,
+    combatants: combat.combatants.map((combatant) =>
+      combatant.id === combatantId
+        ? {
+            ...combatant,
+            resources: {
+              ...combatant.resources,
+              [cost]: Math.max(0, combatant.resources[cost] - 1),
+            },
+          }
+        : combatant,
+    ),
+  };
+}
+
+function hasEquippedItemTag(
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+  characterId: string,
+  tag: string,
+): boolean {
+  return itemInstances.some((item) => {
+    const template = itemTemplates.find((candidate) => candidate.id === item.templateId);
+
+    if (!template || item.location.type !== "equipped" || item.location.parent !== characterId) {
+      return false;
+    }
+
+    const types = getTemplateTypes(template);
+    const tags = [...types, ...getTemplateMetadataTags(template, types)];
+
+    return tags.some((value) => value.toLowerCase() === tag.toLowerCase());
+  });
+}
+
+function applyVisibilityReactionTriggers({
+  beforeCombat,
+  afterCombat,
+  abilityInstances,
+  abilityTemplates,
+  itemInstances,
+  itemTemplates,
+  movedCombatantId,
+}: {
+  beforeCombat: CombatScene;
+  afterCombat: CombatScene;
+  abilityInstances: AbilityInstance[];
+  abilityTemplates: AbilityTemplate[];
+  itemInstances: ItemInstance[];
+  itemTemplates: ItemTemplate[];
+  movedCombatantId: string;
+}): { combat: CombatScene; messages: Message[]; pendingActionIntents: ChatActionIntent[] } {
+  const movedBefore = beforeCombat.combatants.find((combatant) => combatant.id === movedCombatantId);
+  const movedAfter = afterCombat.combatants.find((combatant) => combatant.id === movedCombatantId);
+
+  if (!movedBefore || !movedAfter || movedAfter.hp <= 0) {
+    return { combat: afterCombat, messages: [], pendingActionIntents: [] };
+  }
+
+  const logs: CombatLogEntry[] = [];
+  const messages: Message[] = [];
+  const pendingActionIntents: ChatActionIntent[] = [];
+
+  afterCombat.combatants
+    .filter((watcher) => watcher.side === "players" || watcher.side === "allies")
+    .forEach((watcher) => {
+      if (
+        watcher.id === movedAfter.id ||
+        watcher.hp <= 0 ||
+        watcher.resources.reaction <= 0 ||
+        !areHostileCombatants(watcher, movedAfter)
+      ) {
+        return;
+      }
+
+      const wasVisible = hasLineOfSight(beforeCombat, watcher.position, movedBefore.position);
+      const isVisible = hasLineOfSight(afterCombat, watcher.position, movedAfter.position);
+
+      if (wasVisible || !isVisible || watcher.sourceType !== "character") {
+        return;
+      }
+
+      const ability = abilityInstances.find(
+        (candidate) => candidate.ownerId === watcher.sourceId && candidate.templateId === "abl_quick_shot",
+      );
+      const template = ability ? getAbilityTemplate(abilityTemplates, ability.templateId) : undefined;
+
+      if (
+        !ability ||
+        !template ||
+        !canUseAbility(ability, template) ||
+        !hasEquippedItemTag(itemInstances, itemTemplates, watcher.sourceId, "ranged")
+      ) {
+        return;
+      }
+
+      const currentTarget = afterCombat.combatants.find((combatant) => combatant.id === movedAfter.id);
+
+      if (!currentTarget || currentTarget.hp <= 0) {
+        return;
+      }
+
+      const target: ActionTarget = {
+        kind: currentTarget.sourceType === "character" ? "character" : "entity",
+        id: currentTarget.sourceId,
+        label: currentTarget.name,
+        source: "selected",
+      };
+      const intent: ChatActionIntent = {
+        id: `intent-${crypto.randomUUID()}`,
+        kind: "useAbility",
+        targetId: ability.id,
+        label: `Utiliser ${template.name}`,
+        command: `useAbility:${ability.id}`,
+        targeting: template.targeting,
+        target,
+        createdAt: Date.now(),
+      };
+
+      pendingActionIntents.push(intent);
+      messages.push({
+        id: `message-gm-reaction-${crypto.randomUUID()}`,
+        sender: "gm",
+        content: `${currentTarget.name} apparaît dans le champ de vision de ${watcher.name}. Souhaitez-vous utiliser votre réaction pour utiliser la capacité ${template.name} ?`,
+        timestamp: Date.now(),
+      });
+      logs.push(createCombatLog(
+        "action",
+        `${watcher.name} peut utiliser ${template.name} en réaction contre ${currentTarget.name}.`,
+      ));
+    });
+
+  return {
+    combat: logs.length > 0
+      ? {
+          ...afterCombat,
+          log: [...logs, ...afterCombat.log].slice(0, 30),
+        }
+      : afterCombat,
+    messages,
+    pendingActionIntents,
+  };
+}
+
+function applyEnemyTurn(combat: CombatScene, enemyId: string): CombatScene {
+  const enemy = combat.combatants.find((combatant) => combatant.id === enemyId);
+
+  if (!enemy || enemy.side !== "enemies" || enemy.hp <= 0) {
+    return combat;
+  }
+
+  const targets = combat.combatants.filter(
+    (combatant) => (combatant.side === "players" || combatant.side === "allies") && combatant.hp > 0,
+  );
+
+  if (targets.length === 0) {
+    return combat;
+  }
+
+  const visibleTargets = targets
+    .filter((target) => hasLineOfSight(combat, enemy.position, target.position))
+    .sort((a, b) => getDistance(enemy.position, a.position) - getDistance(enemy.position, b.position));
+  const target = visibleTargets[0] ?? targets[0]!;
+  const distance = getDistance(enemy.position, target.position);
+
+  if (visibleTargets.length > 0 && distance <= enemy.attackRange && enemy.resources.action > 0) {
+    const hit = Math.random() > 0.35;
+    const damagedCombat = hit
+      ? updateCombatantHp(combat, target.id, (hp) => hp - enemy.attackDamage)
+      : combat;
+
+    return {
+      ...spendCombatAction(damagedCombat, enemy.id, "action"),
+      log: [
+        createCombatLog(
+          hit ? "damage" : "action",
+          hit
+            ? `${enemy.name} attaque ${target.name} et inflige ${enemy.attackDamage} dégâts.`
+            : `${enemy.name} attaque ${target.name}, mais rate.`,
+        ),
+        ...combat.log,
+      ].slice(0, 30),
+    };
+  }
+
+  const step = Math.min(enemy.resources.movement, Math.max(0, distance - Math.min(enemy.attackRange, 3)));
+  const ratio = distance > 0 ? step / distance : 0;
+  const nextPosition = clampCombatPosition(
+    {
+      x: enemy.position.x + (target.position.x - enemy.position.x) * ratio,
+      y: enemy.position.y + (target.position.y - enemy.position.y) * ratio,
+    },
+    combat,
+  );
+  const movedDistance = getDistance(enemy.position, nextPosition);
+
+  return {
+    ...combat,
+    combatants: combat.combatants.map((combatant) =>
+      combatant.id === enemy.id
+        ? {
+            ...combatant,
+            position: nextPosition,
+            resources: {
+              ...combatant.resources,
+              movement: Math.max(0, combatant.resources.movement - movedDistance),
+            },
+          }
+        : combatant,
+    ),
+    log: [
+      createCombatLog("move", `${enemy.name} se déplace vers ${target.name}.`),
+      ...combat.log,
+    ].slice(0, 30),
+  };
+}
+
+function getScaledEffectValue(
+  effect: ItemInstance["effects"][number],
+  context: ValueExpressionContext,
+): number {
+  const value = resolveEffectValue(effect.variables?.value, context);
+  const level = Math.max(1, getEffectNumber(effect.variables?.level) || 1);
+  const perLevel = getEffectNumber(effect.variables?.perLevel);
+
+  return value + Math.max(0, level - 1) * perLevel;
+}
+
+function getCombinedItemEffects(item: ItemInstance, itemTemplates: ItemTemplate[]): ItemInstance["effects"] {
+  const template = itemTemplates.find((candidate) => candidate.id === item.templateId);
+
+  return [...(template?.effects ?? []), ...item.effects];
+}
+
+function getTemplateTypes(template: ItemTemplate): string[] {
+  const maybeTypes = (template as Partial<ItemTemplate> & { types?: unknown }).types;
+
+  if (Array.isArray(maybeTypes) && maybeTypes.length > 0) {
+    return maybeTypes.filter((type): type is string => typeof type === "string");
+  }
+
+  const legacyTags = (template as Partial<ItemTemplate> & { tags?: unknown }).tags;
+
+  if (Array.isArray(legacyTags) && legacyTags.length > 0) {
+    return legacyTags.filter((tag): tag is string => typeof tag === "string");
+  }
+
+  const legacyRoles = template.modules.item?.roles;
+
+  return Array.isArray(legacyRoles)
+    ? legacyRoles.filter((role): role is string => typeof role === "string")
+    : [];
+}
+
+function getTemplateMetadataTags(template: ItemTemplate, fallbackTypes: string[]): string[] {
+  const maybeTags = (template as Partial<ItemTemplate> & { tags?: unknown }).tags;
+
+  if (Array.isArray(maybeTags) && maybeTags.length > 0) {
+    return maybeTags.filter((tag): tag is string => typeof tag === "string");
+  }
+
+  return fallbackTypes;
+}
+
+function getEquippedWeaponData(
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+  characterId: string,
+  weaponId: string,
+) {
+  const [weaponToken = "", modifierToken] = weaponId.split("|");
+  const [itemId, attackId = "default"] = weaponToken.split(":");
+  const item = itemInstances.find(
+    (candidate) =>
+      candidate.id === itemId &&
+      candidate.location.parent === characterId &&
+      candidate.location.type === "equipped",
+  );
+  const template = item ? itemTemplates.find((candidate) => candidate.id === item.templateId) : undefined;
+
+  if (!item || !template || !getTemplateTypes(template).includes("weapon")) {
+    return null;
+  }
+
+  const fallbackAttack = {
+    id: "default",
+    name: String(item.overrides.name ?? template.name),
+    range: item.overrides["base.range"] ?? template.base.range ?? 1.5,
+    damage: item.overrides["base.damage"] ?? template.base.damage ?? template.base.attack ?? 1,
+    damageType: item.overrides["base.damageType"] ?? template.base.damageType ?? "force",
+    attackKind: Number(item.overrides["base.range"] ?? template.base.range ?? 1.5) > 1.5 ? "ranged" : "melee",
+    targetingV2: template.targetingV2,
+  };
+  const attack = template.attacks?.find((candidate) => candidate.id === attackId) ?? fallbackAttack;
+  const baseRange = getEffectNumber(attack.range) || 1.5;
+  const attackKind: WeaponAttackKind =
+    attack.attackKind === "ranged" || attack.attackKind === "magic" || attack.attackKind === "melee"
+      ? attack.attackKind
+      : baseRange > 1.5
+        ? "ranged"
+        : "melee";
+  const modifierParts = modifierToken?.split(":") ?? [];
+  const modifierItemId = modifierParts[0];
+  const modifierId = modifierParts[1];
+  const modifierItem = modifierItemId
+    ? itemInstances.find(
+        (candidate) =>
+          candidate.id === modifierItemId &&
+          candidate.location.parent === characterId &&
+          candidate.location.type === "inventory" &&
+          candidate.quantity > 0,
+      )
+    : undefined;
+  const modifierTemplate = modifierItem
+    ? itemTemplates.find((candidate) => candidate.id === modifierItem.templateId)
+    : undefined;
+  const modifier = modifierTemplate?.attackModifiers?.find((candidate) => candidate.id === modifierId);
+  const canApplyModifier = modifier
+    ? (!modifier.appliesToAttackKinds || modifier.appliesToAttackKinds.includes(attackKind)) &&
+      (!modifier.appliesToTags || modifier.appliesToTags.some((tag) => template.tags.includes(tag)))
+    : false;
+
+  if (modifierToken && !canApplyModifier) {
+    return null;
+  }
+  const range = Math.max(
+    0.5,
+    baseRange + (canApplyModifier ? getEffectNumber(modifier?.rangeModifier) : 0),
+  );
+  const damage = canApplyModifier
+    ? combineDamageValues(attack.damage, modifier?.damageModifier)
+    : attack.damage;
+  const displayDamage = formatDamageFormula([
+    damage,
+    getDefaultDamageModifier(attackKind, template, null),
+  ]) ?? damage;
+  const targetingV2 = attack.targetingV2
+    ? attack.targetingV2
+    : template.targetingV2
+      ? {
+          ...template.targetingV2,
+          aim: {
+            ...template.targetingV2.aim,
+            range,
+          },
+        }
+      : undefined;
+
+  return {
+    item,
+    template,
+    name: template.attacks && template.attacks.length > 1
+      ? `${String(item.overrides.name ?? template.name)} · ${attack.name}${canApplyModifier ? ` · ${modifier?.name}` : ""}`
+      : `${String(item.overrides.name ?? template.name)}${canApplyModifier ? ` · ${modifier?.name}` : ""}`,
+    range,
+    damage: getEffectNumber(displayDamage) || 1,
+    damageFormula: typeof displayDamage === "string" && displayDamage.trim() ? displayDamage : undefined,
+    rawDamageFormula: typeof damage === "string" && damage.trim() ? damage : undefined,
+    rawDamage: getEffectNumber(damage) || 1,
+    damageType: getEffectString(canApplyModifier ? modifier?.damageType ?? attack.damageType : attack.damageType, "force"),
+    attackKind,
+    targetingV2,
+    modifierItem: canApplyModifier && modifier?.consumeOnUse !== false ? modifierItem : undefined,
+  };
+}
+
+function getEquippedEffects(
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+  characterId: string,
+): ItemInstance["effects"] {
+  return itemInstances
+    .filter((item) => item.location.parent === characterId && item.location.type === "equipped")
+    .flatMap((item) => getCombinedItemEffects(item, itemTemplates));
+}
+
+function getGrantedAbilityTemplateIds(item: ItemInstance, itemTemplates: ItemTemplate[]): string[] {
+  return getCombinedItemEffects(item, itemTemplates)
+    .filter((effect) => effect.effectId === "grantAbility")
+    .map((effect) => String(effect.variables?.abilityTemplateId ?? ""))
+    .filter(Boolean);
+}
+
+function createGrantedAbilityInstanceId(itemId: string, abilityTemplateId: string): string {
+  return `item-ability:${itemId}:${abilityTemplateId}`;
+}
+
+function addGrantedAbilitiesForItem(
+  abilityInstances: AbilityInstance[],
+  abilityTemplates: AbilityTemplate[],
+  itemTemplates: ItemTemplate[],
+  item: ItemInstance,
+): AbilityInstance[] {
+  const ownerId = item.location.parent;
+
+  if (!ownerId) {
+    return abilityInstances;
+  }
+
+  return getGrantedAbilityTemplateIds(item, itemTemplates).reduce((instances, abilityTemplateId) => {
+    const id = createGrantedAbilityInstanceId(item.id, abilityTemplateId);
+
+    if (
+      !abilityTemplates.some((template) => template.id === abilityTemplateId) ||
+      instances.some((ability) => ability.id === id)
+    ) {
+      return instances;
+    }
+
+    return [
+      ...instances,
+      createAbilityInstance(id, abilityTemplateId, ownerId, abilityTemplates, item.id),
+    ];
+  }, abilityInstances);
+}
+
+function removeGrantedAbilitiesForItem(
+  abilityInstances: AbilityInstance[],
+  itemId: string,
+): AbilityInstance[] {
+  return abilityInstances.filter((ability) => ability.grantedByItemId !== itemId);
+}
+
+function isGrantedAbilityActive(ability: AbilityInstance, itemInstances: ItemInstance[]): boolean {
+  if (!ability.grantedByItemId) {
+    return true;
+  }
+
+  return itemInstances.some(
+    (item) =>
+      item.id === ability.grantedByItemId &&
+      item.location.type === "equipped" &&
+      item.location.parent === ability.ownerId,
+  );
+}
+
+function applyDamageReductions(
+  characters: Character[],
+  amount: number,
+  damageType: string,
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+  characterId: string,
+): number {
+  if (amount <= 0) {
+    return 0;
+  }
+
+  const effects = getEquippedEffects(itemInstances, itemTemplates, characterId);
+  const character = characters.find((candidate) => candidate.id === characterId);
+  const context = character ? createValueExpressionContext(character, itemInstances, itemTemplates) : null;
+  const reduction = effects.reduce((total, effect) => {
+    if (effect.effectId !== "reduceDamage") {
+      return total;
+    }
+
+    const reducedType = getEffectString(effect.variables?.damageType, "all");
+
+    if (reducedType !== "all" && reducedType !== damageType) {
+      return total;
+    }
+
+    return total + (context ? resolveEffectValue(effect.variables?.value, context) : getEffectNumber(effect.variables?.value));
+  }, 0);
+  const minDamage = effects.reduce((minimum, effect) => {
+    if (effect.effectId !== "reduceDamage") {
+      return minimum;
+    }
+
+    const reducedType = getEffectString(effect.variables?.damageType, "all");
+
+    if (reducedType !== "all" && reducedType !== damageType) {
+      return minimum;
+    }
+
+    return Math.max(minimum, getEffectNumber(effect.variables?.minDamage) || 1);
+  }, 1);
+
+  return Math.max(minDamage, amount - reduction);
+}
+
+function applyDamageToCharacters(
+  characters: Character[],
+  characterId: string,
+  amount: number,
+  damageType: string,
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+): Character[] {
+  const finalDamage = applyDamageReductions(
+    characters,
+    amount,
+    damageType,
+    itemInstances,
+    itemTemplates,
+    characterId,
+  );
+
+  return updateCharacter(characters, characterId, (character) => ({
+    ...character,
+    pv: clamp(character.pv - finalDamage, 0, character.maxPv),
+  }));
+}
+
+function getRandomDamageType(effect: ItemInstance["effects"][number]): string {
+  const damageTypes = getEffectString(effect.variables?.damageTypes, "force")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return damageTypes[Math.floor(Math.random() * damageTypes.length)] ?? "force";
+}
+
+function createNewItemInstance(
+  characterId: string,
+  templateId: string,
+  quantity: number,
+): ItemInstance {
+  return {
+    id: `item-${crypto.randomUUID()}`,
+    templateId,
+    quantity,
+    overrides: {},
+    current: {},
+    data: {},
+    effects: [],
+    location: {
+      type: "inventory",
+      parent: characterId,
+    },
+  };
+}
+
+function addItemInstance(
+  itemInstances: ItemInstance[],
+  characterId: string,
+  templateId: string,
+  quantity: number,
+): ItemInstance[] {
+  const item = createNewItemInstance(characterId, templateId, quantity);
+
+  return [
+    ...itemInstances,
+    {
+      ...item,
+      data: {
+        ...item.data,
+        inventoryOrder: itemInstances.length,
+      },
+    },
+  ];
+}
+
+function applyUsableEffects(
+  state: Pick<GameDataState, "characters" | "itemInstances" | "itemTemplates" | "combat">,
+  actorCharacterId: string,
+  target: ActionTarget | undefined,
+  effects: ItemInstance["effects"],
+  sourceItemId?: string,
+  resolvedTargets?: ActionTarget[],
+  sourceLabel?: string,
+): Pick<GameDataState, "characters" | "itemInstances" | "combat"> & { diceRolls: DiceRoll[] } {
+  let characters = state.characters;
+  let itemInstances = state.itemInstances;
+  let combat = state.combat;
+  const diceRolls: DiceRoll[] = [];
+  const effectTargets = resolvedTargets && resolvedTargets.length > 0 ? resolvedTargets : [target];
+
+  effects.forEach((effect) => {
+    const actorCharacter = characters.find((character) => character.id === actorCharacterId);
+    const firstTarget = effectTargets[0];
+    const firstCombatant = getTargetCombatantFromActionTarget(combat, firstTarget, actorCharacterId);
+    const firstTargetCharacterId =
+      firstTarget?.kind === "self" || firstTarget?.kind === "character"
+        ? firstTarget.id
+        : firstCombatant?.sourceType === "character"
+          ? firstCombatant.sourceId
+          : undefined;
+    const contextCharacter = characters.find((character) => character.id === firstTargetCharacterId) ?? actorCharacter;
+    const diceRoll = createEffectDiceRoll(effect, contextCharacter, sourceLabel);
+    const value = diceRoll
+      ? diceRoll.result
+      : contextCharacter
+        ? getScaledEffectValue(effect, createValueExpressionContext(contextCharacter, itemInstances, state.itemTemplates))
+        : 0;
+
+    if (diceRoll) {
+      diceRolls.push(diceRoll);
+    }
+
+    if (effect.effectId === "heal") {
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+        const targetCharacterId =
+          effectTarget?.kind === "self" || effectTarget?.kind === "character"
+            ? effectTarget.id
+            : targetCombatant?.sourceType === "character"
+              ? targetCombatant.sourceId
+              : undefined;
+        const targetCharacter = targetCharacterId
+          ? characters.find((character) => character.id === targetCharacterId)
+          : undefined;
+
+        if (targetCharacter) {
+          characters = updateCharacter(characters, targetCharacter.id, (character) => ({
+            ...character,
+            pv: clamp(character.pv + value, 0, character.maxPv),
+          }));
+          combat = syncCharacterCombatant(
+            combat,
+            characters.find((character) => character.id === targetCharacter.id),
+          );
+        } else {
+          combat = updateCombatantHp(combat, targetCombatant?.id, (hp) => hp + value);
+        }
+      });
+    }
+
+    if (effect.effectId === "damage") {
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+        const targetCharacterId =
+          effectTarget?.kind === "self" || effectTarget?.kind === "character"
+            ? effectTarget.id
+            : targetCombatant?.sourceType === "character"
+              ? targetCombatant.sourceId
+              : undefined;
+        const targetCharacter = targetCharacterId
+          ? characters.find((character) => character.id === targetCharacterId)
+          : undefined;
+
+        if (targetCharacter) {
+          characters = applyDamageToCharacters(
+            characters,
+            targetCharacter.id,
+            value,
+            getEffectString(effect.variables?.damageType, "force"),
+            itemInstances,
+            state.itemTemplates,
+          );
+          combat = syncCharacterCombatant(
+            combat,
+            characters.find((character) => character.id === targetCharacter.id),
+          );
+        } else {
+          combat = updateCombatantHp(combat, targetCombatant?.id, (hp) => hp - value);
+          const hazardState = applyHazardDestructionEffects({
+            combat,
+            characters,
+            hazardId: targetCombatant?.id ?? "",
+          });
+          combat = hazardState.combat;
+          characters = hazardState.characters;
+          diceRolls.push(...hazardState.diceRolls);
+        }
+      });
+    }
+
+    if (effect.effectId === "randomDamage") {
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+        const targetCharacterId =
+          effectTarget?.kind === "self" || effectTarget?.kind === "character"
+            ? effectTarget.id
+            : targetCombatant?.sourceType === "character"
+              ? targetCombatant.sourceId
+              : undefined;
+        const targetCharacter = targetCharacterId
+          ? characters.find((character) => character.id === targetCharacterId)
+          : undefined;
+
+        if (targetCharacter) {
+          characters = applyDamageToCharacters(
+            characters,
+            targetCharacter.id,
+            value,
+            getRandomDamageType(effect),
+            itemInstances,
+            state.itemTemplates,
+          );
+          combat = syncCharacterCombatant(
+            combat,
+            characters.find((character) => character.id === targetCharacter.id),
+          );
+        } else {
+          combat = updateCombatantHp(combat, targetCombatant?.id, (hp) => hp - value);
+          const hazardState = applyHazardDestructionEffects({
+            combat,
+            characters,
+            hazardId: targetCombatant?.id ?? "",
+          });
+          combat = hazardState.combat;
+          characters = hazardState.characters;
+          diceRolls.push(...hazardState.diceRolls);
+        }
+      });
+    }
+
+    if (effect.effectId === "inventoryInteraction") {
+      const requiredTemplateId = getEffectString(effect.variables?.requiredTemplateId);
+      const target = itemInstances.find(
+        (candidate) =>
+          candidate.templateId === requiredTemplateId &&
+          candidate.location.parent === actorCharacterId &&
+          candidate.id !== sourceItemId,
+      );
+
+      if (!target) {
+        return;
+      }
+
+      if (effect.variables?.consumeRequired === true) {
+        itemInstances = consumeItemCharge(itemInstances, target.id);
+      }
+
+      const addTemplateId = getEffectString(effect.variables?.addTemplateId);
+
+      if (addTemplateId) {
+        itemInstances = addItemInstance(
+          itemInstances,
+          actorCharacterId,
+          addTemplateId,
+          Math.max(1, getEffectNumber(effect.variables?.quantity) || 1),
+        );
+      }
+    }
+
+    if (effect.effectId === "applyCondition") {
+      const condition = getEffectString(effect.variables?.condition);
+
+      if (!condition) {
+        return;
+      }
+
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+
+        if (!targetCombatant) {
+          return;
+        }
+
+        combat = {
+          ...combat,
+          combatants: combat.combatants.map((combatant) =>
+            combatant.id === targetCombatant.id ? addCombatantCondition(combatant, condition) : combatant,
+          ),
+          log: [
+            createCombatLog("condition", `${targetCombatant.name} subit l'état ${getCombatConditionTemplate(condition)?.name ?? condition}.`),
+            ...combat.log,
+          ].slice(0, 30),
+        };
+      });
+    }
+
+    if (effect.effectId === "removeCondition") {
+      const condition = getEffectString(effect.variables?.condition);
+
+      if (!condition) {
+        return;
+      }
+
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+
+        if (!targetCombatant) {
+          return;
+        }
+
+        combat = {
+          ...combat,
+          combatants: combat.combatants.map((combatant) =>
+            combatant.id === targetCombatant.id ? removeCombatantConditions(combatant, [condition]) : combatant,
+          ),
+          log: [
+            createCombatLog("condition", `${targetCombatant.name} perd l'état ${getCombatConditionTemplate(condition)?.name ?? condition}.`),
+            ...combat.log,
+          ].slice(0, 30),
+        };
+      });
+    }
+
+    if (effect.effectId === "teleport") {
+      const actorCombatant = getTargetCombatantFromActionTarget(
+        combat,
+        { kind: "self", id: actorCharacterId, label: "Soi-même" },
+        actorCharacterId,
+      );
+      const distance = getEffectNumber(effect.variables?.range) || getEffectNumber(effect.variables?.value);
+      const explicitPosition = target?.kind === "position" ? target.position : undefined;
+
+      combat = explicitPosition
+        ? moveCombatantTo(combat, actorCombatant?.id, explicitPosition)
+        : moveCombatantBy(combat, actorCombatant?.id, distance);
+    }
+  });
+
+  return { characters, itemInstances, combat, diceRolls };
+}
+
+function applyConsumableEffects(
+  state: Pick<GameDataState, "characters" | "itemInstances" | "itemTemplates" | "combat">,
+  characterId: string,
+  item: ItemInstance,
+  template: ItemTemplate,
+  target?: ActionTarget,
+  resolvedTargets?: ActionTarget[],
+): Pick<GameDataState, "characters" | "itemInstances" | "combat"> & { diceRolls: DiceRoll[] } {
+  return applyUsableEffects(
+    state,
+    characterId,
+    target ?? { kind: "self", id: characterId, label: "Soi-même" },
+    [...template.effects, ...item.effects],
+    item.id,
+    resolvedTargets,
+    String(item.overrides.name ?? template.name),
+  );
+}
+
+function createActionTargetFromCombatant(combatant: Combatant, source: ActionTarget["source"] = "selected"): ActionTarget {
+  return {
+    kind: combatant.sourceType === "character" ? "character" : "entity",
+    id: combatant.sourceId,
+    label: combatant.name,
+    source,
+  };
+}
+
+function resolveIntentEffectTargets(
+  state: GameDataState,
+  combat: CombatScene,
+  actor: Combatant | undefined,
+  intent: ChatActionIntent,
+): ActionTarget[] | undefined {
+  const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+
+  if (!targetingV2 || combat.status !== "active" || !actor) {
+    return undefined;
+  }
+
+  const resolved = resolveActionTargets({
+    actor,
+    combat,
+    fallbackCharacterId: state.selectedCharacterId,
+    target: intent.target,
+    targeting: targetingV2,
+  });
+
+  if (resolved.invalidReason) {
+    return [];
+  }
+
+  if (resolved.affectedCombatants.length > 0) {
+    return resolved.affectedCombatants.map((combatant) => createActionTargetFromCombatant(combatant));
+  }
+
+  return undefined;
+}
+
+function consumeItemCharge(itemInstances: ItemInstance[], itemId: string): ItemInstance[] {
+  return itemInstances.flatMap((item) => {
+    if (item.id !== itemId) {
+      return [item];
+    }
+
+    if (item.quantity <= 1) {
+      return [];
+    }
+
+    return [
+      {
+        ...item,
+        quantity: item.quantity - 1,
+      },
+    ];
+  });
+}
+
+function executePlayerActionIntents(
+  state: GameDataState,
+  intents: ChatActionIntent[],
+): Pick<GameDataState, "characters" | "campaign" | "itemInstances" | "abilityInstances"> & {
+  executedIntents: ChatActionIntent[];
+  combat: CombatScene;
+  diceRolls: DiceRoll[];
+} {
+  let characters = state.characters;
+  let itemInstances = state.itemInstances;
+  let abilityInstances = state.abilityInstances;
+  let combat = state.combat;
+  const diceRolls: DiceRoll[] = [];
+  const executedIntents: ChatActionIntent[] = [];
+  const selectedCharacterId = state.selectedCharacterId;
+
+  intents.slice(0, MAX_PLAYER_ACTION_INTENTS).forEach((intent) => {
+    if (!isActionTargetAllowed(intent.targeting, intent.target)) {
+      return;
+    }
+
+    const actor = combat.combatants.find(
+      (combatant) => combatant.sourceType === "character" && combatant.sourceId === selectedCharacterId,
+    );
+    const activeCombatant = combat.combatants[combat.turnIndex];
+    const combatCost = getIntentCombatCost(state, intent);
+    const isActorTurn = Boolean(actor && activeCombatant?.id === actor.id);
+    const canUseCombatTiming = combatCost === "reaction" ? Boolean(actor) : isActorTurn;
+    const shouldSpendCombatAction = combat.status === "active" && actor && canUseCombatTiming;
+
+    if (combat.status === "active" && (!actor || !canUseCombatTiming || !canSpendCombatCost(actor, combatCost))) {
+      return;
+    }
+
+    if (combat.status === "active" && actor && !canCombatActionReachTarget(state, combat, actor, intent)) {
+      return;
+    }
+
+    if (intent.kind === "useItem") {
+      const item = itemInstances.find((candidate) => candidate.id === intent.targetId);
+      const template = item
+        ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
+        : undefined;
+
+      if (
+        !item ||
+        item.quantity <= 0 ||
+        item.location.parent !== selectedCharacterId ||
+        !template ||
+        !isItemUsable(getTemplateTypes(template))
+      ) {
+        return;
+      }
+
+      const resolvedState = applyConsumableEffects(
+        {
+          characters,
+          itemInstances,
+          itemTemplates: state.itemTemplates,
+          combat,
+        },
+        selectedCharacterId,
+        item,
+        template,
+        intent.target,
+        resolveIntentEffectTargets(state, combat, actor, intent),
+      );
+
+      characters = resolvedState.characters;
+      itemInstances = consumeItemCharge(resolvedState.itemInstances, item.id);
+      combat = resolvedState.combat;
+      diceRolls.push(...resolvedState.diceRolls);
+      if (shouldSpendCombatAction && actor) {
+        combat = spendCombatAction(combat, actor.id, combatCost);
+      }
+      executedIntents.push(intent);
+      return;
+    }
+
+    if (intent.kind === "attack") {
+      const weapon = getEquippedWeaponData(
+        itemInstances,
+        state.itemTemplates,
+        selectedCharacterId,
+        intent.targetId,
+      );
+      const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+      const resolvedTargets = resolveActionTargets({
+        actor,
+        combat,
+        fallbackCharacterId: selectedCharacterId,
+        target: intent.target,
+        targeting: targetingV2,
+      });
+      const target = targetingV2
+        ? resolvedTargets.affectedCombatants[0]
+        : getTargetCombatantFromIntent(combat, intent);
+
+      if (!weapon || !actor || !canSpendCombatCost(actor, "action")) {
+        return;
+      }
+
+      if (!target && (intent.target?.kind === "free" || intent.target?.kind === "position")) {
+        const interaction = intent.target.position
+          ? applyCombatMapInteractionEffects({
+              combat,
+              characters,
+              position: intent.target.position,
+            })
+          : null;
+        if (interaction?.applied) {
+          characters = interaction.characters;
+          combat = interaction.combat;
+          diceRolls.push(...interaction.diceRolls);
+          if (shouldSpendCombatAction && actor) {
+            combat = spendCombatAction(combat, actor.id, "action");
+          }
+          if (weapon.modifierItem) {
+            itemInstances = consumeItemCharge(itemInstances, weapon.modifierItem.id);
+          }
+          executedIntents.push(intent);
+          return;
+        }
+
+        combat = {
+          ...spendCombatAction(combat, actor.id, "action"),
+          log: [
+            createCombatLog("action", `${actor.name} tire avec ${weapon.name}, sans cible touchée.`),
+            ...combat.log,
+          ].slice(0, 30),
+        };
+        if (weapon.modifierItem) {
+          itemInstances = consumeItemCharge(itemInstances, weapon.modifierItem.id);
+        }
+        executedIntents.push(intent);
+        return;
+      }
+
+      if (!target) {
+        return;
+      }
+
+      if (
+        resolvedTargets.invalidReason ||
+        !hasLineOfSight(combat, actor.position, target.position) ||
+        getDistance(actor.position, target.position) > weapon.range
+      ) {
+        return;
+      }
+
+      const attackingCharacter = characters.find((character) => character.id === selectedCharacterId);
+      const attackModifier =
+        getCharacterAttackScore(state.characterDerivedScores, attackingCharacter?.id, weapon.attackKind) ??
+        getWeaponAttackModifier(attackingCharacter, itemInstances, state.itemTemplates, weapon.attackKind);
+      const attackRoll = rollDiceFormula(`1d20 ${formatRollModifier(attackModifier)}`, {
+        visibility: "public",
+        reason: `${weapon.name} · attaque`,
+      });
+      const isHit = attackRoll.result > target.defense;
+      let damagedCombat = combat;
+      let damageAmount = 0;
+
+      diceRolls.push(attackRoll);
+
+      if (isHit) {
+        const context = attackingCharacter
+          ? createValueExpressionContext(attackingCharacter, itemInstances, state.itemTemplates)
+          : null;
+        const damageFormula =
+          formatDamageFormula([
+            weapon.rawDamageFormula ?? String(weapon.rawDamage ?? weapon.damage),
+            getDefaultDamageModifier(weapon.attackKind, weapon.template, context),
+          ]) ?? String(weapon.damage);
+
+        if (/\d*d\d+/i.test(damageFormula) && context) {
+          const damageRoll = rollDiceFormula(damageFormula, {
+            visibility: "public",
+            reason: `${weapon.name} · dégâts`,
+            variables: createDiceFormulaVariablesFromContext(context),
+          });
+          damageAmount = Math.max(0, damageRoll.result);
+          diceRolls.push(damageRoll);
+        } else {
+          damageAmount = Math.max(0, weapon.damage);
+        }
+
+        if (target.sourceType === "character") {
+          const finalDamage = applyDamageReductions(
+            characters,
+            damageAmount,
+            weapon.damageType,
+            itemInstances,
+            state.itemTemplates,
+            target.sourceId,
+          );
+          const nextHp = clamp(target.hp - finalDamage, 0, target.maxHp);
+
+          damageAmount = finalDamage;
+          characters = updateCharacter(characters, target.sourceId, (character) => ({
+            ...character,
+            pv: clamp(nextHp, 0, character.maxPv),
+          }));
+          damagedCombat = updateCombatantHp(combat, target.id, () => nextHp);
+        } else {
+          damagedCombat = updateCombatantHp(combat, target.id, (hp) => hp - damageAmount);
+          const hazardState = applyHazardDestructionEffects({
+            combat: damagedCombat,
+            characters,
+            hazardId: target.id,
+          });
+          damagedCombat = hazardState.combat;
+          characters = hazardState.characters;
+          diceRolls.push(...hazardState.diceRolls);
+        }
+      }
+
+      combat = {
+        ...spendCombatAction(damagedCombat, actor.id, "action"),
+        log: [
+          createCombatLog(
+            isHit ? "damage" : "action",
+            isHit
+              ? `${actor.name} touche ${target.name} avec ${weapon.name} (${attackRoll.result} > DEF ${target.defense}) et inflige ${damageAmount} dégâts ${weapon.damageType}.`
+              : `${actor.name} attaque ${target.name} avec ${weapon.name}, mais rate (${attackRoll.result} <= DEF ${target.defense}).`,
+          ),
+          ...combat.log,
+        ].slice(0, 30),
+      };
+      if (weapon.modifierItem) {
+        itemInstances = consumeItemCharge(itemInstances, weapon.modifierItem.id);
+      }
+      executedIntents.push(intent);
+      return;
+    }
+
+    if (intent.kind === "useAbility") {
+      const ability = abilityInstances.find(
+        (candidate) => candidate.id === intent.targetId && candidate.ownerId === selectedCharacterId,
+      );
+      const template = ability
+        ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
+        : undefined;
+
+      if (
+        !ability ||
+        !isGrantedAbilityActive(ability, itemInstances) ||
+        !template ||
+        template.activation.timing === "passive"
+      ) {
+        return;
+      }
+
+      const nextAbility = useAbilityCharge(ability, template);
+
+      if (nextAbility === ability) {
+        return;
+      }
+
+      const resolvedState = applyUsableEffects(
+        {
+          characters,
+          itemInstances,
+          itemTemplates: state.itemTemplates,
+          combat,
+        },
+        selectedCharacterId,
+        intent.target,
+        [...template.effects, ...ability.effects],
+        undefined,
+        resolveIntentEffectTargets(state, combat, actor, intent),
+        String(ability.overrides.name ?? template.name),
+      );
+
+      characters = resolvedState.characters;
+      itemInstances = resolvedState.itemInstances;
+      combat = resolvedState.combat;
+      diceRolls.push(...resolvedState.diceRolls);
+      abilityInstances = updateAbility(abilityInstances, ability.id, () => nextAbility);
+      if (shouldSpendCombatAction && actor) {
+        combat = spendCombatAction(combat, actor.id, combatCost);
+      }
+      executedIntents.push(intent);
+    }
+  });
+
+  return {
+    characters,
+    campaign: { ...state.campaign, characters },
+    itemInstances,
+    abilityInstances,
+    combat,
+    executedIntents,
+    diceRolls,
+  };
+}
+
+function getInventoryOrder(item: ItemInstance, fallback: number): number {
+  const order = Number(item.data.inventoryOrder);
+  return Number.isFinite(order) ? order : fallback;
+}
+
+function moveItemBefore(
+  itemInstances: ItemInstance[],
+  itemId: string,
+  beforeItemId: string,
+): ItemInstance[] {
+  const movedItem = itemInstances.find((item) => item.id === itemId);
+  const beforeItem = itemInstances.find((item) => item.id === beforeItemId);
+
+  if (
+    !movedItem ||
+    !beforeItem ||
+    movedItem.id === beforeItem.id ||
+    movedItem.location.parent !== beforeItem.location.parent ||
+    movedItem.location.type !== beforeItem.location.type
+  ) {
+    return itemInstances;
+  }
+
+  const sectionItems = itemInstances
+    .filter(
+      (item) =>
+        item.location.parent === movedItem.location.parent &&
+        item.location.type === movedItem.location.type,
+    )
+    .sort((a, b) => getInventoryOrder(a, itemInstances.indexOf(a)) - getInventoryOrder(b, itemInstances.indexOf(b)));
+  const withoutMoved = sectionItems.filter((item) => item.id !== itemId);
+  const beforeIndex = withoutMoved.findIndex((item) => item.id === beforeItemId);
+
+  if (beforeIndex < 0) {
+    return itemInstances;
+  }
+
+  const reordered = [
+    ...withoutMoved.slice(0, beforeIndex),
+    movedItem,
+    ...withoutMoved.slice(beforeIndex),
+  ];
+  const orderById = new Map(reordered.map((item, index) => [item.id, index]));
+
+  return itemInstances.map((item) => {
+    const order = orderById.get(item.id);
+
+    if (order === undefined) {
+      return item;
+    }
+
+    return {
+      ...item,
+      data: {
+        ...item.data,
+        inventoryOrder: order,
+      },
+    };
+  });
+}
+
+export const useGameStore = create<GameState>()(
+  persist(
+    (set, get) => ({
+      ...createInitialState(),
+      selectCharacter: (characterId) => set({ selectedCharacterId: characterId }),
+      setCharacterPortrait: (characterId, portrait) => {
+        set((state) => ({
+          characterPortraits: {
+            ...state.characterPortraits,
+            [characterId]: portrait,
+          },
+        }));
+      },
+      dealDamage: (characterId, amount, damageType = "force") => {
+        set((state) => {
+          const characters = applyDamageToCharacters(
+            state.characters,
+            characterId,
+            amount,
+            damageType,
+            state.itemInstances,
+            state.itemTemplates,
+          );
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            ...withCharacterDerivedScores({ ...state, characters }),
+          };
+        });
+      },
+      healCharacter: (characterId, amount) => {
+        set((state) => {
+          const characters = updateCharacter(state.characters, characterId, (character) => ({
+            ...character,
+            pv: clamp(character.pv + amount, 0, character.maxPv),
+          }));
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            ...withCharacterDerivedScores({ ...state, characters }),
+          };
+        });
+      },
+      setCharacterPv: (characterId, pv) => {
+        set((state) => {
+          const characters = updateCharacter(state.characters, characterId, (character) => ({
+            ...character,
+            pv: clamp(pv, 0, character.maxPv),
+          }));
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            ...withCharacterDerivedScores({ ...state, characters }),
+          };
+        });
+      },
+      changeCharacterStat: (characterId, stat, value, mode) => {
+        set((state) => {
+          const characters = updateCharacter(state.characters, characterId, (character) => ({
+            ...character,
+            stats: {
+              ...character.stats,
+              [stat]: mode === "add" ? character.stats[stat] + value : value,
+            },
+          }));
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            ...withCharacterDerivedScores({ ...state, characters }),
+          };
+        });
+      },
+      equipItem: (itemId) => {
+        set((state) => {
+          const item = state.itemInstances.find((candidate) => candidate.id === itemId);
+          const template = item
+            ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
+            : undefined;
+
+          if (!item || !item.location.parent || !template || !isItemEquipable(getTemplateTypes(template))) {
+            return state;
+          }
+
+          const equippedItem = {
+            ...item,
+            location: {
+              type: "equipped" as const,
+              parent: item.location.parent,
+            },
+          };
+
+          const itemInstances = updateItem(state.itemInstances, itemId, (currentItem) => ({
+            ...currentItem,
+            location: {
+              type: "equipped",
+              parent: currentItem.location.parent,
+            },
+          }));
+
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...state, itemInstances }),
+            abilityInstances: addGrantedAbilitiesForItem(
+              state.abilityInstances,
+              state.abilityTemplates,
+              state.itemTemplates,
+              equippedItem,
+            ),
+          };
+        });
+      },
+      unequipItem: (itemId) => {
+        set((state) => {
+          const item = state.itemInstances.find((candidate) => candidate.id === itemId);
+          const effects = item ? getCombinedItemEffects(item, state.itemTemplates) : [];
+
+          if (!item || !item.location.parent || preventsUnequip(effects)) {
+            return state;
+          }
+
+          const itemInstances = updateItem(state.itemInstances, itemId, (currentItem) => ({
+              ...currentItem,
+              location: {
+                type: "inventory",
+                parent: currentItem.location.parent,
+              },
+          }));
+
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...state, itemInstances }),
+            abilityInstances: removeGrantedAbilitiesForItem(state.abilityInstances, itemId),
+          };
+        });
+      },
+      moveItemToBag: (itemId) => {
+        get().unequipItem(itemId);
+      },
+      giveItem: (characterId, templateId, quantity = 1) => {
+        const templateExists = get().itemTemplates.some((template) => template.id === templateId);
+
+        if (!templateExists) {
+          return null;
+        }
+
+        const item = {
+          ...createNewItemInstance(characterId, templateId, quantity),
+          data: {
+            inventoryOrder: get().itemInstances.length,
+          },
+        };
+
+        set((state) => {
+          const itemInstances = [...state.itemInstances, item];
+
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...state, itemInstances }),
+          };
+        });
+
+        return item;
+      },
+      removeItem: (itemId) => {
+        set((state) => {
+          const itemInstances = state.itemInstances.filter((item) => item.id !== itemId);
+
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...state, itemInstances }),
+            abilityInstances: removeGrantedAbilitiesForItem(state.abilityInstances, itemId),
+          };
+        });
+      },
+      useItem: (itemId) => {
+        set((state) => {
+          const item = state.itemInstances.find((candidate) => candidate.id === itemId);
+          const template = item
+            ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
+            : undefined;
+          const characterId = item?.location.parent;
+
+          if (!item || !template || !isItemUsable(getTemplateTypes(template)) || !characterId) {
+            return state;
+          }
+
+          const resolvedState = applyConsumableEffects(
+            {
+              characters: state.characters,
+              itemInstances: state.itemInstances,
+              itemTemplates: state.itemTemplates,
+              combat: state.combat,
+            },
+            characterId,
+            item,
+            template,
+          );
+          const itemInstances = consumeItemCharge(resolvedState.itemInstances, itemId);
+
+          return {
+            characters: resolvedState.characters,
+            campaign: { ...state.campaign, characters: resolvedState.characters },
+            itemInstances,
+            combat: resolvedState.combat,
+            diceRolls: [...resolvedState.diceRolls, ...state.diceRolls].slice(0, 8),
+          };
+        });
+      },
+      useAbility: (abilityId) => {
+        const state = get();
+        const ability = state.abilityInstances.find((candidate) => candidate.id === abilityId);
+
+        if (!ability || !isGrantedAbilityActive(ability, state.itemInstances)) {
+          return false;
+        }
+
+        const template = getAbilityTemplate(state.abilityTemplates, ability.templateId);
+        const nextAbility = useAbilityCharge(ability, template);
+
+        if (nextAbility === ability) {
+          return false;
+        }
+
+        const resolvedState = applyUsableEffects(
+          {
+            characters: state.characters,
+            itemInstances: state.itemInstances,
+            itemTemplates: state.itemTemplates,
+            combat: state.combat,
+          },
+          ability.ownerId,
+          { kind: "self", id: ability.ownerId, label: "Soi-même" },
+          [...(template?.effects ?? []), ...ability.effects],
+        );
+
+        set((currentState) => ({
+          characters: resolvedState.characters,
+          campaign: { ...currentState.campaign, characters: resolvedState.characters },
+          itemInstances: resolvedState.itemInstances,
+          abilityInstances: updateAbility(currentState.abilityInstances, abilityId, () => nextAbility),
+          combat: resolvedState.combat,
+          diceRolls: [...resolvedState.diceRolls, ...currentState.diceRolls].slice(0, 8),
+        }));
+
+        return true;
+      },
+      rechargeAbility: (abilityId) => {
+        set((state) => ({
+          abilityInstances: updateAbility(state.abilityInstances, abilityId, (ability) => {
+            const template = getAbilityTemplate(state.abilityTemplates, ability.templateId);
+
+            return setAbilityChargeCount(ability, template, template?.charges?.max ?? 0);
+          }),
+        }));
+      },
+      setAbilityCharges: (abilityId, charges) => {
+        set((state) => ({
+          abilityInstances: updateAbility(state.abilityInstances, abilityId, (ability) =>
+            setAbilityChargeCount(
+              ability,
+              getAbilityTemplate(state.abilityTemplates, ability.templateId),
+              charges,
+            ),
+          ),
+        }));
+      },
+      rest: (characterId, type) => {
+        set((state) => {
+          const trigger = type === "short" ? "shortRest" : "longRest";
+          const abilityInstances = rechargeCharacterAbilities(
+            state.abilityInstances,
+            state.abilityTemplates,
+            characterId,
+            trigger,
+          );
+
+          const characters =
+            type === "long"
+              ? updateCharacter(state.characters, characterId, (character) => ({
+                  ...character,
+                  pv: character.maxPv,
+                }))
+              : state.characters;
+
+          return {
+            abilityInstances,
+            characters,
+            campaign: { ...state.campaign, characters },
+          };
+        });
+      },
+      startEncounter: (characterId) => {
+        set((state) => ({
+          abilityInstances: rechargeCharacterAbilities(
+            state.abilityInstances,
+            state.abilityTemplates,
+            characterId,
+            "encounter",
+          ),
+        }));
+      },
+      startCombat: () => {
+        set((state) => {
+          const existingCombatants = state.combat.combatants;
+          const characterCombatants = state.characters
+            .filter(
+              (character) =>
+                !existingCombatants.some(
+                  (combatant) =>
+                    combatant.sourceType === "character" && combatant.sourceId === character.id,
+                ),
+            )
+            .map((character, index) => createCharacterCombatant(character, index));
+          const npcCombatants = state.campaign.world.entities.npcs
+            .slice(0, 3)
+            .filter(
+              (entity) =>
+                !existingCombatants.some(
+                  (combatant) => combatant.sourceType === "entity" && combatant.sourceId === entity.id,
+                ),
+            )
+            .map((entity, index) => createEntityCombatant(entity, "enemies", index));
+          const combatants = [...existingCombatants, ...characterCombatants, ...npcCombatants]
+            .map(resetCombatantTurnResources)
+            .sort((a, b) => b.initiative - a.initiative);
+
+          return {
+            combat: {
+              ...state.combat,
+              status: "active",
+              round: 1,
+              turnIndex: 0,
+              combatants,
+              log: [
+                createCombatLog("system", "Le combat commence."),
+                ...state.combat.log,
+              ].slice(0, 30),
+            },
+          };
+        });
+      },
+      endCombat: () => {
+        set((state) => ({
+          combat: {
+            ...state.combat,
+            status: "ended",
+            log: [createCombatLog("system", "Le combat se termine."), ...state.combat.log].slice(0, 30),
+          },
+        }));
+      },
+      addCharacterToCombat: (characterId) => {
+        set((state) => {
+          const character = state.characters.find((candidate) => candidate.id === characterId);
+
+          if (
+            !character ||
+            state.combat.combatants.some(
+              (combatant) => combatant.sourceType === "character" && combatant.sourceId === character.id,
+            )
+          ) {
+            return state;
+          }
+
+          return {
+            combat: {
+              ...state.combat,
+              combatants: [
+                ...state.combat.combatants,
+                createCharacterCombatant(character, state.combat.combatants.length),
+              ],
+            },
+          };
+        });
+      },
+      addEntityToCombat: (entityId, side = "enemies") => {
+        set((state) => {
+          const allEntities = [
+            ...state.campaign.world.entities.npcs,
+            ...state.campaign.world.entities.items,
+            ...state.campaign.world.entities.locations,
+          ];
+          const entity = allEntities.find((candidate) => candidate.id === entityId);
+
+          if (
+            !entity ||
+            state.combat.combatants.some(
+              (combatant) => combatant.sourceType === "entity" && combatant.sourceId === entity.id,
+            )
+          ) {
+            return state;
+          }
+
+          return {
+            combat: {
+              ...state.combat,
+              combatants: [
+                ...state.combat.combatants,
+                createEntityCombatant(entity, side, state.combat.combatants.length),
+              ],
+            },
+          };
+        });
+      },
+      revealMapDetail: (detailId) => {
+        set((state) => ({
+          combat: {
+            ...state.combat,
+            map: {
+              ...state.combat.map,
+              details: (state.combat.map.details ?? []).map((detail) =>
+                detail.id === detailId ? { ...detail, visible: true } : detail,
+              ),
+            },
+            log: [
+              createCombatLog(
+                "action",
+                `${state.combat.map.details?.find((detail) => detail.id === detailId)?.name ?? detailId} est révélé sur la carte.`,
+              ),
+              ...state.combat.log,
+            ].slice(0, 30),
+          },
+        }));
+      },
+      hideMapDetail: (detailId) => {
+        set((state) => ({
+          combat: {
+            ...state.combat,
+            map: {
+              ...state.combat.map,
+              details: (state.combat.map.details ?? []).map((detail) =>
+                detail.id === detailId ? { ...detail, visible: false } : detail,
+              ),
+            },
+          },
+        }));
+      },
+      moveCombatant: (combatantId, position) => {
+        set((state) => {
+          const combatant = state.combat.combatants.find((candidate) => candidate.id === combatantId);
+          const activeCombatant = state.combat.combatants[state.combat.turnIndex];
+
+          if (!combatant || state.combat.status === "active" && activeCombatant?.id !== combatant.id) {
+            return state;
+          }
+
+          const requestedPosition = clampCombatPosition(position, state.combat);
+          const requestedDistance = getDistance(combatant.position, requestedPosition);
+          const maxDistance =
+            state.combat.status === "active" ? combatant.resources.movement : requestedDistance;
+          const nextPosition =
+            state.combat.status === "active"
+              ? clampPositionToMovementBudget(state.combat, combatant.position, requestedPosition, maxDistance)
+              : clampPositionToFirstStopMovement(state.combat, combatant.position, requestedPosition);
+
+          if (!hasMovementPath(state.combat, combatant.position, nextPosition)) {
+            return state;
+          }
+
+          const beforeCombat = state.combat;
+          const distance = getDistance(combatant.position, nextPosition);
+          const movementCost = calculateMovementCost(state.combat, combatant.position, nextPosition);
+          const movement = Math.max(0, combatant.resources.movement - movementCost);
+          let characters = state.characters;
+          const opportunityAttackers =
+            combatant.resources.disengaged || distance <= 0
+              ? []
+              : state.combat.combatants.filter((candidate) => {
+                  if (
+                    candidate.id === combatant.id ||
+                    candidate.hp <= 0 ||
+                    candidate.resources.reaction <= 0 ||
+                    !areHostileCombatants(candidate, combatant)
+                  ) {
+                    return false;
+                  }
+
+                  const reach = Math.max(1.5, candidate.reach);
+
+                  return (
+                    getDistance(candidate.position, combatant.position) <= reach &&
+                    getDistance(candidate.position, nextPosition) > reach
+                  );
+                });
+          const opportunityDamage = opportunityAttackers.reduce(
+            (total, attacker) => total + Math.max(0, attacker.attackDamage),
+            0,
+          );
+          const nextTargetHp = clamp(combatant.hp - opportunityDamage, 0, combatant.maxHp);
+
+          if (opportunityDamage > 0 && combatant.sourceType === "character") {
+            characters = updateCharacter(characters, combatant.sourceId, (character) => ({
+              ...character,
+              pv: clamp(nextTargetHp, 0, character.maxPv),
+            }));
+          }
+
+          let combat: CombatScene = {
+            ...state.combat,
+            combatants: state.combat.combatants.map((candidate) => {
+              const opportunityAttacker = opportunityAttackers.find((attacker) => attacker.id === candidate.id);
+
+              if (candidate.id === combatantId) {
+                return normalizeCombatantAfterHpChange(
+                  {
+                    ...candidate,
+                    position: nextPosition,
+                    resources: {
+                      ...candidate.resources,
+                      movement,
+                    },
+                  },
+                  nextTargetHp,
+                );
+              }
+
+              if (opportunityAttacker) {
+                return {
+                  ...candidate,
+                  resources: {
+                    ...candidate.resources,
+                    reaction: Math.max(0, candidate.resources.reaction - 1),
+                  },
+                };
+              }
+
+              return candidate;
+            }),
+            log: [
+              ...opportunityAttackers.map((attacker) =>
+                createCombatLog(
+                  "damage",
+                  `${combatant.name} quitte l'allonge de ${attacker.name} : attaque d'opportunité, ${attacker.attackDamage} dégâts.`,
+                ),
+              ),
+              createCombatLog(
+                "move",
+                `${combatant.name} se déplace de ${distance.toFixed(1)} m${
+                  Math.abs(movementCost - distance) > 0.05 ? ` (${movementCost.toFixed(1)} m consommés)` : ""
+                }.`,
+              ),
+              ...state.combat.log,
+            ].slice(0, 30),
+          };
+          const terrainState = applyCombatMapElementEffects({
+            combat,
+            characters,
+            combatantId,
+            trigger: "enter",
+            from: combatant.position,
+            to: nextPosition,
+          });
+
+          combat = terrainState.combat;
+          characters = terrainState.characters;
+          const reactionState = applyVisibilityReactionTriggers({
+            beforeCombat,
+            afterCombat: combat,
+            abilityInstances: state.abilityInstances,
+            abilityTemplates: state.abilityTemplates,
+            itemInstances: state.itemInstances,
+            itemTemplates: state.itemTemplates,
+            movedCombatantId: combatantId,
+          });
+
+          combat = reactionState.combat;
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            combat,
+            messages: [
+              ...state.messages,
+              {
+                id: `message-gm-combat-${crypto.randomUUID()}`,
+                sender: "gm",
+                content: `${combatant.name} se déplace de ${distance.toFixed(1)} m${
+                  Math.abs(movementCost - distance) > 0.05 ? ` (${movementCost.toFixed(1)} m consommés)` : ""
+                }.`,
+                timestamp: Date.now(),
+              },
+              ...reactionState.messages,
+            ],
+            pendingActionIntents: [
+              ...reactionState.pendingActionIntents,
+              ...state.pendingActionIntents,
+            ].slice(0, MAX_PLAYER_ACTION_INTENTS),
+            diceRolls: [...terrainState.diceRolls, ...state.diceRolls].slice(0, 8),
+          };
+        });
+      },
+      disengageCombatant: (combatantId) => {
+        set((state) => {
+          const combatant = state.combat.combatants.find((candidate) => candidate.id === combatantId);
+          const activeCombatant = state.combat.combatants[state.combat.turnIndex];
+
+          if (
+            !combatant ||
+            state.combat.status !== "active" ||
+            activeCombatant?.id !== combatant.id ||
+            combatant.resources.action <= 0
+          ) {
+            return state;
+          }
+
+          return {
+            combat: {
+              ...state.combat,
+              combatants: state.combat.combatants.map((candidate) =>
+                candidate.id === combatantId
+                  ? {
+                      ...candidate,
+                      resources: {
+                        ...candidate.resources,
+                        action: Math.max(0, candidate.resources.action - 1),
+                        disengaged: true,
+                      },
+                    }
+                  : candidate,
+              ),
+              log: [
+                createCombatLog("action", `${combatant.name} se désengage et surveille ses retraits.`),
+                ...state.combat.log,
+              ].slice(0, 30),
+            },
+          };
+        });
+      },
+      nextCombatTurn: () => {
+        set((state) => {
+          if (state.combat.combatants.length === 0) {
+            return state;
+          }
+
+          let combat = state.combat;
+          let characters = state.characters;
+          const diceRolls: DiceRoll[] = [];
+          const combatMessages: Message[] = [];
+          const reactionIntents: ChatActionIntent[] = [];
+          let guard = 0;
+
+          do {
+            const nextIndex = (combat.turnIndex + 1) % combat.combatants.length;
+            const nextRound = nextIndex === 0 ? combat.round + 1 : combat.round;
+            const activeCombatant = combat.combatants[nextIndex];
+
+            combat = {
+              ...combat,
+              round: nextRound,
+              turnIndex: nextIndex,
+              combatants: combat.combatants.map((combatant, index) =>
+                index === nextIndex ? resetCombatantTurnResources(combatant) : combatant,
+              ),
+              log: [
+                createCombatLog(
+                  "turn",
+                  `Tour de ${activeCombatant?.name ?? "combattant inconnu"}${
+                    nextIndex === 0 ? `, tour ${nextRound}` : ""
+                  }.`,
+                ),
+                ...combat.log,
+              ].slice(0, 30),
+            };
+            combatMessages.push({
+              id: `message-gm-turn-${crypto.randomUUID()}`,
+              sender: "gm",
+              content: `Tour de ${activeCombatant?.name ?? "combattant inconnu"}${nextIndex === 0 ? `, tour ${nextRound}` : ""}.`,
+              timestamp: Date.now(),
+            });
+
+            if (activeCombatant) {
+              const terrainState = applyCombatMapElementEffects({
+                combat,
+                characters,
+                combatantId: activeCombatant.id,
+                trigger: "startTurn",
+              });
+              combat = terrainState.combat;
+              characters = terrainState.characters;
+              diceRolls.push(...terrainState.diceRolls);
+            }
+
+            if (activeCombatant?.side === "enemies") {
+              const beforeEnemyTurnCombat = combat;
+              combat = applyEnemyTurn(combat, activeCombatant.id);
+              const reactionState = applyVisibilityReactionTriggers({
+                beforeCombat: beforeEnemyTurnCombat,
+                afterCombat: combat,
+                abilityInstances: state.abilityInstances,
+                abilityTemplates: state.abilityTemplates,
+                itemInstances: state.itemInstances,
+                itemTemplates: state.itemTemplates,
+                movedCombatantId: activeCombatant.id,
+              });
+              combat = reactionState.combat;
+              combatMessages.push(...reactionState.messages);
+              reactionIntents.push(...reactionState.pendingActionIntents);
+            }
+
+            guard += 1;
+          } while (
+            guard < combat.combatants.length &&
+            (!canCombatantTakeTurn(combat.combatants[combat.turnIndex]) ||
+              combat.combatants[combat.turnIndex]?.side === "enemies")
+          );
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            combat,
+            messages: [...state.messages, ...combatMessages],
+            pendingActionIntents: [
+              ...reactionIntents,
+              ...state.pendingActionIntents,
+            ].slice(0, MAX_PLAYER_ACTION_INTENTS),
+            diceRolls: [...diceRolls, ...state.diceRolls].slice(0, 8),
+          };
+        });
+      },
+      attackCombatant: (attackerId, targetId, weaponName, damage) => {
+        set((state) => {
+          const attacker = state.combat.combatants.find((combatant) => combatant.id === attackerId);
+          const target = state.combat.combatants.find((combatant) => combatant.id === targetId);
+
+          if (!attacker || !target || attacker.resources.action <= 0) {
+            return state;
+          }
+
+          const nextHp = Math.max(0, target.hp - Math.max(0, damage));
+          const combatants = state.combat.combatants.map((combatant) =>
+            combatant.id === target.id
+              ? {
+                  ...combatant,
+                  hp: nextHp,
+                }
+              : combatant,
+          );
+          let characters = state.characters;
+
+          if (target.sourceType === "character") {
+            characters = updateCharacter(characters, target.sourceId, (character) => ({
+              ...character,
+              pv: clamp(nextHp, 0, character.maxPv),
+            }));
+          }
+
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+            combat: {
+              ...spendCombatAction({ ...state.combat, combatants }, attacker.id, "action"),
+              log: [
+                createCombatLog("damage", `${attacker.name} attaque ${target.name} avec ${weaponName} et inflige ${damage} dégâts.`),
+                ...state.combat.log,
+              ].slice(0, 30),
+            },
+          };
+        });
+      },
+      addAttackIntent: (weaponId, label, target) => {
+        const state = get();
+
+        if (state.pendingActionIntents.length >= MAX_PLAYER_ACTION_INTENTS) {
+          return false;
+        }
+
+        const weapon = getEquippedWeaponData(
+          state.itemInstances,
+          state.itemTemplates,
+          state.selectedCharacterId,
+          weaponId,
+        );
+
+        if (!weapon) {
+          return false;
+        }
+
+        const targeting: ActionTargetingRule = toLegacyTargetingRule(weapon.targetingV2) ?? {
+          allowed: ["entity", "character", "position", "free"],
+          required: true,
+          defaultPriority: ["nearestEnemy"],
+          range: weapon.range,
+          lineOfSight: true,
+        };
+
+        if (!isActionTargetAllowed(targeting, target)) {
+          return false;
+        }
+
+        set((currentState) => ({
+          pendingActionIntents: [
+            ...currentState.pendingActionIntents,
+            createActionIntent("attack", weaponId, label, targeting, target),
+          ],
+        }));
+
+        return true;
+      },
+      addActionIntent: (kind, targetId, label, requestedTarget) => {
+        const state = get();
+
+        if (state.pendingActionIntents.length >= MAX_PLAYER_ACTION_INTENTS) {
+          return false;
+        }
+
+        if (kind === "useItem") {
+          const item = state.itemInstances.find((candidate) => candidate.id === targetId);
+          const template = item
+            ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
+            : undefined;
+
+          if (
+            !item ||
+            item.quantity <= 0 ||
+            item.location.parent !== state.selectedCharacterId ||
+            !template ||
+            !isItemUsable(getTemplateTypes(template))
+          ) {
+            return false;
+          }
+        }
+
+        if (kind === "useAbility") {
+          const ability = state.abilityInstances.find(
+            (candidate) => candidate.id === targetId && candidate.ownerId === state.selectedCharacterId,
+          );
+          const template = ability
+            ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
+            : undefined;
+          const nextAbility = ability ? useAbilityCharge(ability, template) : null;
+
+          if (
+            !ability ||
+            !isGrantedAbilityActive(ability, state.itemInstances) ||
+            template?.activation.timing === "passive" ||
+            !nextAbility ||
+            nextAbility === ability
+          ) {
+            return false;
+          }
+        }
+
+        const targeting = getActionTargetingRule(state, kind, targetId);
+        const intentDraft = { kind, targetId, targeting };
+        const target = requestedTarget ?? createDefaultActionTarget(state, targeting, intentDraft);
+
+        if (!isActionTargetAllowed(targeting, target)) {
+          return false;
+        }
+
+        set((currentState) => ({
+          pendingActionIntents: [
+            ...currentState.pendingActionIntents,
+            createActionIntent(kind, targetId, label, targeting, target),
+          ],
+        }));
+
+        return true;
+      },
+      updateActionIntentTarget: (intentId, target) => {
+        set((state) => ({
+          pendingActionIntents: state.pendingActionIntents.map((intent) =>
+            intent.id === intentId && isActionTargetAllowed(intent.targeting, target)
+              ? {
+                  ...intent,
+                  target: {
+                    ...target,
+                    source: target.source ?? "selected",
+                  },
+                }
+              : intent,
+          ),
+        }));
+      },
+      removeActionIntent: (intentId) => {
+        set((state) => ({
+          pendingActionIntents: state.pendingActionIntents.filter((intent) => intent.id !== intentId),
+        }));
+      },
+      clearActionIntents: () => set({ pendingActionIntents: [] }),
+      moveItemBefore: (itemId, beforeItemId) => {
+        set((state) => ({
+          itemInstances: moveItemBefore(state.itemInstances, itemId, beforeItemId),
+        }));
+      },
+      setShowItemTags: (showItemTags) => {
+        set((state) => ({
+          uiSettings: {
+            ...state.uiSettings,
+            showItemTags,
+          },
+        }));
+      },
+      clearCharacterPortraits: () => set({ characterPortraits: {} }),
+      resetGameState: () => set(createInitialState()),
+      addGmMessage: (content) => {
+        const trimmedContent = content.trim();
+
+        if (!trimmedContent) {
+          return;
+        }
+
+        set((state) => ({
+          messages: [...state.messages, createMessage("gm", trimmedContent)],
+        }));
+      },
+      sendPlayerMessage: (content) => {
+        const state = get();
+        const trimmedContent = content.trim();
+        const resolvedActions = executePlayerActionIntents(state, state.pendingActionIntents);
+
+        if (!trimmedContent && resolvedActions.executedIntents.length === 0) {
+          return;
+        }
+
+        const playerMessage = createMessage("player", trimmedContent, resolvedActions.executedIntents);
+        const selectedCharacter = state.characters.find(
+          (character) => character.id === state.selectedCharacterId,
+        );
+        const gmMessage = createMessage(
+          "gm",
+          createMockGmResponse(playerMessage, state.campaign, selectedCharacter),
+        );
+        const combatSummaryMessage = resolvedActions.executedIntents.length > 0
+          ? createMessage(
+              "gm",
+              `Résumé combat : ${resolvedActions.executedIntents
+                .map((intent) => `${intent.label}${intent.target ? ` → ${intent.target.label}` : ""}`)
+                .join(" ; ")}.`,
+            )
+          : null;
+
+        set({
+          characters: resolvedActions.characters,
+          campaign: resolvedActions.campaign,
+          itemInstances: resolvedActions.itemInstances,
+          abilityInstances: resolvedActions.abilityInstances,
+          combat: resolvedActions.combat,
+          messages: [
+            ...state.messages,
+            playerMessage,
+            ...(combatSummaryMessage ? [combatSummaryMessage] : []),
+            gmMessage,
+          ],
+          pendingActionIntents: [],
+          diceRolls: [...resolvedActions.diceRolls, ...state.diceRolls].slice(0, 8),
+        });
+      },
+      roll: (sides) => {
+        const selectedCharacter = get().characters.find((character) => character.id === get().selectedCharacterId);
+        const rollResult = rollDiceFormula(`1d${sides}`, {
+          visibility: "public",
+          reason: `Jet de D${sides}`,
+          variables: createDiceFormulaVariables(selectedCharacter),
+        });
+
+        set((state) => ({
+          diceRolls: [rollResult, ...state.diceRolls].slice(0, 8),
+        }));
+
+        return rollResult;
+      },
+      rollFormula: (formula, visibility = "public", reason) => {
+        const selectedCharacter = get().characters.find((character) => character.id === get().selectedCharacterId);
+        const rollResult = rollDiceFormula(formula, {
+          visibility,
+          reason,
+          variables: createDiceFormulaVariables(selectedCharacter),
+        });
+
+        set((state) => ({
+          diceRolls: [rollResult, ...state.diceRolls].slice(0, 8),
+        }));
+
+        return rollResult;
+      },
+      updateWorldFact: (index, value) => {
+        set((state) => {
+          const facts = [...state.campaign.world.facts];
+          facts[index] = value;
+
+          return {
+            campaign: {
+              ...state.campaign,
+              world: {
+                ...state.campaign.world,
+                facts,
+              },
+            },
+          };
+        });
+      },
+      addWorldFact: (value) => {
+        const trimmedValue = value.trim();
+
+        if (!trimmedValue) {
+          return;
+        }
+
+        set((state) => ({
+          campaign: {
+            ...state.campaign,
+            world: {
+              ...state.campaign.world,
+              facts: [...state.campaign.world.facts, trimmedValue],
+            },
+          },
+        }));
+      },
+      removeWorldFact: (index) => {
+        set((state) => ({
+          campaign: {
+            ...state.campaign,
+            world: {
+              ...state.campaign.world,
+              facts: state.campaign.world.facts.filter((_, factIndex) => factIndex !== index),
+            },
+          },
+        }));
+      },
+      updateEntity: (entity) => {
+        set((state) => {
+          const entityKey =
+            entity.type === "npc" ? "npcs" : entity.type === "location" ? "locations" : "items";
+          const currentEntities = state.campaign.world.entities[entityKey];
+
+          return {
+            campaign: {
+              ...state.campaign,
+              world: {
+                ...state.campaign.world,
+                entities: {
+                  ...state.campaign.world.entities,
+                  [entityKey]: currentEntities.map((item) =>
+                    item.id === entity.id ? entity : item,
+                  ),
+                },
+              },
+            },
+          };
+        });
+      },
+    }),
+    {
+      name: GAME_STORAGE_KEY,
+      version: GAME_STORAGE_VERSION,
+      migrate: (persistedState) => normalizePersistedState(persistedState),
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...normalizePersistedState(persistedState),
+      }),
+      partialize: (state) => ({
+        storageVersion: state.storageVersion,
+        campaign: state.campaign,
+        characters: state.characters,
+        selectedCharacterId: state.selectedCharacterId,
+        messages: state.messages,
+        pendingActionIntents: state.pendingActionIntents,
+        diceRolls: state.diceRolls,
+        characterPortraits: state.characterPortraits,
+        uiSettings: state.uiSettings,
+        itemTemplates: state.itemTemplates,
+        itemInstances: state.itemInstances,
+        abilityTemplates: state.abilityTemplates,
+        abilityInstances: state.abilityInstances,
+        combat: state.combat,
+      }),
+    },
+  ),
+);

@@ -1,0 +1,21 @@
+{
+  "id": "eff_wither_when_low",
+  "triggers": ["onTick"],
+  "conditions": {
+    "attribute": "hp",
+    "operator": "<=",
+    "value": 50,
+    "unit": "percent"
+  },
+  "actions": [
+    {
+      "type": "modifyData",
+      "target": "self",
+      "attribute": "withered",
+      "op": "set",
+      "value": true
+    }
+  ],
+  "tags": ["condition-percent"],
+  "modules": {}
+}

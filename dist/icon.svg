@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Le Conteur">
+  <rect width="512" height="512" rx="96" fill="#15121A"/>
+  <path d="M112 96h288v320H112z" fill="#221E29" stroke="#9C7A2E" stroke-width="18"/>
+  <path d="M152 136h208v240H152z" fill="#15121A" stroke="#5A2233" stroke-width="10"/>
+  <path d="M184 184h144M184 232h144M184 280h104" stroke="#E4D8BE" stroke-width="18" stroke-linecap="round"/>
+  <path d="M112 96l64 64M400 96l-64 64M112 416l64-64M400 416l-64-64" stroke="#9C7A2E" stroke-width="14" stroke-linecap="round"/>
+  <text x="256" y="355" text-anchor="middle" font-family="Georgia,serif" font-size="88" font-weight="700" fill="#9C7A2E">L</text>
+</svg>

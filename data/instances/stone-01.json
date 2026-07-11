@@ -1,0 +1,13 @@
+{
+  "id": "stone_01",
+  "templateId": "tpl_simple_stone",
+  "quantity": 1,
+  "overrides": {},
+  "current": {},
+  "data": {},
+  "effects": [],
+  "location": {
+    "type": "world",
+    "parent": "ruins_01"
+  }
+}

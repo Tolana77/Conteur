@@ -1,0 +1,18 @@
+{
+  "id": "eff_polished_edge",
+  "triggers": ["onTick"],
+  "conditions": {
+    "all": []
+  },
+  "actions": [
+    {
+      "type": "modifyData",
+      "target": "self",
+      "attribute": "ticks",
+      "op": "add",
+      "value": 1
+    }
+  ],
+  "tags": ["inconditionnel"],
+  "modules": {}
+}

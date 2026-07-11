@@ -1,0 +1,11 @@
+{
+  "id": "tpl_simple_stone",
+  "type": "material",
+  "name": "Pierre gravée",
+  "description": "Un petit fragment minéral marqué d'un signe ancien.",
+  "base": {
+    "weight": 0.2
+  },
+  "effects": [],
+  "modules": {}
+}

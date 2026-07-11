@@ -1,0 +1,15 @@
+{
+  "id": "herb_01",
+  "templateId": "tpl_bitter_herb",
+  "quantity": 3,
+  "overrides": {},
+  "current": {
+    "hp": 2
+  },
+  "data": {},
+  "effects": [],
+  "location": {
+    "type": "container",
+    "parent": "box_01"
+  }
+}

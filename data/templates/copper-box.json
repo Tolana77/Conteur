@@ -1,0 +1,15 @@
+{
+  "id": "tpl_copper_box",
+  "type": "container",
+  "name": "Coffret de cuivre",
+  "description": "Un coffret angulaire fermé par une charnière sombre.",
+  "base": {
+    "weight": 2.5
+  },
+  "effects": [],
+  "modules": {
+    "container": {
+      "capacityWeight": 20
+    }
+  }
+}

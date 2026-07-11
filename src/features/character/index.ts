@@ -1,0 +1,1 @@
+export { exampleCharacter } from "./exampleCharacter";

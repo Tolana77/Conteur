@@ -1,0 +1,18 @@
+{
+  "id": "tpl_bitter_herb",
+  "type": "plant",
+  "name": "Herbe amère",
+  "description": "Une plante sèche au parfum métallique.",
+  "base": {
+    "weight": 0.1,
+    "hp": 1,
+    "hpMax": 4
+  },
+  "effects": [
+    {
+      "effectId": "eff_wither_when_low",
+      "variables": {}
+    }
+  ],
+  "modules": {}
+}

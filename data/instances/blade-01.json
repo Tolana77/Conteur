@@ -1,0 +1,23 @@
+{
+  "id": "blade_01",
+  "templateId": "tpl_iron_blade",
+  "quantity": 1,
+  "overrides": {
+    "name": "Lame sans bannière",
+    "base.weight": 2.3
+  },
+  "current": {},
+  "data": {},
+  "effects": [
+    {
+      "effectId": "eff_reinforce",
+      "variables": {
+        "source": "instance"
+      }
+    }
+  ],
+  "location": {
+    "type": "world",
+    "parent": "armory_01"
+  }
+}

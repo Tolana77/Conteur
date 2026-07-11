@@ -1,0 +1,18 @@
+{
+  "id": "eff_reinforce",
+  "triggers": ["onTick"],
+  "conditions": {
+    "all": []
+  },
+  "actions": [
+    {
+      "type": "modifyCurrent",
+      "target": "self",
+      "attribute": "hp",
+      "op": "add",
+      "value": 2
+    }
+  ],
+  "tags": ["current"],
+  "modules": {}
+}

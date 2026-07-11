@@ -1,0 +1,528 @@
+import type { ItemTemplate } from "../../app/types";
+import { itemEffects } from "./itemEffects";
+
+export const initialItemTemplates: ItemTemplate[] = [
+  {
+    id: "tpl_shortbow",
+    type: "weapon",
+    types: ["weapon"],
+    tags: ["weapon", "wood", "yew", "ranged", "mundane"],
+    name: "Arc court",
+    description: "Un arc fiable en bois d'if, utile pour garder ses distances.",
+    base: {
+      attack: 2,
+      range: 18,
+      damage: "1d6",
+      damageType: "perforant",
+      weight: 1,
+    },
+    attacks: [
+      {
+        id: "shot",
+        name: "Tir",
+        label: "Tirer",
+        range: 18,
+        damage: "1d6",
+        damageType: "perforant",
+        attackKind: "ranged",
+      },
+    ],
+    effects: [itemEffects.dexterityPlus1],
+    targetingV2: {
+      aim: { allowed: ["entity", "position"], required: true, range: 18, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["nearestEnemy"],
+      suggestedSides: ["enemy"],
+    },
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_rations",
+    type: "consumable",
+    types: ["food", "consumable"],
+    tags: ["food", "consumable", "travel", "dry"],
+    name: "Rations",
+    description: "Vivres de route, secs mais rassurants.",
+    base: {
+      weight: 0.5,
+    },
+    effects: [],
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_healing_potion",
+    type: "consumable",
+    types: ["consumable"],
+    tags: ["consumable", "potion", "alchemy", "healing", "glass"],
+    name: "Potion de soin",
+    description: "Une potion rouge sombre qui referme les plaies récentes.",
+    base: {
+      weight: 0.25,
+    },
+    effects: [itemEffects.heal4],
+    targetingV2: {
+      aim: { allowed: ["self", "entity"], required: true, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["self", "living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["self"],
+      suggestedSides: ["self", "ally"],
+    },
+    targeting: {
+      allowed: ["self", "character"],
+      required: true,
+      defaultPriority: ["self"],
+    },
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_heavy_arrows",
+    type: "consumable",
+    types: ["consumable", "ammunition"],
+    tags: ["consumable", "ammunition", "arrow", "metal", "heavy"],
+    name: "Flèches lourdes",
+    description: "Des flèches épaisses, faites pour frapper fort au prix d'une trajectoire plus courte.",
+    base: {
+      weight: 0.08,
+    },
+    effects: [],
+    attackModifiers: [
+      {
+        id: "heavy-arrow-shot",
+        name: "Flèche lourde",
+        appliesToTags: ["ranged"],
+        appliesToAttackKinds: ["ranged"],
+        rangeModifier: -6,
+        damageModifier: "1d4",
+        damageType: "perforant",
+        consumeOnUse: true,
+      },
+    ],
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_poison_vial",
+    type: "consumable",
+    types: ["consumable"],
+    tags: ["consumable", "poison", "vial", "glass", "alchemy"],
+    name: "Fiole de poison",
+    description: "Un venin noirâtre. Dangereux si on l'utilise sans précaution.",
+    base: {
+      weight: 0.1,
+    },
+    effects: [itemEffects.damagePoison2],
+    targetingV2: {
+      aim: { allowed: ["self", "entity", "position"], required: true, range: 6, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["nearestEnemy"],
+      suggestedSides: ["enemy"],
+    },
+    targeting: {
+      allowed: ["entity", "character", "free"],
+      required: true,
+      defaultPriority: ["nearestEnemy"],
+      range: 18,
+    },
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_shadow_cloak",
+    type: "garment",
+    types: ["accessory"],
+    tags: ["accessory", "garment", "cloth", "shadow", "magic"],
+    name: "Cape d'ombre",
+    description: "Un tissu sombre qui étouffe les mouvements, mais pèse sur la prestance.",
+    base: {
+      weight: 1.2,
+    },
+    effects: [itemEffects.dexterityPlus1, itemEffects.charismaMinus1],
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_eternal_bond_boots",
+    type: "garment",
+    types: ["accessory"],
+    tags: ["accessory", "boots", "leather", "cursed", "magic", "bound"],
+    name: "Bottes du lien éternel",
+    description: "Des bottes de cuir noir qui refusent de quitter les pieds de leur porteur.",
+    base: {
+      weight: 1.1,
+    },
+    effects: [
+      itemEffects.preventUnequip,
+      itemEffects.dexterityPlus1,
+      itemEffects.constitutionMinus1,
+    ],
+    modules: {
+      item: {
+        effectsState: "known",
+      },
+    },
+  },
+  {
+    id: "tpl_nameless_ring",
+    type: "garment",
+    types: ["accessory"],
+    tags: ["accessory", "ring", "silver", "unknown", "magic"],
+    name: "Anneau des serments oubliés",
+    description: "Un anneau d'argent gravé de noms que la mémoire refuse de retenir.",
+    base: {
+      weight: 0.05,
+    },
+    effects: [itemEffects.charismaPlus2],
+    modules: {
+      item: {
+        nameState: "unknown",
+        unknownName: "Anneau inconnu",
+        effectsState: "unknown",
+      },
+    },
+  },
+  {
+    id: "tpl_blank_scroll",
+    type: "consumable",
+    types: ["quest", "consumable"],
+    tags: ["quest", "consumable", "scroll", "paper", "magic", "silence"],
+    name: "Parchemin de silence",
+    description: "Le texte n'apparait que lorsque personne ne le regarde.",
+    base: {
+      weight: 0.1,
+    },
+    effects: [itemEffects.heal1],
+    targetingV2: {
+      aim: { allowed: ["self", "entity", "position"], required: true, range: 9, lineOfSight: true },
+      area: { shape: "circle", radius: 3 },
+      affects: { allowed: ["living"], requiresLiving: true },
+      defaultPriority: ["self"],
+      suggestedSides: ["self", "ally"],
+    },
+    targeting: {
+      allowed: ["self", "character", "entity", "position", "free"],
+      required: true,
+      defaultPriority: ["self"],
+    },
+    modules: {
+      item: {
+        descriptionState: "hidden",
+        effectsState: "hidden",
+      },
+    },
+  },
+  {
+    id: "tpl_cracked_armor",
+    type: "armor",
+    types: ["armor"],
+    tags: ["armor", "metal", "damaged", "cracked", "heavy"],
+    name: "Armure fendue",
+    description: "Une vieille cuirasse lourde, encore solide mais peu confortable.",
+    base: {
+      weight: 8,
+    },
+    effects: [itemEffects.constitutionPlus1, itemEffects.dexterityMinus1],
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_singing_coin",
+    type: "trinket",
+    types: ["quest"],
+    tags: ["quest", "coin", "metal", "ancient", "magic", "key"],
+    name: "Obole chantante",
+    description: "Une monnaie antique qui fredonne près des portes scellées.",
+    base: {
+      weight: 0.01,
+    },
+    effects: [],
+    modules: {
+      item: {
+        nameState: "unknown",
+        unknownName: "Pièce ancienne",
+        descriptionState: "unknown",
+        unknownDescription: "Son usage exact reste à découvrir.",
+      },
+    },
+  },
+  {
+    id: "tpl_giant_mushroom",
+    type: "consumable",
+    types: ["food", "consumable"],
+    tags: ["food", "consumable", "plant", "mushroom", "unstable"],
+    name: "Champignon géant",
+    description: "Une bouchée nourrit, deux bouchées inquiètent.",
+    base: {
+      weight: 0.8,
+    },
+    effects: itemEffects.damageMixed1,
+    targetingV2: {
+      aim: { allowed: ["self", "entity"], required: true, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["self", "living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["self"],
+      suggestedSides: ["self", "ally"],
+    },
+    targeting: {
+      allowed: ["self", "character"],
+      required: true,
+      defaultPriority: ["self"],
+    },
+    modules: {
+      item: {
+        effectsState: "unknown",
+      },
+    },
+  },
+  {
+    id: "tpl_magnet_stone",
+    type: "material",
+    types: ["material"],
+    tags: ["material", "stone", "magnetic", "ore", "craft"],
+    name: "Pierre d'aimant",
+    description: "Un minerai qui tire doucement les clous, les aiguilles et les mauvaises idées.",
+    base: {
+      weight: 2,
+    },
+    effects: [],
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_glass_dagger",
+    type: "weapon",
+    types: ["weapon"],
+    tags: ["weapon", "glass", "fragile", "dagger", "sharp", "light"],
+    name: "Dague de verre",
+    description: "Une lame presque invisible, très vive, très fragile.",
+    base: {
+      attack: 3,
+      range: 1.5,
+      damage: "1d4",
+      damageType: "perforant",
+      weight: 0.4,
+    },
+    attacks: [
+      {
+        id: "stab",
+        name: "Coup de dague",
+        label: "Frapper",
+        range: 1.5,
+        damage: "1d4",
+        damageType: "perforant",
+        attackKind: "melee",
+      },
+      {
+        id: "throw",
+        name: "Lancer la dague",
+        label: "Lancer",
+        range: 6,
+        damage: "1d4",
+        damageType: "perforant",
+        attackKind: "ranged",
+      },
+    ],
+    effects: [itemEffects.dexterityPlus2, itemEffects.constitutionMinus1],
+    targetingV2: {
+      aim: { allowed: ["entity", "position"], required: true, range: 1.5, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["nearestEnemy"],
+      suggestedSides: ["enemy"],
+    },
+    modules: {
+      item: {
+        effectsState: "unknown",
+      },
+    },
+  },
+  {
+    id: "tpl_mirror_mask",
+    type: "garment",
+    types: ["accessory"],
+    tags: ["accessory", "mask", "mirror", "magic", "deceptive"],
+    name: "Masque miroir",
+    description: "Il montre aux autres ce qu'ils esperaient voir.",
+    base: {
+      weight: 0.3,
+    },
+    effects: [itemEffects.charismaPlus1, itemEffects.wisdomMinus1],
+    modules: {
+      item: {
+        descriptionState: "unknown",
+        unknownDescription: "Le reflet ne dit pas encore toute la vérité.",
+      },
+    },
+  },
+  {
+    id: "tpl_cursed_chalice",
+    type: "consumable",
+    types: ["quest", "consumable"],
+    tags: ["quest", "consumable", "chalice", "cursed", "metal", "magic"],
+    name: "Calice des dettes",
+    description: "Boire au calice accorde un répit, puis réclame son dû.",
+    base: {
+      weight: 0.6,
+    },
+    effects: [itemEffects.heal3, itemEffects.damagePoison2],
+    targetingV2: {
+      aim: { allowed: ["self", "entity"], required: true, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["self", "living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["self"],
+      suggestedSides: ["self", "ally"],
+    },
+    targeting: {
+      allowed: ["self", "character"],
+      required: true,
+      defaultPriority: ["self"],
+    },
+    modules: {
+      item: {
+        nameState: "unknown",
+        unknownName: "Calice terni",
+        effectsState: "hidden",
+      },
+    },
+  },
+  {
+    id: "tpl_fireball_scroll",
+    type: "consumable",
+    types: ["quest", "consumable"],
+    tags: ["quest", "consumable", "scroll", "paper", "magic", "fire"],
+    name: "Parchemin de boule de feu",
+    description: "Une incantation de niveau 3, comprimée dans un sceau rougeoyant.",
+    base: {
+      weight: 0.1,
+    },
+    effects: [itemEffects.fireballLevel3],
+    targetingV2: {
+      aim: { allowed: ["entity", "position"], required: true, range: 36, lineOfSight: true },
+      area: { shape: "circle", radius: 6 },
+      affects: { allowed: ["living"], requiresLiving: true },
+      defaultPriority: ["nearestEnemy", "farthestPointAhead"],
+      suggestedSides: ["enemy"],
+    },
+    targeting: {
+      allowed: ["entity", "position", "free"],
+      required: true,
+      defaultPriority: ["nearestEnemy", "farthestPointAhead"],
+      range: 36,
+    },
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_chaos_flask",
+    type: "consumable",
+    types: ["consumable"],
+    tags: ["consumable", "flask", "glass", "chaos", "magic", "alchemy"],
+    name: "Flasque chaotique",
+    description: "Le liquide change de couleur à chaque battement de cœur.",
+    base: {
+      weight: 0.3,
+    },
+    effects: [itemEffects.chaoticDamage3],
+    targetingV2: {
+      aim: { allowed: ["entity", "position"], required: true, range: 9, lineOfSight: true },
+      area: { shape: "circle", radius: 2 },
+      affects: { allowed: ["living"], requiresLiving: true },
+      defaultPriority: ["nearestEnemy", "farthestPointAhead"],
+      suggestedSides: ["enemy"],
+    },
+    targeting: {
+      allowed: ["entity", "position", "free"],
+      required: true,
+      defaultPriority: ["nearestEnemy", "farthestPointAhead"],
+      range: 9,
+    },
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_ember_ward",
+    type: "garment",
+    types: ["accessory"],
+    tags: ["accessory", "brooch", "metal", "fire", "protection", "magic"],
+    name: "Broche pare-braise",
+    description: "Une broche tiède qui avale une partie des flammes.",
+    base: {
+      weight: 0.05,
+    },
+    effects: [itemEffects.reduceFire2],
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_alchemical_converter",
+    type: "consumable",
+    types: ["consumable"],
+    tags: ["consumable", "alchemy", "device", "single-use", "craft"],
+    name: "Convertisseur alchimique",
+    description: "Un petit appareil jetable qui réagit aux pierres magnétiques.",
+    base: {
+      weight: 0.4,
+    },
+    effects: [itemEffects.transmuteMagnetStone],
+    targeting: {
+      allowed: ["item", "free"],
+      required: true,
+      defaultPriority: ["none"],
+    },
+    modules: {
+      item: {},
+    },
+  },
+  {
+    id: "tpl_ember_staff",
+    type: "weapon",
+    types: ["weapon", "accessory"],
+    tags: ["weapon", "staff", "wood", "magic", "fire", "catalyst"],
+    name: "Bâton des braises liées",
+    description: "Un bâton noirci qui peut frapper comme une arme simple ou libérer des braises concentrées.",
+    base: {
+      attack: 1,
+      range: 1.5,
+      damage: "1d6",
+      damageType: "contondant",
+      weight: 1.8,
+    },
+    effects: [itemEffects.grantEmberBolt],
+    attacks: [
+      {
+        id: "strike",
+        name: "Coup de bâton",
+        label: "Frapper",
+        range: 1.5,
+        damage: "1d6",
+        damageType: "contondant",
+        attackKind: "melee",
+      },
+    ],
+    targetingV2: {
+      aim: { allowed: ["entity", "position"], required: true, range: 3, lineOfSight: true },
+      area: { shape: "none" },
+      affects: { allowed: ["living"], maxTargets: 1, requiresLiving: true },
+      defaultPriority: ["nearestEnemy"],
+      suggestedSides: ["enemy"],
+    },
+    modules: {
+      item: {},
+    },
+  },
+];

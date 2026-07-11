@@ -1,0 +1,13 @@
+{
+  "id": "box_01",
+  "templateId": "tpl_copper_box",
+  "quantity": 1,
+  "overrides": {},
+  "current": {},
+  "data": {},
+  "effects": [],
+  "location": {
+    "type": "world",
+    "parent": "ruins_01"
+  }
+}
