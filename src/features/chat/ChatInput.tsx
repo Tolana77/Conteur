@@ -33,8 +33,9 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
 
     try {
       await runAutomatedDirector(playerInput || "Le joueur confirme son intention en attente.");
-    } catch {
-      addGmMessage("Le Conteur reste silencieux pour l'instant. Vérifie la passerelle IA ou utilise la console MJ manuelle.");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Erreur inconnue.";
+      addGmMessage(`Le Conteur ne peut pas répondre pour le moment : ${reason}`);
     } finally {
       setIsAwaitingNarration(false);
     }

@@ -34,14 +34,21 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   let draft = createEmptyResolutionDraft();
   const agentsRun: AiAgentId[] = [];
   const gatheredCommands: AiDirectorCommand[] = [];
+  const isSmallTalk = isSmallTalkMessage(playerInput);
 
   let analysis: AiDirectorResponse = { narration: "", commands: [], agentRequests: [] };
-  try {
-    analysis = await runAgent("requestAnalyzer", playerInput, draft);
-    agentsRun.push("requestAnalyzer");
-    draft = mergeResolutionDraft(draft, analysis.draftPatch);
-  } catch (error) {
-    draft = addAutomationWarning(draft, `Analyse indisponible : ${getErrorMessage(error)}`);
+  if (isSmallTalk) {
+    draft = mergeResolutionDraft(draft, {
+      intentions: [{ type: "échange social", text: playerInput, requiresResolution: false }],
+    });
+  } else {
+    try {
+      analysis = await runAgent("requestAnalyzer", playerInput, draft);
+      agentsRun.push("requestAnalyzer");
+      draft = mergeResolutionDraft(draft, analysis.draftPatch);
+    } catch (error) {
+      draft = addAutomationWarning(draft, `Analyse indisponible : ${getErrorMessage(error)}`);
+    }
   }
 
   const requestedAgents = selectRelevantAgents(
@@ -82,19 +89,41 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   }
 
   // Le narrateur est volontairement appelé même sans agent métier ni mutation.
-  const narration = await runAgent("narrationManager", playerInput, draft, {
-    agent: "narrationManager",
-    reason: "Étape obligatoire : répondre au joueur à partir des faits disponibles.",
-  });
+  const narrationText = await runNarrator(playerInput, draft);
   agentsRun.push("narrationManager");
 
-  const narrationText = getNarrationText(narration);
   if (!narrationText) {
     throw new Error("Le Narrateur n'a renvoyé aucun texte à afficher.");
   }
 
   useGameStore.getState().addGmMessage(narrationText);
   return { narration: narrationText, agentsRun, warnings: draft.warnings };
+}
+
+async function runNarrator(playerInput: string, draft: AiResolutionDraft): Promise<string> {
+  const request: AiAgentRequest = {
+    agent: "narrationManager",
+    reason: "Étape obligatoire : répondre au joueur à partir des faits disponibles.",
+  };
+  const prompt = buildAiDirectorPrompt(createSnapshot(useGameStore.getState()), "narrationManager", {
+    playerInput,
+    request,
+    resolutionDraft: draft,
+    executionMode: "automatic",
+  });
+  const rawResponse = await runAgentOverHttp("narrationManager", prompt);
+  const parsed = parseAiDirectorResponse(rawResponse);
+
+  if (parsed.response) {
+    return getNarrationText(parsed.response);
+  }
+
+  const plainText = rawResponse.replace(/^```(?:text|markdown)?\s*/iu, "").replace(/\s*```$/u, "").trim();
+  if (plainText && !plainText.startsWith("{")) {
+    return plainText;
+  }
+
+  throw new Error(parsed.errors[0] ?? "Réponse du Narrateur illisible.");
 }
 
 async function runAgent(
@@ -139,11 +168,14 @@ function selectRelevantAgents(
 }
 
 function isPureConversation(playerInput: string, draft: AiResolutionDraft): boolean {
-  const normalized = playerInput.trim().toLocaleLowerCase("fr-FR");
-  const smallTalk = /^(bonjour|bonsoir|salut|coucou|merci|au revoir|bonne nuit|ça va|ca va)[!.?\s]*$/u;
   const requiresResolution = draft.intentions.some((intention) => intention.requiresResolution);
 
-  return smallTalk.test(normalized) && !requiresResolution;
+  return isSmallTalkMessage(playerInput) && !requiresResolution;
+}
+
+function isSmallTalkMessage(playerInput: string): boolean {
+  return /^(bonjour|bonsoir|salut|coucou|merci|au revoir|bonne nuit|ça va|ca va)[!.?\s]*$/iu
+    .test(playerInput.trim().toLocaleLowerCase("fr-FR"));
 }
 
 function executeValidatedCommands(commands: AiDirectorCommand[]) {

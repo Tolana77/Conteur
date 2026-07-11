@@ -17,6 +17,8 @@ Dans **Site configuration > Environment variables**, ajoute :
 - `AI_PROVIDER_URL` : URL complète de l'endpoint compatible OpenAI
 - `AI_PROVIDER_API_KEY` : clé secrète du fournisseur
 - `AI_PROVIDER_MODEL` : identifiant du modèle
+- `AI_PROVIDER_MAX_TOKENS` : `1200`, limite la longueur des réponses et aide à
+  rester dans les quotas gratuits
 - `AI_ALLOWED_ORIGIN` : URL publique exacte du site, par exemple
   `https://mon-conteur.netlify.app`
 - `AI_MAX_REQUESTS_PER_MINUTE` : `12` est une valeur de départ prudente

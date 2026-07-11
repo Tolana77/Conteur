@@ -150,14 +150,15 @@ export function buildAiDirectorPrompt(
         ]
       : []),
     "",
-    "# Agents disponibles",
-    aiAgentDefinitions
-      .map((definition) => [
-        `- ${definition.id} — ${definition.name}`,
-        `  Rôle: ${definition.role}`,
-        `  À utiliser: ${definition.whenToUse.join("; ")}`,
-      ].join("\n"))
-      .join("\n"),
+    ...(agentId === "requestAnalyzer"
+      ? [
+          "# Agents disponibles",
+          aiAgentDefinitions
+            .filter((definition) => definition.id !== "narrationManager")
+            .map((definition) => `- ${definition.id} — ${definition.name}: ${definition.role}`)
+            .join("\n"),
+        ]
+      : []),
     "",
     "# Contexte compact et pertinent",
     JSON.stringify(scopedContext, null, 2),

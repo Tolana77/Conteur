@@ -54,10 +54,13 @@ export default async (request) => {
     return json({ content: response }, 200, request);
   } catch (error) {
     console.error("MJ provider request failed", error);
+    const status = error instanceof ProviderError ? error.status : 502;
     return json({
-      error: "AI_PROVIDER_ERROR",
-      message: "Le fournisseur IA n'a pas pu répondre. Vérifie son URL, son modèle et sa clé sur Netlify.",
-    }, 502, request);
+      error: status === 429 ? "AI_PROVIDER_RATE_LIMITED" : "AI_PROVIDER_ERROR",
+      message: status === 429
+        ? "La limite temporaire du fournisseur IA est atteinte. Réessaie dans quelques instants."
+        : "Le fournisseur IA n'a pas pu répondre. Vérifie son URL, son modèle et sa clé sur Netlify.",
+    }, status, request);
   }
 };
 
@@ -91,10 +94,11 @@ async function callCompatibleProvider(prompt) {
       model: process.env.AI_PROVIDER_MODEL,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
+      max_tokens: Number.parseInt(process.env.AI_PROVIDER_MAX_TOKENS ?? "1200", 10),
     }),
   });
 
-  if (!response.ok) throw new Error(`Provider returned ${response.status}`);
+  if (!response.ok) throw new ProviderError(response.status);
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
@@ -103,6 +107,13 @@ async function callCompatibleProvider(prompt) {
   }
 
   return content.trim();
+}
+
+class ProviderError extends Error {
+  constructor(status) {
+    super(`Provider returned ${status}`);
+    this.status = status;
+  }
 }
 
 function canAcceptRequest(request) {
