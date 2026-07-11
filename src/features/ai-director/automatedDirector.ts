@@ -31,6 +31,12 @@ export interface AutomatedDirectorResult {
 
 /** Exécute la boucle complète depuis Lecture, avec le Narrateur comme dernière étape obligatoire. */
 export async function runAutomatedDirector(playerInput: string): Promise<AutomatedDirectorResult> {
+  if (!requiresFullResolution(playerInput)) {
+    const narration = await runCompactNarrator(playerInput);
+    useGameStore.getState().addGmMessage(narration);
+    return { narration, agentsRun: ["narrationManager"], warnings: [] };
+  }
+
   let draft = createEmptyResolutionDraft();
   const agentsRun: AiAgentId[] = [];
   const gatheredCommands: AiDirectorCommand[] = [];
@@ -98,6 +104,58 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
 
   useGameStore.getState().addGmMessage(narrationText);
   return { narration: narrationText, agentsRun, warnings: draft.warnings };
+}
+
+/**
+ * Les échanges ordinaires ne justifient pas une chaîne multi-agents. Cette
+ * porte locale garde la narration fluide et réserve les jetons aux règles.
+ */
+function requiresFullResolution(playerInput: string): boolean {
+  const normalized = playerInput.toLocaleLowerCase("fr-FR");
+  const mechanics = /\b(attaque|attaquer|tirer|tire|lance|utilise|utiliser|consomme|bois|potion|fiole|parchemin|sort|capacit[ée]|jet|d20|d6|test|sauvegarde|dég[aâ]ts?|soigne|soin|d[eé]place|d[eé]placement|combat|ennemi|cible|port[eé]e|inventaire|[eé]quipe|d[eé]s[eé]quipe)\b/u;
+  const sensitive = /\b(suicide|me tuer|mutil|torture|violer|ignore (?:les )?instructions|prompt)\b/u;
+  return mechanics.test(normalized) || sensitive.test(normalized);
+}
+
+async function runCompactNarrator(playerInput: string): Promise<string> {
+  const state = useGameStore.getState();
+  const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
+  const prompt = [
+    "Tu es le Narrateur d'un jeu de rôle fantasy. Réponds au joueur avec une prose brève, immersive et concrète.",
+    "N'invente pas de résultat mécanique, de jet, de dégât ou de changement d'état. Pour une action qui exigerait une règle, pose une question ou décris seulement l'intention.",
+    "Réponds uniquement par un JSON valide: {\"narration\":\"...\"}.",
+    "",
+    "# Joueur",
+    JSON.stringify(character ? {
+      name: character.name,
+      classe: character.classe,
+      niveau: character.niveau,
+    } : null),
+    "# Ton et monde",
+    JSON.stringify({
+      style: state.campaign.style,
+      lore: truncate(state.campaign.world.lore, 550),
+      facts: state.campaign.world.facts.slice(-3).map((fact) => truncate(fact, 180)),
+    }),
+    "# Derniers échanges",
+    JSON.stringify(state.messages.slice(-4).map((message) => ({
+      sender: message.sender,
+      content: truncate(message.content, 260),
+    }))),
+    "# Réponse du joueur",
+    truncate(playerInput, 1_000),
+  ].join("\n");
+
+  const rawResponse = await runAgentOverHttp("narrationManager", prompt);
+  const parsed = parseAiDirectorResponse(rawResponse);
+
+  if (parsed.response?.narration.trim()) {
+    return parsed.response.narration.trim();
+  }
+
+  const plainText = rawResponse.replace(/^```(?:text|markdown)?\s*/iu, "").replace(/\s*```$/u, "").trim();
+  if (plainText && !plainText.startsWith("{")) return plainText;
+  throw new Error(parsed.errors[0] ?? "Réponse du Narrateur illisible.");
 }
 
 async function runNarrator(playerInput: string, draft: AiResolutionDraft): Promise<string> {
@@ -265,6 +323,10 @@ function addAutomationWarning(draft: AiResolutionDraft, warning: string): AiReso
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "erreur inconnue";
+}
+
+function truncate(value: string, maximumLength: number): string {
+  return value.length > maximumLength ? `${value.slice(0, maximumLength - 1)}…` : value;
 }
 
 function mergeUnique<T>(current: T[], additions?: T[]): T[] {

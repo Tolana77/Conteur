@@ -94,7 +94,7 @@ async function callCompatibleProvider(prompt) {
       model: process.env.AI_PROVIDER_MODEL,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      max_tokens: Number.parseInt(process.env.AI_PROVIDER_MAX_TOKENS ?? "1200", 10),
+      max_tokens: getMaxTokens(payload.agentId),
     }),
   });
 
@@ -107,6 +107,17 @@ async function callCompatibleProvider(prompt) {
   }
 
   return content.trim();
+}
+
+function getMaxTokens(agentId) {
+  const configuredMaximum = Number.parseInt(process.env.AI_PROVIDER_MAX_TOKENS ?? "700", 10);
+  const agentMaximums = {
+    narrationManager: 420,
+    requestAnalyzer: 450,
+    rulesValidator: 350,
+  };
+  const maximum = agentMaximums[agentId] ?? 700;
+  return Math.min(Number.isFinite(configuredMaximum) ? configuredMaximum : 700, maximum);
 }
 
 class ProviderError extends Error {
