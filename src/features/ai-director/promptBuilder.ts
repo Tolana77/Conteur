@@ -49,6 +49,7 @@ export interface AiDirectorPromptOptions {
   playerInput?: string;
   request?: AiAgentRequest;
   resolutionDraft?: AiResolutionDraft;
+  executionMode?: "manual" | "automatic";
 }
 
 export function buildAiDirectorPrompt(
@@ -76,7 +77,9 @@ export function buildAiDirectorPrompt(
     "4. Exécution locale: la console applique les commandes validées et ajoute ses succès ou échecs au dossier.",
     "5. Gérer narration: dernière étape, répondre au joueur à partir du dossier de résolution et des résultats d'exécution.",
     "7. Ne prétends jamais qu'une action réussit si une commande moteur ou un jet est nécessaire.",
-    "8. Le moteur exécutera les commandes après validation humaine.",
+    options.executionMode === "automatic"
+      ? "8. Le moteur exécutera uniquement les commandes validées par les règles, puis transmettra les résultats au Narrateur."
+      : "8. Le moteur exécutera les commandes après validation humaine.",
     "9. Seul l'agent Analyser la demande peut remplir agentRequests. Les autres agents doivent utiliser draftPatch.suggestedAgents s'ils pensent qu'un autre agent est nécessaire.",
     "",
     "# Ce que tu dois faire",
@@ -130,6 +133,19 @@ export function buildAiDirectorPrompt(
             "Si contenu sensible, ajoute draftPatch.safety.",
             "Codes: ordinaryFantasyViolence=normal; ritualSelfInjury=graveButPlayable; harmToOthers=graveButPlayable ou redirectRequired; selfHarmIntent=redirectRequired; coercionOrAbuse=hardStop sauf ellipse non graphique; ambiguousDarkIntent=redirectRequired.",
             "Équilibre: thèmes sombres autorisés comme fiction, jamais comme gratification/procédure. Suicide/autodestruction: interrompre ou rediriger dans le récit. Rite de deuil: sobre, conséquences, pas gore.",
+          ].join("\n"),
+        ]
+      : []),
+    ...(agentId === "requestAnalyzer"
+      ? [
+          "",
+          "# Sélection d'agents : discipline stricte",
+          [
+            "- Une salutation, un remerciement, une formule sociale ou une question purement narrative ne requiert AUCUN agent métier : laisse agentRequests vide.",
+            "- N'appelle Gérer monde que si une information de monde, un PNJ, un lieu ou un fait durable doit réellement être déterminé ou modifié.",
+            "- N'appelle Gérer actions que si un test, un jet, une opposition ou une difficulté doit être résolu.",
+            "- N'appelle Gérer perso ou Gérer combat que si une règle, une ressource, un objet, une capacité ou une situation tactique est touchée.",
+            "- N'ajoute jamais Gérer narration à agentRequests : il est appelé automatiquement, toujours en dernier.",
           ].join("\n"),
         ]
       : []),

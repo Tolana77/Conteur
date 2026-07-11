@@ -1,11 +1,14 @@
 import { FormEvent, useState } from "react";
 import type { ActionTarget, ActionTargetKind, ChatActionIntent, CombatPosition, CombatScene } from "../../app/types";
 import { getSuggestedSide } from "../combat/targeting";
+import { runAutomatedDirector } from "../ai-director/automatedDirector";
 import { useGameStore } from "../../store/useGameStore";
 
 export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intentId: string) => void }) {
   const [content, setContent] = useState("");
+  const [isAwaitingNarration, setIsAwaitingNarration] = useState(false);
   const sendPlayerMessage = useGameStore((state) => state.sendPlayerMessage);
+  const addGmMessage = useGameStore((state) => state.addGmMessage);
   const pendingActionIntents = useGameStore((state) => state.pendingActionIntents);
   const characters = useGameStore((state) => state.characters);
   const selectedCharacterId = useGameStore((state) => state.selectedCharacterId);
@@ -16,10 +19,25 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
   const updateActionIntentTarget = useGameStore((state) => state.updateActionIntentTarget);
   const removeActionIntent = useGameStore((state) => state.removeActionIntent);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const playerInput = content.trim();
+
+    if (!playerInput && pendingActionIntents.length === 0) {
+      return;
+    }
+
     sendPlayerMessage(content);
     setContent("");
+    setIsAwaitingNarration(true);
+
+    try {
+      await runAutomatedDirector(playerInput || "Le joueur confirme son intention en attente.");
+    } catch {
+      addGmMessage("Le Conteur reste silencieux pour l'instant. Vérifie la passerelle IA ou utilise la console MJ manuelle.");
+    } finally {
+      setIsAwaitingNarration(false);
+    }
   }
 
   return (
@@ -53,9 +71,10 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
       </div>
       <button
         className="fantasy-button mt-2 w-full rounded px-4 py-2 text-sm font-semibold sm:w-auto"
+        disabled={isAwaitingNarration}
         type="submit"
       >
-        Envoyer
+        {isAwaitingNarration ? "Le Conteur écrit..." : "Envoyer"}
       </button>
     </form>
   );

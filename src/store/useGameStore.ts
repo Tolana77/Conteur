@@ -27,7 +27,6 @@ import {
 } from "../features/combat/targeting";
 import { getCombatConditionTemplate } from "../features/combat/conditionTemplates";
 import { resolveEffectValue, type ValueExpressionContext } from "../features/items/valueExpressions";
-import { createMockGmResponse } from "../app/mockGameMaster";
 import type {
   Campaign,
   ActionTarget,
@@ -70,7 +69,7 @@ interface UiSettings {
   showItemTags: boolean;
 }
 
-interface GameState {
+export interface GameState {
   storageVersion: number;
   campaign: Campaign;
   characters: Character[];
@@ -4879,13 +4878,6 @@ export const useGameStore = create<GameState>()(
         }
 
         const playerMessage = createMessage("player", trimmedContent, resolvedActions.executedIntents);
-        const selectedCharacter = state.characters.find(
-          (character) => character.id === state.selectedCharacterId,
-        );
-        const gmMessage = createMessage(
-          "gm",
-          createMockGmResponse(playerMessage, state.campaign, selectedCharacter),
-        );
         const combatSummaryMessage = resolvedActions.executedIntents.length > 0
           ? createMessage(
               "gm",
@@ -4905,7 +4897,6 @@ export const useGameStore = create<GameState>()(
             ...state.messages,
             playerMessage,
             ...(combatSummaryMessage ? [combatSummaryMessage] : []),
-            gmMessage,
           ],
           pendingActionIntents: [],
           diceRolls: [...resolvedActions.diceRolls, ...state.diceRolls].slice(0, 8),

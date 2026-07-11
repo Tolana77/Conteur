@@ -11,7 +11,7 @@ export interface AiCommandValidation {
 export function validateAiCommands(
   commands: AiDirectorCommand[],
   context: {
-    agentId: AiAgentId;
+    agentId?: AiAgentId;
     characters: Character[];
     selectedCharacterId: string;
     combat: CombatScene;
@@ -25,7 +25,7 @@ export function validateAiCommands(
 function validateAiCommand(
   command: AiDirectorCommand,
   context: {
-    agentId: AiAgentId;
+    agentId?: AiAgentId;
     characters: Character[];
     selectedCharacterId: string;
     combat: CombatScene;
@@ -33,7 +33,7 @@ function validateAiCommand(
     itemInstances: ItemInstance[];
   },
 ): AiCommandValidation {
-  if (!isCommandAllowedForAgent(context.agentId, command.type)) {
+  if (context.agentId && !isCommandAllowedForAgent(context.agentId, command.type)) {
     return error(command, `Commande "${command.type}" interdite pour cet agent.`);
   }
 
