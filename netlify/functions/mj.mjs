@@ -126,18 +126,26 @@ function isAllowedOrigin(request) {
   const expectedOrigin = process.env.AI_ALLOWED_ORIGIN;
   if (!expectedOrigin) return true;
   const origin = request.headers.get("origin");
-  return !origin || origin === expectedOrigin;
+  return !origin || normalizeOrigin(origin) === normalizeOrigin(expectedOrigin);
 }
 
 function corsHeaders(request) {
   const origin = request.headers.get("origin");
   const allowedOrigin = process.env.AI_ALLOWED_ORIGIN;
   return {
-    "access-control-allow-origin": allowedOrigin ?? origin ?? "null",
+    "access-control-allow-origin": allowedOrigin ? normalizeOrigin(allowedOrigin) : origin ?? "null",
     "access-control-allow-methods": "POST, OPTIONS",
     "access-control-allow-headers": "content-type",
     vary: "Origin",
   };
+}
+
+function normalizeOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/+$/, "");
+  }
 }
 
 function json(value, status, request) {
