@@ -5,7 +5,7 @@ import type { AiResolutionDraft } from "./types";
 
 export interface NarrationPacket {
   facts: string[];
-  results: string[];
+  results: Array<{ status: "success" | "error" | "info"; message: string }>;
   warnings: string[];
   questions: string[];
 }
@@ -45,6 +45,9 @@ export function buildAutomaticNarrationPrompt(
   return [
     "Tu es le Narrateur d'un jeu de rôle fantasy. Réponds en français, brièvement, avec une prose concrète et immersive.",
     "Raconte uniquement les faits et résultats du paquet. Ne crée ni jet, ni dégât, ni changement d'état supplémentaire.",
+    "Toute modification du monde ou d'un inventaire n'existe que si elle apparaît dans Paquet.results avec status=success.",
+    "Une demande sans succès moteur reste une intention ou un échec : ne raconte jamais qu'elle a réussi.",
+    "Si un fait dit qu'une liste est exhaustive, restitue uniquement ses éléments et n'en invente aucun.",
     'Réponds uniquement par {"narration":"..."}.',
     `Joueur: ${JSON.stringify(character ? { name: character.name, classe: character.classe, niveau: character.niveau } : null)}`,
     `Style: ${truncate(state.campaign.style, 160)}`,
@@ -55,17 +58,23 @@ export function buildAutomaticNarrationPrompt(
   ].join("\n");
 }
 
-export function createNarrationPacket(draft: AiResolutionDraft, executionMessages: string[]): NarrationPacket {
+export function createNarrationPacket(
+  draft: AiResolutionDraft,
+  executionResults: Array<{ status: "success" | "error" | "info"; message: string }>,
+): NarrationPacket {
   return {
     facts: [
       ...draft.facts
         .filter((fact) => fact.visibility !== "hidden" && fact.visibility !== "gmOnly")
-        .map((fact) => truncate(fact.content, 240)),
+        .map((fact) => truncate(fact.content, fact.kind === "inventorySnapshot" ? 900 : 240)),
       ...draft.narrationInputs
         .filter((input) => input.visibility !== "hidden" && input.visibility !== "gmOnly")
         .map((input) => truncate(input.content, 240)),
     ].slice(-6),
-    results: executionMessages.slice(-5).map((result) => truncate(result, 240)),
+    results: executionResults.slice(-5).map((result) => ({
+      status: result.status,
+      message: truncate(result.message, 240),
+    })),
     warnings: draft.warnings.slice(-3).map((warning) => truncate(warning, 180)),
     questions: draft.questions.slice(-3).map((question) => truncate(question, 180)),
   };

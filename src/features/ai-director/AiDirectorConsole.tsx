@@ -52,6 +52,7 @@ export function AiDirectorConsole() {
   const equipItem = useGameStore((state) => state.equipItem);
   const unequipItem = useGameStore((state) => state.unequipItem);
   const giveItem = useGameStore((state) => state.giveItem);
+  const pickupItem = useGameStore((state) => state.pickupItem);
   const removeItem = useGameStore((state) => state.removeItem);
   const useItem = useGameStore((state) => state.useItem);
   const useAbility = useGameStore((state) => state.useAbility);
@@ -101,6 +102,7 @@ export function AiDirectorConsole() {
     equipItem,
     unequipItem,
     giveItem,
+    pickupItem,
     removeItem,
     useItem,
     useAbility,
@@ -126,6 +128,7 @@ export function AiDirectorConsole() {
     endCombat,
     equipItem,
     giveItem,
+    pickupItem,
     healCharacter,
     hideMapDetail,
     moveCombatant,
@@ -793,6 +796,7 @@ function executeAiCommand(
     equipItem: ReturnType<typeof useGameStore.getState>["equipItem"];
     unequipItem: ReturnType<typeof useGameStore.getState>["unequipItem"];
     giveItem: ReturnType<typeof useGameStore.getState>["giveItem"];
+    pickupItem: ReturnType<typeof useGameStore.getState>["pickupItem"];
     removeItem: ReturnType<typeof useGameStore.getState>["removeItem"];
     useItem: ReturnType<typeof useGameStore.getState>["useItem"];
     useAbility: ReturnType<typeof useGameStore.getState>["useAbility"];
@@ -837,6 +841,7 @@ function executeAiCommand(
     equipItem: actions.equipItem,
     unequipItem: actions.unequipItem,
     giveItem: actions.giveItem,
+    pickupItem: actions.pickupItem,
     removeItem: actions.removeItem,
     useItem: actions.useItem,
     useAbility: actions.useAbility,
@@ -877,6 +882,10 @@ function toAdminCommand(command: AiDirectorCommand): string | null {
 
   if (command.type === "giveItem") {
     return `giveItem ${command.characterId} ${command.templateId} ${command.quantity ?? 1}`;
+  }
+
+  if (command.type === "pickupItem") {
+    return `pickupItem ${command.characterId} ${command.itemId}`;
   }
 
   if (command.type === "destroyItem") {

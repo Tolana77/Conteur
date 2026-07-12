@@ -58,6 +58,7 @@ export function CampaignConsole({ onClose }: CampaignConsoleProps) {
   const equipItem = useGameStore((state) => state.equipItem);
   const unequipItem = useGameStore((state) => state.unequipItem);
   const giveItem = useGameStore((state) => state.giveItem);
+  const pickupItem = useGameStore((state) => state.pickupItem);
   const removeItem = useGameStore((state) => state.removeItem);
   const useItem = useGameStore((state) => state.useItem);
   const useAbility = useGameStore((state) => state.useAbility);
@@ -139,6 +140,7 @@ export function CampaignConsole({ onClose }: CampaignConsoleProps) {
       equipItem,
       unequipItem,
       giveItem,
+      pickupItem,
       removeItem,
       useItem,
       useAbility,

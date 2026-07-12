@@ -41,6 +41,7 @@ export interface AdminCommandContext {
   equipItem: (itemId: string) => void;
   unequipItem: (itemId: string) => void;
   giveItem: (characterId: string, templateId: string, quantity?: number) => ItemInstance | null;
+  pickupItem: (itemId: string, characterId: string) => boolean;
   removeItem: (itemId: string) => void;
   useItem: (itemId: string) => void;
   useAbility: (abilityId: string) => boolean;
@@ -224,6 +225,11 @@ export const adminCommandDocs = [
     name: "giveItem",
     usage: "giveItem <id|selected> <templateId> [quantité]",
     description: "Ajoute un objet dans le sac.",
+  },
+  {
+    name: "pickupItem",
+    usage: "pickupItem <id|selected> <itemId>",
+    description: "Ramasse une instance présente dans le monde sans la dupliquer.",
   },
   {
     name: "removeItem",
@@ -835,6 +841,18 @@ export function executeAdminCommand(
     }
 
     return { status: "success", message: `${formatItem(context, item)} ajouté au sac.` };
+  }
+
+  if (commandName === "pickupItem") {
+    if (!arg1) return { status: "error", message: "itemId manquant." };
+    const item = context.itemInstances.find((candidate) => candidate.id === arg1);
+
+    if (!item) return { status: "error", message: `Instance introuvable: ${arg1}` };
+    if (!context.pickupItem(item.id, character.id)) {
+      return { status: "error", message: `${formatItem(context, item)} n'est pas disponible dans le monde.` };
+    }
+
+    return { status: "success", message: `${character.name} ramasse ${formatItem(context, item)}.` };
   }
 
   if (commandName === "dealDamage" || commandName === "heal" || commandName === "setPv") {

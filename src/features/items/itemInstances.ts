@@ -46,6 +46,7 @@ export function createInitialItemInstances(characterId: string): ItemInstance[] 
     createItemInstance("item-ember-ward-01", "tpl_ember_ward", 1, "inventory", characterId),
     createItemInstance("item-alchemical-converter-01", "tpl_alchemical_converter", 1, "inventory", characterId),
     createItemInstance("item-ember-staff-01", "tpl_ember_staff", 1, "inventory", characterId),
+    createItemInstance("item-field-stone-01", "tpl_field_stone", 1, "world", "detail-heavy-stones"),
   ].map((item, index) => {
     const overrides =
       item.id === "item-healing-potion-01"

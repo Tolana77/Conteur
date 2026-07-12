@@ -9,15 +9,28 @@
 - Le classificateur IA n'est appelé que si le routeur local est indécis.
 - La validation et l'exécution des commandes restent locales.
 - Le Narrateur ne reçoit jamais l'état complet du jeu.
+- Une narration ne crée aucun état : seules les commandes exécutées par le moteur le peuvent.
+- Chaque commande conserve son agent d'origine jusqu'à l'exécution et produit un reçu typé `success`, `error` ou `info`.
+- Un objet doit exister comme instance `world` avant de pouvoir être ramassé.
+- Les agents de jeu ordinaires ne peuvent ni créer ni donner arbitrairement un objet.
 
 ## Pipeline
 
-1. `automaticRouting.ts` classe localement le message.
-2. Si le domaine est inconnu, un classificateur compact choisit au plus un agent.
-3. `automaticPrompts.ts` construit une vue propre au domaine.
-4. L'agent métier produit faits, entrées narratives et commandes autorisées.
-5. Le moteur valide et exécute localement les commandes.
-6. Un paquet public borné est transmis au Narrateur.
+1. `automaticLocalResolution.ts` tente une opération autoritaire enregistrée (lecture d'état, transfert, refus d'une mutation sans preuve).
+2. Si aucune opération autoritaire ne correspond, `automaticRouting.ts` classe localement le message.
+3. Si le domaine est inconnu, un classificateur compact choisit au plus un agent.
+4. `automaticPrompts.ts` construit une vue propre au domaine.
+5. L'agent métier propose faits et commandes appartenant strictement à son domaine.
+6. Le moteur revalide les permissions de l'agent d'origine, exécute chaque commande indépendamment et produit des reçus typés.
+7. Un paquet public borné est transmis au Narrateur, toujours en dernier.
+
+## Autorité sur les objets
+
+- `giveItem` est une commande d'administration ou de préparation, pas une action joueur.
+- `pickupItem` transfère une instance existante de `world` vers `inventory`; elle ne clone rien.
+- Une seconde tentative de ramassage échoue puisque l'instance n'est plus dans `world`.
+- Les noms alternatifs sont déclarés dans `ItemTemplate.aliases`. Le résolveur ne contient pas d'exception liée à un objet précis.
+- Les questions de contenu du sac lisent directement le store et produisent un instantané exhaustif.
 
 ## Contextes
 

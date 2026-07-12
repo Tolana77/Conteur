@@ -131,6 +131,7 @@ export interface ItemTemplate {
   type: string;
   types: string[];
   tags: string[];
+  aliases?: string[];
   name: string;
   description: string;
   base: Record<string, number | string | boolean>;

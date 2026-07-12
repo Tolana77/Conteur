@@ -1,5 +1,6 @@
 import { useGameStore, type GameState } from "../../store/useGameStore";
 import { executeAiCommand } from "./aiExecution";
+import { resolveAutomaticLocalRequest } from "./automaticLocalResolution";
 import {
   buildAutomaticDomainPrompt,
   buildAutomaticNarrationPrompt,
@@ -25,6 +26,11 @@ export interface AutomatedDirectorResult {
   warnings: string[];
 }
 
+interface SourcedCommand {
+  command: AiDirectorCommand;
+  source: AutomaticDomainAgent | "localEngine";
+}
+
 /**
  * Boucle automatique économique : routage local, zéro orchestrateur IA,
  * au plus deux agents métier, validation/exécution locale, puis Narrateur.
@@ -32,10 +38,16 @@ export interface AutomatedDirectorResult {
 export async function runAutomatedDirector(playerInput: string): Promise<AutomatedDirectorResult> {
   const initialState = useGameStore.getState();
   const route = routePlayerInput(playerInput, initialState);
-  const selectedAgents = [...route.agents];
+  const localResolution = resolveAutomaticLocalRequest(playerInput, initialState);
+  const selectedAgents = localResolution.handled ? [] : [...route.agents];
   let draft = createEmptyResolutionDraft();
   const agentsRun: AiAgentId[] = [];
-  const gatheredCommands: AiDirectorCommand[] = [];
+  const gatheredCommands: SourcedCommand[] = localResolution.commands.map((command) => ({
+    command,
+    source: "localEngine",
+  }));
+
+  draft = mergeResolutionDraft(draft, localResolution.draftPatch);
 
   if (route.needsSafetyReview) {
     try {
@@ -47,7 +59,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
     }
   }
 
-  if (route.needsClassifier) {
+  if (route.needsClassifier && !localResolution.handled) {
     try {
       const classifiedAgent = await runCompactClassifier(playerInput);
       agentsRun.push("requestAnalyzer");
@@ -65,7 +77,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
 
       for (const command of response.commands) {
         if (command.type !== "sendNarration" && isCommandAllowedForAgent(agentId, command.type)) {
-          gatheredCommands.push(command);
+          gatheredCommands.push({ command, source: agentId });
         } else if (command.type !== "sendNarration") {
           draft = mergeResolutionDraft(draft, {
             warnings: [`Commande ${command.type} refusée : elle n'appartient pas à ${agentId}.`],
@@ -78,16 +90,35 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   }
 
   const executionResults = executeValidatedCommands(gatheredCommands);
-  const packet = createNarrationPacket(draft, executionResults.map((result) => result.message));
-  const narration = await runNarrator(playerInput, packet);
+  const packet = createNarrationPacket(draft, executionResults);
+  let narration: string;
+  let narrationWarning: string | null = null;
+
+  try {
+    narration = await runNarrator(playerInput, packet);
+  } catch (error) {
+    narrationWarning = `Narrateur indisponible : ${errorMessage(error)}`;
+    narration = createGroundedFallbackNarration(packet);
+  }
+
   agentsRun.push("narrationManager");
   useGameStore.getState().addGmMessage(narration);
 
   return {
     narration,
     agentsRun,
-    warnings: [...draft.warnings, ...executionResults.filter((result) => result.status === "error").map((result) => result.message)],
+    warnings: [
+      ...draft.warnings,
+      ...executionResults.filter((result) => result.status === "error").map((result) => result.message),
+      ...(narrationWarning ? [narrationWarning] : []),
+    ],
   };
+}
+
+function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrationPacket>): string {
+  const resultMessages = packet.results.map((result) => result.message);
+  const confirmed = [...resultMessages, ...packet.facts, ...packet.questions].filter(Boolean);
+  return confirmed.join(" ") || "Rien dans l'état actuel du monde ne permet de confirmer cette action.";
 }
 
 async function runCompactClassifier(playerInput: string): Promise<AutomaticDomainAgent | null> {
@@ -141,28 +172,28 @@ function parseRequiredResponse(raw: string, agentId: AiAgentId): AiDirectorRespo
   return parsed.response;
 }
 
-function executeValidatedCommands(commands: AiDirectorCommand[]) {
+function executeValidatedCommands(commands: SourcedCommand[]) {
   if (!commands.length) return [];
-  const snapshot = createSnapshot(useGameStore.getState());
-  const validations = validateAiCommands(commands, {
-    characters: snapshot.characters,
-    selectedCharacterId: snapshot.selectedCharacterId,
-    combat: snapshot.combat,
-    itemTemplates: snapshot.itemTemplates,
-    itemInstances: snapshot.itemInstances,
-  });
-  const errors = validations.filter((validation) => validation.status === "error");
-
-  if (errors.length) {
-    return errors.map((validation) => ({
-      status: "error" as const,
-      message: validation.message,
-      command: JSON.stringify(validation.command),
-    }));
-  }
-
-  return commands.map((command) => {
+  return commands.map(({ command, source }) => {
     const state = useGameStore.getState();
+    const snapshot = createSnapshot(state);
+    const validation = validateAiCommands([command], {
+      agentId: source === "localEngine" ? undefined : source,
+      characters: snapshot.characters,
+      selectedCharacterId: snapshot.selectedCharacterId,
+      combat: snapshot.combat,
+      itemTemplates: snapshot.itemTemplates,
+      itemInstances: snapshot.itemInstances,
+    })[0];
+
+    if (!validation || validation.status === "error") {
+      return {
+        status: "error" as const,
+        message: validation?.message ?? "Commande non validée.",
+        command: JSON.stringify(command),
+      };
+    }
+
     return executeAiCommand(command, createSnapshot(state), state);
   });
 }

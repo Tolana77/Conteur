@@ -286,6 +286,12 @@ function normalizeCommand(command: unknown, index: number, errors: string[]): Ai
       : addCommandError(errors, index, "characterId ou templateId invalide.");
   }
 
+  if (type === "pickupItem") {
+    return typeof candidate.characterId === "string" && typeof candidate.itemId === "string"
+      ? [{ type, characterId: candidate.characterId, itemId: candidate.itemId }]
+      : addCommandError(errors, index, "characterId ou itemId invalide.");
+  }
+
   if (type === "createItem") {
     const template = getPlainObject(candidate.template);
     const instance = getPlainObject(candidate.instance);

@@ -13,6 +13,7 @@ type AiExecutionActions = Pick<
   | "equipItem"
   | "unequipItem"
   | "giveItem"
+  | "pickupItem"
   | "removeItem"
   | "useItem"
   | "useAbility"
@@ -61,6 +62,7 @@ export function executeAiCommand(
     equipItem: actions.equipItem,
     unequipItem: actions.unequipItem,
     giveItem: actions.giveItem,
+    pickupItem: actions.pickupItem,
     removeItem: actions.removeItem,
     useItem: actions.useItem,
     useAbility: actions.useAbility,
@@ -88,6 +90,7 @@ function toAdminCommand(command: AiDirectorCommand): string | null {
   if (command.type === "heal") return `heal ${command.characterId} ${command.amount}`;
   if (command.type === "useItem") return `useItem ${command.itemId}`;
   if (command.type === "giveItem") return `giveItem ${command.characterId} ${command.templateId} ${command.quantity ?? 1}`;
+  if (command.type === "pickupItem") return `pickupItem ${command.characterId} ${command.itemId}`;
   if (command.type === "destroyItem") return `removeItem ${command.itemId}`;
 
   if (command.type === "changeCharacterStat") {

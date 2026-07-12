@@ -33,6 +33,7 @@ export type AiDirectorCommand =
   | { type: "heal"; characterId: string; amount: number }
   | { type: "useItem"; characterId: string; itemId: string; targetId?: string }
   | { type: "giveItem"; characterId: string; templateId: string; quantity?: number }
+  | { type: "pickupItem"; characterId: string; itemId: string }
   | { type: "createItem"; templateId?: string; template?: Record<string, unknown>; instance?: Record<string, unknown>; reason?: string }
   | { type: "destroyItem"; itemId: string; reason?: string }
   | { type: "modifyItem"; itemId: string; path: string; value: string | number | boolean; reason?: string }

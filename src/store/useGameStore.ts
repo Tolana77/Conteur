@@ -102,6 +102,7 @@ export interface GameState {
   unequipItem: (itemId: string) => void;
   moveItemToBag: (itemId: string) => void;
   giveItem: (characterId: string, templateId: string, quantity?: number) => ItemInstance | null;
+  pickupItem: (itemId: string, characterId: string) => boolean;
   removeItem: (itemId: string) => void;
   useItem: (itemId: string) => void;
   useAbility: (abilityId: string) => boolean;
@@ -904,6 +905,7 @@ function mergeItemTemplates(
       type: defaultTemplate.type,
       types: defaultTemplate.types,
       tags: defaultTemplate.tags,
+      aliases: defaultTemplate.aliases ?? template.aliases,
       base: defaultTemplate.base,
       effects: defaultTemplate.effects,
       attacks: defaultTemplate.attacks,
@@ -4151,6 +4153,32 @@ export const useGameStore = create<GameState>()(
         });
 
         return item;
+      },
+      pickupItem: (itemId, characterId) => {
+        const state = get();
+        const item = state.itemInstances.find((candidate) => candidate.id === itemId);
+        const characterExists = state.characters.some((character) => character.id === characterId);
+
+        if (!item || item.location.type !== "world" || !characterExists) {
+          return false;
+        }
+
+        set((current) => {
+          const itemInstances = current.itemInstances.map((candidate) => candidate.id === itemId
+            ? {
+                ...candidate,
+                location: { type: "inventory" as const, parent: characterId },
+                data: { ...candidate.data, inventoryOrder: current.itemInstances.length },
+              }
+            : candidate);
+
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...current, itemInstances }),
+          };
+        });
+
+        return true;
       },
       removeItem: (itemId) => {
         set((state) => {

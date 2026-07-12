@@ -15,6 +15,7 @@ export const aiCommandSchemas: AiCommandSchema[] = [
   { type: "heal", schema: "{ type, characterId, amount }", description: "Soigne une fiche." },
   { type: "useItem", schema: "{ type, characterId, itemId, targetId? }", description: "Utilise un objet possédé." },
   { type: "giveItem", schema: "{ type, characterId, templateId, quantity? }", description: "Ajoute un objet existant à un inventaire." },
+  { type: "pickupItem", schema: "{ type, characterId, itemId }", description: "Transfère dans le sac une instance déjà présente dans le monde." },
   { type: "createItem", schema: "{ type, templateId?, template?, instance?, reason? }", description: "Propose la création d'un template ou d'une instance d'objet." },
   { type: "destroyItem", schema: "{ type, itemId, reason? }", description: "Supprime une instance d'objet." },
   { type: "modifyItem", schema: "{ type, itemId, path, value, reason? }", description: "Modifie un champ précis d'une instance d'objet." },
@@ -47,8 +48,7 @@ const domainCommandPermissions: Record<AiAgentId, AiCommandType[]> = {
   requestAnalyzer: [],
   characterManager: [
     "useItem",
-    "giveItem",
-    "createItem",
+    "pickupItem",
     "destroyItem",
     "modifyItem",
     "changeCharacterStat",

@@ -99,6 +99,18 @@ function validateAiCommand(
     return ready(command, `${character.name} recevra ${template.name} x${command.quantity ?? 1}.`);
   }
 
+  if (command.type === "pickupItem") {
+    const character = context.characters.find((candidate) => candidate.id === resolveCharacterId(command.characterId, context.selectedCharacterId));
+    const item = context.itemInstances.find((candidate) => candidate.id === command.itemId);
+    const template = item ? context.itemTemplates.find((candidate) => candidate.id === item.templateId) : undefined;
+
+    if (!character) return error(command, `Personnage introuvable: ${command.characterId}`);
+    if (!item) return error(command, `Objet introuvable: ${command.itemId}`);
+    if (item.location.type !== "world") return error(command, `${template?.name ?? item.id} n'est pas disponible dans le monde.`);
+
+    return ready(command, `${character.name} ramassera ${template?.name ?? item.id}.`);
+  }
+
   if (command.type === "createItem") {
     return error(command, "Création d'objet non exécutable directement pour l'instant. À placer dans proposedCommands ou convertir en commande moteur dédiée.");
   }

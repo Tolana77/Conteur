@@ -213,7 +213,7 @@ export function createDraftViewForAgent(draft: AiResolutionDraft, agentId: AiAge
     case "characterManager":
       return createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
         factTerms: ["personnage", "character", "inventaire", "objet", "item", "équipement", "capac", "charge", "pv", "stat"],
-        commandTypes: ["useItem", "giveItem", "createItem", "destroyItem", "modifyItem", "changeCharacterStat", "updateCharacterHistory", "heal"],
+        commandTypes: ["useItem", "pickupItem", "destroyItem", "modifyItem", "changeCharacterStat", "updateCharacterHistory", "heal"],
       });
 
     case "actionManager":

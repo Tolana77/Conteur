@@ -301,6 +301,22 @@ export const initialItemTemplates: ItemTemplate[] = [
     },
   },
   {
+    id: "tpl_field_stone",
+    type: "material",
+    types: ["material"],
+    tags: ["material", "stone", "mundane", "throwable"],
+    aliases: ["pierre", "cailloux", "petite pierre"],
+    name: "Caillou",
+    description: "Une pierre ordinaire, assez petite pour tenir dans la main.",
+    base: {
+      weight: 0.25,
+    },
+    effects: [],
+    modules: {
+      item: {},
+    },
+  },
+  {
     id: "tpl_glass_dagger",
     type: "weapon",
     types: ["weapon"],
