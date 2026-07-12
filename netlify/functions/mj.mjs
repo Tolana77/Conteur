@@ -50,7 +50,7 @@ export default async (request) => {
   }
 
   try {
-    const response = await callCompatibleProvider(payload.prompt);
+    const response = await callCompatibleProvider(payload.agentId, payload.prompt);
     return json({ content: response }, 200, request);
   } catch (error) {
     console.error("MJ provider request failed", error);
@@ -83,7 +83,7 @@ function isValidPayload(value) {
   );
 }
 
-async function callCompatibleProvider(prompt) {
+async function callCompatibleProvider(agentId, prompt) {
   const response = await fetch(process.env.AI_PROVIDER_URL, {
     method: "POST",
     headers: {
@@ -94,7 +94,7 @@ async function callCompatibleProvider(prompt) {
       model: process.env.AI_PROVIDER_MODEL,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      max_tokens: getMaxTokens(payload.agentId),
+      max_tokens: getMaxTokens(agentId),
     }),
   });
 
