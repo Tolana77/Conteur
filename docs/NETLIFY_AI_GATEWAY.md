@@ -52,3 +52,9 @@ serverless. Elle ne remplace pas une authentification. Avant d'ouvrir le site à
 d'autres personnes, protège `/api/mj` avec une authentification Netlify ou une
 couche d'identité équivalente, puis vérifie que `AI_ALLOWED_ORIGIN` correspond
 exactement à ton domaine.
+
+## Diagnostic
+
+Dans la console admin, le bouton **Diagnostiquer Groq** appelle `/api/mj-health`.
+Il indique seulement l'hôte configuré, la présence de la clé, le modèle et le
+statut de Groq. Il ne retourne jamais la valeur de la clé.

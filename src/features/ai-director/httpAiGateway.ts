@@ -14,6 +14,31 @@ interface AiGatewayResponse {
   message?: unknown;
 }
 
+export interface AiGatewayHealth {
+  ok: boolean;
+  configuration?: {
+    enabled: boolean;
+    providerUrlHost: string | null;
+    hasApiKey: boolean;
+    model: string | null;
+  };
+  providerStatus?: number;
+  providerMessage?: string | null;
+  error?: string;
+}
+
+export async function checkAiGatewayHealth(): Promise<AiGatewayHealth> {
+  const response = await fetch("/api/mj-health", { headers: { accept: "application/json" } });
+  const rawResponse = await response.text();
+  const payload = parseJson(rawResponse) as AiGatewayHealth;
+
+  return {
+    ...payload,
+    ok: response.ok && payload.ok === true,
+    error: payload.error ?? (!response.ok ? "HEALTH_CHECK_FAILED" : undefined),
+  };
+}
+
 export async function runAgentOverHttp(agentId: AiAgentId, prompt: string): Promise<string> {
   const startedAt = Date.now();
 

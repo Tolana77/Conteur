@@ -1,8 +1,26 @@
+import { useState } from "react";
+import { checkAiGatewayHealth, type AiGatewayHealth } from "./httpAiGateway";
 import { useGameStore } from "../../store/useGameStore";
 
 export function AiApiTraceConsole() {
   const traces = useGameStore((state) => state.aiApiTraces);
   const clearTraces = useGameStore((state) => state.clearAiApiTraces);
+  const [health, setHealth] = useState<AiGatewayHealth | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+
+  async function handleHealthCheck() {
+    setIsCheckingHealth(true);
+    try {
+      setHealth(await checkAiGatewayHealth());
+    } catch (error) {
+      setHealth({
+        ok: false,
+        error: error instanceof Error ? error.message : "Diagnostic impossible.",
+      });
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  }
 
   return (
     <section className="mb-6 rounded border border-[#9C7A2E]/25 bg-[#15121A]/40 p-3">
@@ -21,7 +39,29 @@ export function AiApiTraceConsole() {
         >
           Vider le journal
         </button>
+        <button
+          className="rounded border border-[#9C7A2E]/35 px-3 py-1.5 text-xs text-[#E4D8BE] disabled:opacity-40"
+          disabled={isCheckingHealth}
+          onClick={handleHealthCheck}
+          type="button"
+        >
+          {isCheckingHealth ? "Diagnostic..." : "Diagnostiquer Groq"}
+        </button>
       </div>
+
+      {health ? (
+        <article className={`mt-3 rounded border px-3 py-2 text-sm ${health.ok ? "border-[#3F5641]/70 bg-[#3F5641]/15" : "border-[#5A2233]/70 bg-[#5A2233]/15"}`}>
+          <p className="font-semibold text-[#E4D8BE]">
+            {health.ok ? "Groq est joignable." : "Le diagnostic a détecté un problème."}
+          </p>
+          <p className="mt-1 text-xs text-[#E4D8BE]/70">
+            Hôte : {health.configuration?.providerUrlHost ?? "invalide"} · clé : {health.configuration?.hasApiKey ? "présente" : "absente"} · modèle : {health.configuration?.model ?? "absent"}
+          </p>
+          {health.providerStatus ? <p className="mt-1 text-xs text-[#E4D8BE]/70">Statut fournisseur : HTTP {health.providerStatus}</p> : null}
+          {health.providerMessage ? <p className="mt-1 text-xs text-[#E4D8BE]/70">{health.providerMessage}</p> : null}
+          {health.error ? <p className="mt-1 text-xs text-[#E4D8BE]/70">{health.error}</p> : null}
+        </article>
+      ) : null}
 
       {traces.length === 0 ? (
         <p className="mt-3 text-sm text-[#E4D8BE]/50">Aucun appel API enregistré pour le moment.</p>
