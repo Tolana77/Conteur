@@ -132,3 +132,14 @@ export interface AiParsedResponse {
   errors: string[];
   rawJson?: string;
 }
+
+export interface AiApiTrace {
+  id: string;
+  agentId: AiAgentId;
+  timestamp: number;
+  durationMs: number;
+  status: number;
+  prompt: string;
+  response: string;
+  error?: string;
+}

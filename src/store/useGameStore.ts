@@ -50,9 +50,10 @@ import type {
   Message,
   CharacterStats,
 } from "../app/types";
+import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 20;
+export const GAME_STORAGE_VERSION = 21;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -85,6 +86,7 @@ export interface GameState {
   abilityTemplates: AbilityTemplate[];
   abilityInstances: AbilityInstance[];
   combat: CombatScene;
+  aiApiTraces: AiApiTrace[];
   selectCharacter: (characterId: string) => void;
   setCharacterPortrait: (characterId: string, portrait: string) => void;
   dealDamage: (characterId: string, amount: number, damageType?: string) => void;
@@ -134,6 +136,8 @@ export interface GameState {
   addWorldFact: (value: string) => void;
   removeWorldFact: (index: number) => void;
   updateEntity: (entity: Entity) => void;
+  addAiApiTrace: (trace: AiApiTrace) => void;
+  clearAiApiTraces: () => void;
 }
 
 const initialMessages: Message[] = [
@@ -599,6 +603,7 @@ type GameDataState = Pick<
   | "abilityTemplates"
   | "abilityInstances"
   | "combat"
+  | "aiApiTraces"
 >;
 
 function createInitialState(): GameDataState {
@@ -622,6 +627,7 @@ function createInitialState(): GameDataState {
     abilityTemplates: initialAbilityTemplates,
     abilityInstances: createInitialAbilityInstances(characterId, initialAbilityTemplates),
     combat: createInitialCombatScene(),
+    aiApiTraces: [],
     characterDerivedScores: createCharacterDerivedScores(
       exampleCampaign.characters,
       itemInstances,
@@ -676,6 +682,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
         : initialState.abilityInstances,
       combat: normalizeCombatScene(candidate.combat, initialState.combat),
+      aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
       characterDerivedScores: createCharacterDerivedScores(
         initialState.characters,
         Array.isArray(candidate.itemInstances)
@@ -725,8 +732,27 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
       : initialState.abilityInstances,
     combat: normalizeCombatScene(candidate.combat, initialState.combat),
+    aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
     characterDerivedScores: createCharacterDerivedScores(characters, itemInstances, itemTemplates),
   };
+}
+
+function normalizeAiApiTraces(value: unknown): AiApiTrace[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((trace): trace is AiApiTrace =>
+    trace &&
+    typeof trace === "object" &&
+    typeof trace.id === "string" &&
+    typeof trace.agentId === "string" &&
+    typeof trace.timestamp === "number" &&
+    typeof trace.durationMs === "number" &&
+    typeof trace.status === "number" &&
+    typeof trace.prompt === "string" &&
+    typeof trace.response === "string",
+  ).slice(0, 10);
 }
 
 function normalizeCombatScene(
@@ -4996,6 +5022,12 @@ export const useGameStore = create<GameState>()(
           };
         });
       },
+      addAiApiTrace: (trace) => {
+        set((state) => ({
+          aiApiTraces: [trace, ...state.aiApiTraces].slice(0, 10),
+        }));
+      },
+      clearAiApiTraces: () => set({ aiApiTraces: [] }),
     }),
     {
       name: GAME_STORAGE_KEY,
@@ -5020,6 +5052,7 @@ export const useGameStore = create<GameState>()(
         abilityTemplates: state.abilityTemplates,
         abilityInstances: state.abilityInstances,
         combat: state.combat,
+        aiApiTraces: state.aiApiTraces,
       }),
     },
   ),

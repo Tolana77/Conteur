@@ -12,6 +12,7 @@ import {
   useGameStore,
 } from "../../store/useGameStore";
 import { AiDirectorConsole } from "../ai-director/AiDirectorConsole";
+import { AiApiTraceConsole } from "../ai-director/AiApiTraceConsole";
 import { HighlightedGameText } from "../../ui/gameTerms";
 
 const entitySections = [
@@ -292,6 +293,7 @@ export function CampaignConsole({ onClose }: CampaignConsoleProps) {
           </section>
 
           <AiDirectorConsole />
+          <AiApiTraceConsole />
 
           <section className="mb-6">
             <h3 className="rune-label mb-2 text-sm">Commandes moteur</h3>
