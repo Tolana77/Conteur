@@ -83,6 +83,9 @@ export function AiApiTraceConsole() {
                     <span className="font-mono text-xs text-[#9C7A2E]">HTTP {trace.status || "réseau"}</span>
                     <span className="text-xs text-[#E4D8BE]/55">{trace.durationMs} ms</span>
                     <span className="text-xs text-[#E4D8BE]/55">
+                      ≈ {estimateTokens(trace.prompt)} entrée / {estimateTokens(trace.response)} sortie
+                    </span>
+                    <span className="text-xs text-[#E4D8BE]/55">
                       {new Date(trace.timestamp).toLocaleString("fr-FR")}
                     </span>
                   </div>
@@ -128,4 +131,8 @@ function getAgentLabel(agentId: string): string {
     narrationManager: "Gérer narration",
   };
   return labels[agentId] ?? agentId;
+}
+
+function estimateTokens(value: string): number {
+  return Math.ceil(value.length / 4);
 }

@@ -58,3 +58,8 @@ exactement à ton domaine.
 Dans la console admin, le bouton **Diagnostiquer Groq** appelle `/api/mj-health`.
 Il indique seulement l'hôte configuré, la présence de la clé, le modèle et le
 statut de Groq. Il ne retourne jamais la valeur de la clé.
+
+Le journal affiche également une estimation des tokens d'entrée et de sortie.
+La boucle automatique utilise un routeur local gratuit, au plus deux agents
+métier, puis un Narrateur qui ne reçoit qu'un paquet de faits publics et de
+résultats moteur.

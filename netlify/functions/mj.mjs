@@ -1,4 +1,3 @@
-const MAX_PROMPT_LENGTH = 60_000;
 const requestWindows = new Map();
 
 export const config = {
@@ -45,7 +44,7 @@ export default async (request) => {
   if (!isValidPayload(payload)) {
     return json({
       error: "INVALID_REQUEST",
-      message: "agentId et prompt sont obligatoires. Le prompt ne doit pas dépasser 60 000 caractères.",
+      message: "agentId et prompt sont obligatoires, et le budget de contexte de cet agent doit être respecté.",
     }, 400, request);
   }
 
@@ -79,7 +78,7 @@ function isValidPayload(value) {
       && value.agentId.length > 0
       && typeof value.prompt === "string"
       && value.prompt.length > 0
-      && value.prompt.length <= MAX_PROMPT_LENGTH,
+      && value.prompt.length <= getMaxPromptLength(value.agentId),
   );
 }
 
@@ -112,12 +111,29 @@ async function callCompatibleProvider(agentId, prompt) {
 function getMaxTokens(agentId) {
   const configuredMaximum = Number.parseInt(process.env.AI_PROVIDER_MAX_TOKENS ?? "700", 10);
   const agentMaximums = {
-    narrationManager: 420,
-    requestAnalyzer: 450,
-    rulesValidator: 350,
+    narrationManager: 320,
+    requestAnalyzer: 350,
+    rulesValidator: 300,
+    characterManager: 600,
+    actionManager: 500,
+    combatManager: 650,
+    worldManager: 500,
   };
-  const maximum = agentMaximums[agentId] ?? 700;
+  const maximum = agentMaximums[agentId] ?? 600;
   return Math.min(Number.isFinite(configuredMaximum) ? configuredMaximum : 700, maximum);
+}
+
+function getMaxPromptLength(agentId) {
+  const limits = {
+    narrationManager: 7_000,
+    requestAnalyzer: 6_000,
+    rulesValidator: 10_000,
+    characterManager: 14_000,
+    actionManager: 9_000,
+    combatManager: 16_000,
+    worldManager: 10_000,
+  };
+  return limits[agentId] ?? 16_000;
 }
 
 class ProviderError extends Error {

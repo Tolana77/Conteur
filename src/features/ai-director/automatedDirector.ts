@@ -1,27 +1,23 @@
 import { useGameStore, type GameState } from "../../store/useGameStore";
 import { executeAiCommand } from "./aiExecution";
-import { buildAiDirectorPrompt, createEmptyResolutionDraft, type AiDirectorPromptOptions, type AiPromptSnapshot } from "./promptBuilder";
+import {
+  buildAutomaticDomainPrompt,
+  buildAutomaticNarrationPrompt,
+  createNarrationPacket,
+} from "./automaticPrompts";
+import { routePlayerInput, type AutomaticDomainAgent } from "./automaticRouting";
+import { isCommandAllowedForAgent } from "./commandPermissions";
 import { runAgentOverHttp } from "./httpAiGateway";
+import { createEmptyResolutionDraft, type AiPromptSnapshot } from "./promptBuilder";
 import { parseAiDirectorResponse } from "./responseParser";
 import { validateAiCommands } from "./validation";
 import type {
   AiAgentId,
-  AiAgentRequest,
   AiDirectorCommand,
   AiDirectorResponse,
   AiResolutionDraft,
   AiResolutionDraftPatch,
 } from "./types";
-
-const AUTOMATIC_AGENT_ORDER: AiAgentId[] = [
-  "tacticalTemplateManager",
-  "assetTemplateManager",
-  "combatSetupManager",
-  "characterManager",
-  "actionManager",
-  "combatManager",
-  "worldManager",
-];
 
 export interface AutomatedDirectorResult {
   narration: string;
@@ -29,270 +25,146 @@ export interface AutomatedDirectorResult {
   warnings: string[];
 }
 
-/** Exécute la boucle complète depuis Lecture, avec le Narrateur comme dernière étape obligatoire. */
+/**
+ * Boucle automatique économique : routage local, zéro orchestrateur IA,
+ * au plus deux agents métier, validation/exécution locale, puis Narrateur.
+ */
 export async function runAutomatedDirector(playerInput: string): Promise<AutomatedDirectorResult> {
-  if (!requiresFullResolution(playerInput)) {
-    const narration = await runCompactNarrator(playerInput);
-    useGameStore.getState().addGmMessage(narration);
-    return { narration, agentsRun: ["narrationManager"], warnings: [] };
-  }
-
+  const initialState = useGameStore.getState();
+  const route = routePlayerInput(playerInput, initialState);
+  const selectedAgents = [...route.agents];
   let draft = createEmptyResolutionDraft();
   const agentsRun: AiAgentId[] = [];
   const gatheredCommands: AiDirectorCommand[] = [];
-  const isSmallTalk = isSmallTalkMessage(playerInput);
 
-  let analysis: AiDirectorResponse = { narration: "", commands: [], agentRequests: [] };
-  if (isSmallTalk) {
-    draft = mergeResolutionDraft(draft, {
-      intentions: [{ type: "échange social", text: playerInput, requiresResolution: false }],
-    });
-  } else {
+  if (route.needsSafetyReview) {
     try {
-      analysis = await runAgent("requestAnalyzer", playerInput, draft);
+      const safety = await runSafetyReview(playerInput);
       agentsRun.push("requestAnalyzer");
-      draft = mergeResolutionDraft(draft, analysis.draftPatch);
+      draft = mergeResolutionDraft(draft, safety.draftPatch);
     } catch (error) {
-      draft = addAutomationWarning(draft, `Analyse indisponible : ${getErrorMessage(error)}`);
+      draft = mergeResolutionDraft(draft, { warnings: [`Vérification sensible indisponible : ${errorMessage(error)}`] });
     }
   }
 
-  const requestedAgents = selectRelevantAgents(
-    analysis.agentRequests,
-    playerInput,
-    draft,
-  );
-
-  for (const agentId of requestedAgents) {
-    const request = analysis.agentRequests.find((candidate) => candidate.agent === agentId);
+  if (route.needsClassifier) {
     try {
-      const response = await runAgent(agentId, playerInput, draft, request);
+      const classifiedAgent = await runCompactClassifier(playerInput);
+      agentsRun.push("requestAnalyzer");
+      if (classifiedAgent) selectedAgents.push(classifiedAgent);
+    } catch (error) {
+      draft = mergeResolutionDraft(draft, { warnings: [`Classement indisponible : ${errorMessage(error)}`] });
+    }
+  }
+
+  for (const agentId of [...new Set(selectedAgents)].slice(0, 2)) {
+    try {
+      const response = await runDomainAgent(agentId, playerInput);
       agentsRun.push(agentId);
       draft = mergeResolutionDraft(draft, response.draftPatch);
-      gatheredCommands.push(...response.commands.filter((command) => command.type !== "sendNarration"));
-    } catch (error) {
-      draft = addAutomationWarning(draft, `${agentId} indisponible : ${getErrorMessage(error)}`);
-    }
-  }
 
-  if (gatheredCommands.length > 0 || draft.proposedCommands.length > 0) {
-    try {
-      const rules = await runAgent("rulesValidator", playerInput, draft, {
-        agent: "rulesValidator",
-        reason: "Validation automatique avant exécution locale.",
-        input: { commands: gatheredCommands, proposedCommands: draft.proposedCommands },
-      });
-      agentsRun.push("rulesValidator");
-      draft = mergeResolutionDraft(draft, rules.draftPatch);
+      for (const command of response.commands) {
+        if (command.type !== "sendNarration" && isCommandAllowedForAgent(agentId, command.type)) {
+          gatheredCommands.push(command);
+        } else if (command.type !== "sendNarration") {
+          draft = mergeResolutionDraft(draft, {
+            warnings: [`Commande ${command.type} refusée : elle n'appartient pas à ${agentId}.`],
+          });
+        }
+      }
     } catch (error) {
-      draft = addAutomationWarning(draft, `Validation indisponible : ${getErrorMessage(error)}`);
+      draft = mergeResolutionDraft(draft, { warnings: [`${agentId} indisponible : ${errorMessage(error)}`] });
     }
   }
 
   const executionResults = executeValidatedCommands(gatheredCommands);
-  if (executionResults.length > 0) {
-    draft = mergeResolutionDraft(draft, createExecutionDraft(executionResults));
-  }
-
-  // Le narrateur est volontairement appelé même sans agent métier ni mutation.
-  const narrationText = await runNarrator(playerInput, draft);
+  const packet = createNarrationPacket(draft, executionResults.map((result) => result.message));
+  const narration = await runNarrator(playerInput, packet);
   agentsRun.push("narrationManager");
+  useGameStore.getState().addGmMessage(narration);
 
-  if (!narrationText) {
-    throw new Error("Le Narrateur n'a renvoyé aucun texte à afficher.");
-  }
-
-  useGameStore.getState().addGmMessage(narrationText);
-  return { narration: narrationText, agentsRun, warnings: draft.warnings };
+  return {
+    narration,
+    agentsRun,
+    warnings: [...draft.warnings, ...executionResults.filter((result) => result.status === "error").map((result) => result.message)],
+  };
 }
 
-/**
- * Les échanges ordinaires ne justifient pas une chaîne multi-agents. Cette
- * porte locale garde la narration fluide et réserve les jetons aux règles.
- */
-function requiresFullResolution(playerInput: string): boolean {
-  const normalized = playerInput.toLocaleLowerCase("fr-FR");
-  const mechanics = /\b(attaque|attaquer|tirer|tire|lance|utilise|utiliser|consomme|bois|potion|fiole|parchemin|sort|capacit[ée]|jet|d20|d6|test|sauvegarde|dég[aâ]ts?|soigne|soin|d[eé]place|d[eé]placement|combat|ennemi|cible|port[eé]e|inventaire|[eé]quipe|d[eé]s[eé]quipe)\b/u;
-  const exploration = /\b(regarde|observer?|observe|fouille|chercher?|cherche|inspecte|examine|[eé]coute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|va vers|qui est|qu['’]est-ce|o[uù] est|pourquoi)\b/u;
-  const sensitive = /\b(suicide|me tuer|mutil|torture|violer|ignore (?:les )?instructions|prompt)\b/u;
-  return mechanics.test(normalized) || exploration.test(normalized) || sensitive.test(normalized);
-}
-
-async function runCompactNarrator(playerInput: string): Promise<string> {
-  const state = useGameStore.getState();
-  const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
+async function runCompactClassifier(playerInput: string): Promise<AutomaticDomainAgent | null> {
   const prompt = [
-    "Tu es le Narrateur d'un jeu de rôle fantasy. Réponds au joueur avec une prose brève, immersive et concrète.",
-    "N'invente pas de résultat mécanique, de jet, de dégât ou de changement d'état. Pour une action qui exigerait une règle, pose une question ou décris seulement l'intention.",
-    "Réponds uniquement par un JSON valide: {\"narration\":\"...\"}.",
-    "",
-    "# Joueur",
-    JSON.stringify(character ? {
-      name: character.name,
-      classe: character.classe,
-      niveau: character.niveau,
-    } : null),
-    "# Ton et monde",
-    JSON.stringify({
-      style: state.campaign.style,
-      lore: truncate(state.campaign.world.lore, 550),
-      facts: state.campaign.world.facts.slice(-3).map((fact) => truncate(fact, 180)),
-    }),
-    "# Derniers échanges",
-    JSON.stringify(state.messages.slice(-4).map((message) => ({
-      sender: message.sender,
-      content: truncate(message.content, 260),
-    }))),
-    "# Réponse du joueur",
-    truncate(playerInput, 1_000),
+    "Classe une demande de jeu de rôle dans UN domaine, sans la résoudre.",
+    "characterManager=fiche/objet/capacité; actionManager=test/action physique ou sociale; combatManager=combat tactique; worldManager=exploration/PNJ/lieu; null=conversation pure.",
+    'Réponds uniquement par {"agentRequests":[{"agent":"...","reason":""}],"commands":[],"narration":""} ou {"agentRequests":[],"commands":[],"narration":""}.',
+    `Demande: ${truncate(playerInput, 500)}`,
   ].join("\n");
+  const response = parseRequiredResponse(await runAgentOverHttp("requestAnalyzer", prompt), "requestAnalyzer");
+  const candidate = response.agentRequests[0]?.agent;
+  return candidate === "characterManager" || candidate === "actionManager" || candidate === "combatManager" || candidate === "worldManager"
+    ? candidate
+    : null;
+}
 
-  const rawResponse = await runAgentOverHttp("narrationManager", prompt);
-  const parsed = parseAiDirectorResponse(rawResponse);
+async function runDomainAgent(agentId: AutomaticDomainAgent, playerInput: string): Promise<AiDirectorResponse> {
+  const prompt = buildAutomaticDomainPrompt(agentId, useGameStore.getState(), playerInput);
+  return parseRequiredResponse(await runAgentOverHttp(agentId, prompt), agentId);
+}
 
-  if (parsed.response?.narration.trim()) {
-    return parsed.response.narration.trim();
-  }
+async function runSafetyReview(playerInput: string): Promise<AiDirectorResponse> {
+  const prompt = [
+    "Rôle: vérifier uniquement si la demande nécessite une redirection narrative de sécurité.",
+    "Les thèmes sombres de fantasy restent autorisés; distingue fiction grave et intention réelle d'autodestruction.",
+    'Réponds uniquement par {"narration":"","commands":[],"agentRequests":[],"draftPatch":{"safety":[],"warnings":[],"narrationInputs":[]}}.',
+    `Demande: ${truncate(playerInput, 900)}`,
+  ].join("\n");
+  return parseRequiredResponse(await runAgentOverHttp("requestAnalyzer", prompt), "requestAnalyzer");
+}
 
-  const plainText = rawResponse.replace(/^```(?:text|markdown)?\s*/iu, "").replace(/\s*```$/u, "").trim();
+async function runNarrator(
+  playerInput: string,
+  packet: ReturnType<typeof createNarrationPacket>,
+): Promise<string> {
+  const prompt = buildAutomaticNarrationPrompt(useGameStore.getState(), playerInput, packet);
+  const raw = await runAgentOverHttp("narrationManager", prompt);
+  const parsed = parseAiDirectorResponse(raw);
+  const narration = parsed.response?.narration.trim();
+
+  if (narration) return narration;
+
+  const plainText = raw.replace(/^```(?:text|markdown)?\s*/iu, "").replace(/\s*```$/u, "").trim();
   if (plainText && !plainText.startsWith("{")) return plainText;
   throw new Error(parsed.errors[0] ?? "Réponse du Narrateur illisible.");
 }
 
-async function runNarrator(playerInput: string, draft: AiResolutionDraft): Promise<string> {
-  const request: AiAgentRequest = {
-    agent: "narrationManager",
-    reason: "Étape obligatoire : répondre au joueur à partir des faits disponibles.",
-  };
-  const prompt = buildAiDirectorPrompt(createSnapshot(useGameStore.getState()), "narrationManager", {
-    playerInput,
-    request,
-    resolutionDraft: draft,
-    executionMode: "automatic",
-  });
-  const rawResponse = await runAgentOverHttp("narrationManager", prompt);
-  const parsed = parseAiDirectorResponse(rawResponse);
-
-  if (parsed.response) {
-    return getNarrationText(parsed.response);
-  }
-
-  const plainText = rawResponse.replace(/^```(?:text|markdown)?\s*/iu, "").replace(/\s*```$/u, "").trim();
-  if (plainText && !plainText.startsWith("{")) {
-    return plainText;
-  }
-
-  throw new Error(parsed.errors[0] ?? "Réponse du Narrateur illisible.");
-}
-
-async function runAgent(
-  agentId: AiAgentId,
-  playerInput: string,
-  draft: AiResolutionDraft,
-  request?: AiAgentRequest,
-): Promise<AiDirectorResponse> {
-  const promptOptions: AiDirectorPromptOptions = {
-    playerInput,
-    request,
-    resolutionDraft: draft,
-    executionMode: "automatic",
-  };
-  const prompt = buildAiDirectorPrompt(createSnapshot(useGameStore.getState()), agentId, promptOptions);
-  const rawResponse = await runAgentOverHttp(agentId, prompt);
-  const parsed = parseAiDirectorResponse(rawResponse);
-
-  if (!parsed.response) {
-    throw new Error(parsed.errors[0] ?? `${agentId} a renvoyé une réponse inexploitable.`);
-  }
-
+function parseRequiredResponse(raw: string, agentId: AiAgentId): AiDirectorResponse {
+  const parsed = parseAiDirectorResponse(raw);
+  if (!parsed.response) throw new Error(parsed.errors[0] ?? `${agentId} a renvoyé une réponse illisible.`);
   return parsed.response;
 }
 
-function selectRelevantAgents(
-  requests: AiAgentRequest[],
-  playerInput: string,
-  draft: AiResolutionDraft,
-): AiAgentId[] {
-  if (isPureConversation(playerInput, draft)) {
-    return [];
-  }
-
-  const requested = new Set(
-    requests
-      .map((request) => request.agent)
-      .filter((agent): agent is AiAgentId => AUTOMATIC_AGENT_ORDER.includes(agent)),
-  );
-  inferFallbackAgents(playerInput).forEach((agent) => requested.add(agent));
-
-  return AUTOMATIC_AGENT_ORDER.filter((agent) => requested.has(agent));
-}
-
-/** Filet local : l'analyseur peut être concis, mais pas faire disparaître un domaine nécessaire. */
-function inferFallbackAgents(playerInput: string): AiAgentId[] {
-  const normalized = playerInput.toLocaleLowerCase("fr-FR");
-  const agents = new Set<AiAgentId>();
-
-  if (/\b(attaque|attaquer|tirer|tire|combat|ennemi|cible|port[eé]e|d[eé]place|d[eé]placement|d[eé]sengage)\b/u.test(normalized)) {
-    agents.add("combatManager");
-  }
-
-  if (/\b(utilise|utiliser|consomme|bois|potion|fiole|parchemin|inventaire|[eé]quipe|d[eé]s[eé]quipe|capacit[ée])\b/u.test(normalized)) {
-    agents.add("characterManager");
-  }
-
-  if (/\b(jet|d20|d6|test|sauvegarde|difficult[eé]|forcer|escalader|convaincre)\b/u.test(normalized)) {
-    agents.add("actionManager");
-  }
-
-  if (/\b(regarde|observer?|observe|fouille|chercher?|cherche|inspecte|examine|[eé]coute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|va vers|qui est|qu['’]est-ce|o[uù] est|pourquoi)\b/u.test(normalized)) {
-    agents.add("worldManager");
-  }
-
-  return [...agents];
-}
-
-function isPureConversation(playerInput: string, draft: AiResolutionDraft): boolean {
-  const requiresResolution = draft.intentions.some((intention) => intention.requiresResolution);
-
-  return isSmallTalkMessage(playerInput) && !requiresResolution;
-}
-
-function isSmallTalkMessage(playerInput: string): boolean {
-  return /^(bonjour|bonsoir|salut|coucou|merci|au revoir|bonne nuit|ça va|ca va)[!.?\s]*$/iu
-    .test(playerInput.trim().toLocaleLowerCase("fr-FR"));
-}
-
 function executeValidatedCommands(commands: AiDirectorCommand[]) {
-  const executableCommands = commands.filter((command) => command.type !== "sendNarration");
-  if (!executableCommands.length) return [];
-
+  if (!commands.length) return [];
   const snapshot = createSnapshot(useGameStore.getState());
-  const validations = validateAiCommands(executableCommands, {
+  const validations = validateAiCommands(commands, {
     characters: snapshot.characters,
     selectedCharacterId: snapshot.selectedCharacterId,
     combat: snapshot.combat,
     itemTemplates: snapshot.itemTemplates,
     itemInstances: snapshot.itemInstances,
   });
+  const errors = validations.filter((validation) => validation.status === "error");
 
-  if (validations.some((validation) => validation.status === "error")) {
-    return validations
-      .filter((validation) => validation.status === "error")
-      .map((validation) => ({ status: "error" as const, message: validation.message, command: JSON.stringify(validation.command) }));
+  if (errors.length) {
+    return errors.map((validation) => ({
+      status: "error" as const,
+      message: validation.message,
+      command: JSON.stringify(validation.command),
+    }));
   }
 
-  return executableCommands.map((command) => {
+  return commands.map((command) => {
     const state = useGameStore.getState();
     return executeAiCommand(command, createSnapshot(state), state);
   });
-}
-
-function getNarrationText(response: AiDirectorResponse): string {
-  const explicitNarration = response.narration.trim();
-  if (explicitNarration) return explicitNarration;
-
-  const narrationCommand = response.commands.find((command) => command.type === "sendNarration");
-  return narrationCommand?.content.trim() ?? "";
 }
 
 function createSnapshot(state: GameState): AiPromptSnapshot {
@@ -310,27 +182,8 @@ function createSnapshot(state: GameState): AiPromptSnapshot {
   };
 }
 
-function createExecutionDraft(results: Array<{ status: "success" | "error" | "info"; message: string }>): AiResolutionDraftPatch {
-  return {
-    facts: results.map((result) => ({
-      source: "moteur local",
-      kind: result.status === "error" ? "échec d'exécution" : "résultat d'exécution",
-      content: result.message,
-      visibility: result.status === "error" ? "requiresCheck" as const : "playerVisible" as const,
-    })),
-    narrationInputs: results.map((result) => ({
-      source: "moteur local",
-      content: result.status === "error" ? `Action refusée : ${result.message}` : `Résultat confirmé : ${result.message}`,
-      priority: "high" as const,
-      visibility: result.status === "error" ? "requiresCheck" as const : "playerVisible" as const,
-    })),
-    warnings: results.filter((result) => result.status === "error").map((result) => result.message),
-  };
-}
-
 function mergeResolutionDraft(draft: AiResolutionDraft, patch?: AiResolutionDraftPatch): AiResolutionDraft {
   if (!patch) return draft;
-
   return {
     intentions: mergeUnique(draft.intentions, patch.intentions),
     facts: mergeUnique(draft.facts, patch.facts),
@@ -341,18 +194,6 @@ function mergeResolutionDraft(draft: AiResolutionDraft, patch?: AiResolutionDraf
     warnings: mergeUniqueStrings(draft.warnings, patch.warnings),
     questions: mergeUniqueStrings(draft.questions, patch.questions),
   };
-}
-
-function addAutomationWarning(draft: AiResolutionDraft, warning: string): AiResolutionDraft {
-  return mergeResolutionDraft(draft, { warnings: [warning] });
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "erreur inconnue";
-}
-
-function truncate(value: string, maximumLength: number): string {
-  return value.length > maximumLength ? `${value.slice(0, maximumLength - 1)}…` : value;
 }
 
 function mergeUnique<T>(current: T[], additions?: T[]): T[] {
@@ -375,4 +216,12 @@ function mergeUniqueStrings(current: string[], additions?: string[]): string[] {
     seen.add(value);
     return true;
   })];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "erreur inconnue";
+}
+
+function truncate(value: string, maximumLength: number): string {
+  return value.length > maximumLength ? `${value.slice(0, maximumLength - 1)}…` : value;
 }
