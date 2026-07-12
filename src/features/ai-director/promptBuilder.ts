@@ -143,6 +143,7 @@ export function buildAiDirectorPrompt(
           [
             "- Une salutation, un remerciement, une formule sociale ou une question purement narrative ne requiert AUCUN agent métier : laisse agentRequests vide.",
             "- N'appelle Gérer monde que si une information de monde, un PNJ, un lieu ou un fait durable doit réellement être déterminé ou modifié.",
+            "- Une exploration, une interaction avec un PNJ ou une question sur la scène doit normalement appeler Gérer monde pour fournir des faits au Narrateur.",
             "- N'appelle Gérer actions que si un test, un jet, une opposition ou une difficulté doit être résolu.",
             "- N'appelle Gérer perso ou Gérer combat que si une règle, une ressource, un objet, une capacité ou une situation tactique est touchée.",
             "- N'ajoute jamais Gérer narration à agentRequests : il est appelé automatiquement, toujours en dernier.",

@@ -113,8 +113,9 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
 function requiresFullResolution(playerInput: string): boolean {
   const normalized = playerInput.toLocaleLowerCase("fr-FR");
   const mechanics = /\b(attaque|attaquer|tirer|tire|lance|utilise|utiliser|consomme|bois|potion|fiole|parchemin|sort|capacit[ée]|jet|d20|d6|test|sauvegarde|dég[aâ]ts?|soigne|soin|d[eé]place|d[eé]placement|combat|ennemi|cible|port[eé]e|inventaire|[eé]quipe|d[eé]s[eé]quipe)\b/u;
+  const exploration = /\b(regarde|observer?|observe|fouille|chercher?|cherche|inspecte|examine|[eé]coute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|va vers|qui est|qu['’]est-ce|o[uù] est|pourquoi)\b/u;
   const sensitive = /\b(suicide|me tuer|mutil|torture|violer|ignore (?:les )?instructions|prompt)\b/u;
-  return mechanics.test(normalized) || sensitive.test(normalized);
+  return mechanics.test(normalized) || exploration.test(normalized) || sensitive.test(normalized);
 }
 
 async function runCompactNarrator(playerInput: string): Promise<string> {
@@ -221,8 +222,33 @@ function selectRelevantAgents(
       .map((request) => request.agent)
       .filter((agent): agent is AiAgentId => AUTOMATIC_AGENT_ORDER.includes(agent)),
   );
+  inferFallbackAgents(playerInput).forEach((agent) => requested.add(agent));
 
   return AUTOMATIC_AGENT_ORDER.filter((agent) => requested.has(agent));
+}
+
+/** Filet local : l'analyseur peut être concis, mais pas faire disparaître un domaine nécessaire. */
+function inferFallbackAgents(playerInput: string): AiAgentId[] {
+  const normalized = playerInput.toLocaleLowerCase("fr-FR");
+  const agents = new Set<AiAgentId>();
+
+  if (/\b(attaque|attaquer|tirer|tire|combat|ennemi|cible|port[eé]e|d[eé]place|d[eé]placement|d[eé]sengage)\b/u.test(normalized)) {
+    agents.add("combatManager");
+  }
+
+  if (/\b(utilise|utiliser|consomme|bois|potion|fiole|parchemin|inventaire|[eé]quipe|d[eé]s[eé]quipe|capacit[ée])\b/u.test(normalized)) {
+    agents.add("characterManager");
+  }
+
+  if (/\b(jet|d20|d6|test|sauvegarde|difficult[eé]|forcer|escalader|convaincre)\b/u.test(normalized)) {
+    agents.add("actionManager");
+  }
+
+  if (/\b(regarde|observer?|observe|fouille|chercher?|cherche|inspecte|examine|[eé]coute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|va vers|qui est|qu['’]est-ce|o[uù] est|pourquoi)\b/u.test(normalized)) {
+    agents.add("worldManager");
+  }
+
+  return [...agents];
 }
 
 function isPureConversation(playerInput: string, draft: AiResolutionDraft): boolean {
