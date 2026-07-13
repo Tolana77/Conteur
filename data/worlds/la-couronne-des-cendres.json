@@ -1,0 +1,559 @@
+{
+  "schemaVersion": 1,
+  "campaign": {
+    "name": "La Couronne des Cendres",
+    "style": "Fantasy féodale sombre, intrigues dynastiques, diplomatie, guerre limitée et surnaturel ambigu",
+    "level": 3,
+    "elevatorPitch": "Le roi de Valdorne meurt au moment où la famine, les dettes et les anciennes rancunes fracturent le royaume. Tandis que cinq puissances préparent la succession, des cendres tombent dans les salles où l’on prononce un faux serment.",
+    "centralQuestion": "Qui peut légitimement gouverner un royaume dont la loi de succession repose peut-être sur un mensonge fondateur ?",
+    "openingScene": "Les personnages assistent aux funérailles du roi Aldemar dans la Citadelle des Sept Cloches. Au moment où sa fille Maëlys doit jurer de respecter le testament royal, la troisième cloche sonne seule, une pluie de cendres tombe sous les voûtes et le cercueil se fend : le sceau du roi a disparu. Trois messagers ferment aussitôt les portes, chacun accusant un camp différent. Avant que la garde ne fouille l’assemblée, une jeune page glisse aux personnages une moitié de charte couverte de cire noire et murmure que l’autre moitié se trouve sur le cadavre d’un homme qui n’est pas encore mort. Ils doivent choisir entre protéger la page, remettre la charte à une faction ou profiter du chaos pour enquêter sur le cercueil."
+  },
+  "world": {
+    "name": "Le Royaume de Valdorne",
+    "lore": "Valdorne fut unifié deux siècles plus tôt après la Guerre des Treize Bannières. Le premier roi fit fondre les sceaux des vaincus avec les poutres brûlées de leurs forteresses afin de forger la Couronne des Cendres. La paix qui suivit repose sur la Charte de Varenne : elle fixe la succession, limite les levées militaires et garantit aux grandes maisons une part des taxes du sel. Depuis vingt ans, le roi Aldemar a acheté la stabilité par des mariages, des exemptions et des emprunts. Sa mort révèle un royaume légalement uni mais politiquement insolvable. Les récoltes ont échoué dans l’ouest, les soldats des Marches n’ont pas été payés et la Ligue du Sel détient assez de créances pour affamer la capitale. Dans le même temps, un phénomène ancien réapparaît : les serments publiquement trahis laissent derrière eux une cendre tiède qui murmure parfois le nom du parjure.",
+    "tone": "Grave, politique et humain ; la violence est brève mais lourde de conséquences, l’humour vient des personnes plutôt que de la parodie, et le surnaturel demeure rare, concret et inquiétant.",
+    "themes": [
+      "Légitimité contre compétence",
+      "Dette et dépendance",
+      "Famille comme institution politique",
+      "Vérité historique et paix civile",
+      "Prix moral de la stabilité"
+    ],
+    "rules": [
+      "Un serment librement prononcé devant trois témoins laisse une trace de cendre s’il est volontairement trahi.",
+      "Aucune grande maison ne peut légalement lever plus de trois mille soldats sans l’accord de la Couronne ou du Synode.",
+      "Le sel rouge des mines de Sorelle conserve les aliments mais provoque des rêves identiques chez ceux qui en consomment longtemps.",
+      "La Charte de Varenne fait primer la descendance directe sans distinction de sexe, mais plusieurs copies officielles disent le contraire.",
+      "Les dettes royales sont garanties par les péages, les greniers de la capitale et les rançons des nobles détenus à la cour."
+    ],
+    "facts": [
+      "Le roi Aldemar est mort sans avoir présenté publiquement son testament.",
+      "La princesse Maëlys gouvernait déjà le Conseil en l’absence de son père, mais son mariage avec un prince étranger inquiète l’armée.",
+      "Le duc Odran Corvail affirme que la loi exclut les femmes de la succession et dispose de la plus grande armée privée.",
+      "Les greniers de la capitale ne contiennent que six semaines de réserves.",
+      "La Ligue du Sel possède près de la moitié de la dette royale et contrôle les barges qui ravitaillent Varenne.",
+      "Les garnisons des Marches de Bruine n’ont pas reçu leur solde depuis quatre mois.",
+      "Des cendres sont apparues lors de trois audiences publiques où des nobles ont ensuite été convaincus de mensonge.",
+      "Le Synode des Neuf refuse de couronner un souverain avant que le sceau royal et la Charte originale aient été retrouvés."
+    ],
+    "factions": [
+      {
+        "id": "maison-ardenne",
+        "name": "Maison Ardenne",
+        "goal": "Faire reconnaître Maëlys comme reine selon la succession directe et préserver l’unité administrative du royaume.",
+        "method": "Maintenir les institutions, négocier des mariages, acheter les indécis et présenter toute opposition comme une menace contre la paix.",
+        "resource": "La bureaucratie royale, la garde de la capitale et les archives fiscales.",
+        "relationship": "Soutenue prudemment par le Synode, dépendante des prêts de la Ligue du Sel et détestée par la Maison Corvail."
+      },
+      {
+        "id": "maison-corvail",
+        "name": "Maison Corvail",
+        "goal": "Couronner le duc Odran au nom d’une version masculine de la succession et restaurer l’autonomie militaire des grands seigneurs.",
+        "method": "Mobiliser les vassaux, provoquer des incidents frontaliers et promettre terres ou exemptions aux maisons secondaires.",
+        "resource": "Quatre forteresses, une cavalerie aguerrie et les récoltes encore intactes du sud-est.",
+        "relationship": "En guerre froide avec les Ardenne, courtisée par les Marches et secrètement financée par une branche de la Ligue."
+      },
+      {
+        "id": "synode-neuf",
+        "name": "Synode des Neuf",
+        "goal": "Éviter une guerre civile tout en imposant à la future Couronne un droit de contrôle sur les serments, les mariages et les régences.",
+        "method": "Retarder le couronnement, authentifier les reliques, menacer d’excommunication et offrir une médiation publique.",
+        "resource": "Les tribunaux du serment, les hospices, les écoles de scribes et la confiance du peuple.",
+        "relationship": "Arbitre officiel entre Ardenne et Corvail, mais profondément divisé entre réformateurs et gardiens de l’ordre ancien."
+      },
+      {
+        "id": "ligue-sel",
+        "name": "Ligue du Sel Rouge",
+        "goal": "Transformer les dettes royales en droits politiques permanents sur les ports, les mines et la monnaie.",
+        "method": "Retenir les convois, manipuler les taux, financer plusieurs camps et rendre publics certains registres au moment opportun.",
+        "resource": "Les barges fluviales, les mines de Sorelle, un réseau de comptoirs et les livres de dette du royaume.",
+        "relationship": "Indispensable à tous, aimée de personne ; elle préfère une monarchie faible mais stable à une victoire totale d’un camp."
+      },
+      {
+        "id": "fraternite-bruine",
+        "name": "Fraternité de la Bruine",
+        "goal": "Obtenir le paiement des garnisons, l’autonomie des Marches et des renforts contre les clans d’au-delà des cols.",
+        "method": "Occuper les péages, retenir les nobles en voyage et menacer de reconnaître le premier prétendant qui répondra à ses exigences.",
+        "resource": "Les vétérans des cols, les tours de signal et le contrôle de la seule route terrestre vers le nord.",
+        "relationship": "Méprise la cour, négocie avec Corvail et protège pourtant les villages qui fournissent le blé des Ardenne."
+      }
+    ],
+    "locations": [
+      {
+        "id": "citadelle-sept-cloches",
+        "name": "Citadelle des Sept Cloches",
+        "description": "Un palais-forteresse de pierre grise où chaque cour correspond à un degré d’accès au souverain. La troisième cloche, murée depuis un siècle, vient de sonner.",
+        "role": "Centre politique, lieu du couronnement et piège où toutes les factions se surveillent.",
+        "desire": "Retrouver un ordre rituel après la mort du roi.",
+        "fear": "Voir ses portes ouvertes par une armée ou par une émeute affamée.",
+        "secret": "Un conduit acoustique relie la cloche murée aux anciennes salles du tribunal des serments.",
+        "importance": "Les décisions publiques prises ici deviennent immédiatement des faits politiques dans tout le royaume.",
+        "connections": [
+          "npc-maelys-ardenne",
+          "npc-isoria-vel",
+          "objet-couronne-cendres",
+          "secret-troisieme-cloche"
+        ],
+        "tags": ["capitale", "palais", "couronnement", "intrigue"]
+      },
+      {
+        "id": "port-varenne",
+        "name": "Port de Varenne",
+        "description": "Une ville d’estuaire ceinte d’entrepôts fortifiés. Les quais sont calmes parce que les bateliers de la Ligue refusent de décharger le grain.",
+        "role": "Poumon alimentaire de la capitale et place de négociation avec la Ligue du Sel.",
+        "desire": "Reprendre le commerce avant que les quartiers pauvres ne se soulèvent.",
+        "fear": "Un incendie des greniers ou un blocus militaire.",
+        "secret": "Des cargaisons déclarées comme sel transportent des armes destinées à deux factions opposées.",
+        "importance": "Contrôler le port permet de nourrir Varenne ou de forcer sa reddition sans bataille.",
+        "connections": [
+          "ligue-sel",
+          "npc-selka-vorr",
+          "objet-registre-sorelle",
+          "conflit-greniers"
+        ],
+        "tags": ["port", "commerce", "famine", "contrebande"]
+      },
+      {
+        "id": "abbaye-cendre-blanche",
+        "name": "Abbaye de la Cendre Blanche",
+        "description": "Un monastère accroché à une falaise de craie, célèbre pour ses copistes aveugles capables d’identifier une encre à son odeur.",
+        "role": "Lieu d’authentification des chartes et refuge officiel des négociateurs.",
+        "desire": "Préserver la crédibilité du Synode et la paix sacrée de ses murs.",
+        "fear": "Découvrir que ses propres archives ont servi à falsifier la loi.",
+        "secret": "Le registre des encres prouve que deux versions de la Charte furent copiées la même nuit.",
+        "importance": "Ses conclusions peuvent légitimer un souverain ou rendre toute succession juridiquement impossible.",
+        "connections": [
+          "synode-neuf",
+          "npc-prelat-severan",
+          "npc-elia-sorne",
+          "secret-deux-chartes"
+        ],
+        "tags": ["abbaye", "archives", "diplomatie", "preuve"]
+      },
+      {
+        "id": "fort-brumehaute",
+        "name": "Fort Brumehaute",
+        "description": "Une forteresse noire dominant trois cols, tenue par des soldats qui ont commencé à graver le nombre de jours sans solde sur leurs boucliers.",
+        "role": "Verrou militaire des Marches et foyer potentiel d’une mutinerie honorable.",
+        "desire": "Recevoir solde, vivres et reconnaissance avant l’hiver.",
+        "fear": "Abandonner les villages aux clans du nord ou devenir les rebelles qu’ils dénoncent.",
+        "secret": "Le commandant a laissé passer des émissaires ennemis pour négocier un cessez-le-feu local.",
+        "importance": "Sa défection ouvrirait le nord et donnerait une armée de vétérans au prétendant choisi.",
+        "connections": [
+          "fraternite-bruine",
+          "npc-marechal-rovan",
+          "conflit-soldes",
+          "hook-serment-sans-solde"
+        ],
+        "tags": ["forteresse", "frontière", "armée", "mutinerie"]
+      },
+      {
+        "id": "mines-sorelle",
+        "name": "Mines de Sorelle",
+        "description": "Des galeries rouges creusées sous une ville ouvrière où le sel colore la peau et donne aux dormeurs le même rêve d’un roi sans visage.",
+        "role": "Source de richesse de la Ligue et origine possible du phénomène des cendres.",
+        "desire": "Continuer à produire malgré les effondrements et les visions collectives.",
+        "fear": "Que la Couronne nationalise les puits ou que les mineurs découvrent ce qui repose sous la veine principale.",
+        "secret": "La galerie royale contient les restes vitrifiés d’une salle de serment antérieure au royaume.",
+        "importance": "Le sel finance la guerre, conserve le grain et relie matériellement la crise politique au surnaturel.",
+        "connections": [
+          "ligue-sel",
+          "npc-selka-vorr",
+          "objet-couronne-cendres",
+          "secret-origine-cendres"
+        ],
+        "tags": ["mine", "sel", "ouvriers", "surnaturel"]
+      },
+      {
+        "id": "plaine-chenes-pendus",
+        "name": "Plaine des Chênes Pendus",
+        "description": "Un ancien champ de bataille où les arbres morts portent encore les chaînes des bannières vaincues. Deux armées y campent hors de portée d’arc.",
+        "role": "Lieu de confrontation militaire, de pourparlers et de provocations calculées.",
+        "desire": "Recevoir une décision avant que la faim et la peur ne déclenchent la bataille.",
+        "fear": "Qu’un incident mineur rende la guerre inévitable.",
+        "secret": "Des hommes des deux camps sont payés par le même intermédiaire pour provoquer une escarmouche.",
+        "importance": "La première bataille définirait la guerre comme une rébellion ou comme une succession disputée.",
+        "connections": [
+          "maison-ardenne",
+          "maison-corvail",
+          "npc-odran-corvail",
+          "conflit-premiere-bataille"
+        ],
+        "tags": ["champ-de-bataille", "armée", "négociation", "provocation"]
+      },
+      {
+        "id": "palais-miroirs-fumes",
+        "name": "Palais des Miroirs Fumés",
+        "description": "La résidence de la reine douairière, dont les miroirs d’argent terni permettent d’observer les pièces voisines sans y être vu.",
+        "role": "Salon diplomatique officieux où se négocient mariages, otages et réputations.",
+        "desire": "Rester le lieu où chacun vient parler avant de prendre une décision publique.",
+        "fear": "Qu’une correspondance privée révèle vingt années de compromis contradictoires.",
+        "secret": "Une galerie condamnée conserve les lettres par lesquelles Aldemar promettait la succession à trois personnes différentes.",
+        "importance": "Il contient assez de preuves pour fabriquer une coalition ou détruire toute confiance entre les camps.",
+        "connections": [
+          "npc-reine-yselda",
+          "npc-isoria-vel",
+          "secret-promesses-roi",
+          "hook-banquet-trois-fiancailles"
+        ],
+        "tags": ["palais", "espionnage", "mariage", "secrets"]
+      },
+      {
+        "id": "ile-roche-serment",
+        "name": "Île de la Roche du Serment",
+        "description": "Un îlot battu par les marées où les premiers seigneurs jurèrent fidélité. À marée basse, des mots apparaissent sous les noms gravés.",
+        "role": "Site du pacte fondateur et destination d’une enquête historique dangereuse.",
+        "desire": "Révéler ce qui fut réellement promis lors de l’unification.",
+        "fear": "Être détruite par ceux dont la légitimité dépend du récit officiel.",
+        "secret": "Le serment originel ne désignait pas une dynastie, mais un gardien révocable élu par les maisons.",
+        "importance": "Sa preuve pourrait abolir la succession héréditaire au moment même où tous se battent pour elle.",
+        "connections": [
+          "objet-charte-varenne",
+          "npc-elia-sorne",
+          "secret-pacte-electif",
+          "hook-maree-des-noms"
+        ],
+        "tags": ["île", "origine", "serment", "preuve"]
+      }
+    ],
+    "npcs": [
+      {
+        "id": "npc-maelys-ardenne",
+        "name": "Maëlys Ardenne",
+        "description": "Fille aînée du roi, trente ans, regard direct et mémoire redoutable des dossiers. Elle porte déjà le deuil comme un uniforme de fonction.",
+        "role": "Prétendante légaliste et dirigeante compétente dont les alliances étrangères nourrissent la méfiance.",
+        "desire": "Être couronnée sans déclencher une guerre qui rendrait sa victoire vide.",
+        "fear": "Découvrir que son père a lui-même falsifié la loi qui fonde sa revendication.",
+        "secret": "Elle savait depuis six mois que la santé du roi déclinait et a retardé l’annonce pour renégocier un prêt.",
+        "importance": "Elle peut devenir souveraine, alliée exigeante ou adversaire institutionnelle des personnages.",
+        "connections": ["maison-ardenne", "npc-reine-yselda", "npc-odran-corvail", "citadelle-sept-cloches"],
+        "tags": ["prétendante", "administratrice", "légaliste"]
+      },
+      {
+        "id": "npc-odran-corvail",
+        "name": "Odran Corvail",
+        "description": "Duc du sud-est, vétéran massif à la voix basse. Il écoute longtemps avant de poser une question dont il connaît souvent la réponse.",
+        "role": "Prétendant militaire défendant les privilèges féodaux et une lecture contestée de la succession.",
+        "desire": "Obtenir une reconnaissance légale avant que ses vassaux les plus belliqueux ne le dépassent.",
+        "fear": "Gagner grâce à une guerre qu’il ne pourra ensuite ni payer ni arrêter.",
+        "secret": "Sa copie de la Charte est fausse, mais il croit sincèrement que l’originale disait la même chose.",
+        "importance": "Il offre une alternative crédible à Maëlys et peut choisir la négociation, le coup de force ou le retrait honorable.",
+        "connections": ["maison-corvail", "npc-maelys-ardenne", "npc-marechal-rovan", "plaine-chenes-pendus"],
+        "tags": ["prétendant", "général", "conservateur"]
+      },
+      {
+        "id": "npc-reine-yselda",
+        "name": "Yselda Vaure, reine douairière",
+        "description": "Veuve du roi, issue d’une maison étrangère. Sa courtoisie parfaite oblige chacun à entendre les menaces qu’elle ne formule jamais.",
+        "role": "Faiseuse de coalitions cherchant à préserver ses enfants et l’œuvre politique de son mari.",
+        "desire": "Forcer Maëlys et Odran à accepter une régence partagée avant la fin du deuil.",
+        "fear": "Que les lettres d’Aldemar prouvent qu’il préparait son renvoi et l’annulation de leur mariage.",
+        "secret": "Elle a fait déplacer le sceau royal avant les funérailles, mais quelqu’un l’a volé à son propre agent.",
+        "importance": "Elle connaît les faiblesses privées de presque tous les dirigeants et peut empêcher ou précipiter la guerre.",
+        "connections": ["maison-ardenne", "npc-maelys-ardenne", "npc-isoria-vel", "palais-miroirs-fumes"],
+        "tags": ["reine", "diplomate", "régence"]
+      },
+      {
+        "id": "npc-prelat-severan",
+        "name": "Prélat Sévéran",
+        "description": "Premier des Neuf, vieil homme frêle dont les mains tremblent sauf lorsqu’il tient un document ancien.",
+        "role": "Arbitre religieux de la succession et gardien d’une institution divisée.",
+        "desire": "Obtenir une solution que les temples ruraux accepteront sans schisme.",
+        "fear": "Que la vérité sur la Charte détruise l’autorité du Synode en révélant sa complicité historique.",
+        "secret": "Il a vu l’originale trente ans plus tôt et sait que la clause élective a été grattée.",
+        "importance": "Son jugement peut rendre une revendication sacrée, hérétique ou temporairement acceptable.",
+        "connections": ["synode-neuf", "abbaye-cendre-blanche", "npc-elia-sorne", "secret-pacte-electif"],
+        "tags": ["religieux", "arbitre", "érudit"]
+      },
+      {
+        "id": "npc-selka-vorr",
+        "name": "Selka Vorr",
+        "description": "Directrice de la Ligue, ancienne batelière aux doigts tachés de sel rouge. Elle parle en prix, délais et conséquences mesurables.",
+        "role": "Créancière du royaume et puissance économique capable de nourrir ou d’affamer la capitale.",
+        "desire": "Obtenir un siège permanent au Conseil et la propriété des mines en échange d’un moratoire.",
+        "fear": "Qu’une guerre totale détruise les débiteurs dont dépend toute sa richesse.",
+        "secret": "Elle finance Odran et Maëlys par deux filiales qui ignorent travailler pour la même personne.",
+        "importance": "Elle transforme chaque victoire militaire en problème logistique et chaque compromis moral en contrat.",
+        "connections": ["ligue-sel", "port-varenne", "mines-sorelle", "objet-registre-sorelle"],
+        "tags": ["marchande", "créancière", "logistique"]
+      },
+      {
+        "id": "npc-marechal-rovan",
+        "name": "Maréchal Rovan d’Aspre",
+        "description": "Commandant des Marches, boiteux depuis la dernière campagne. Ses soldats l’appellent père quand il n’écoute pas.",
+        "role": "Chef militaire loyal au royaume mais plus à aucune personne de la cour.",
+        "desire": "Garantir solde et renforts à ses garnisons avant de reconnaître un souverain.",
+        "fear": "Être forcé de marcher vers le sud pendant que le nord franchit les cols.",
+        "secret": "Il a signé un cessez-le-feu non autorisé avec une cheffe de clan du nord et lui a confié son fils comme otage volontaire.",
+        "importance": "Son choix peut équilibrer les armées ou faire basculer la succession sans bataille.",
+        "connections": ["fraternite-bruine", "fort-brumehaute", "npc-odran-corvail", "conflit-soldes"],
+        "tags": ["maréchal", "frontière", "vétéran"]
+      },
+      {
+        "id": "npc-isoria-vel",
+        "name": "Isoria Vel",
+        "description": "Maîtresse des audiences privées, toujours vêtue de gris perle. Elle ne ment presque jamais et préfère laisser les autres compléter ses phrases.",
+        "role": "Réseau d’espionnage officieux de la reine douairière et intermédiaire entre ennemis.",
+        "desire": "Empêcher qu’une seule faction obtienne assez de pouvoir pour purger les autres.",
+        "fear": "Que son réseau devienne la preuve d’un complot qu’elle cherchait précisément à éviter.",
+        "secret": "Elle a remis le sceau volé à une personne qu’elle croyait être l’archiviste Elia Sorne.",
+        "importance": "Elle distribue informations vraies, demi-vérités utiles et rendez-vous impossibles à obtenir autrement.",
+        "connections": ["npc-reine-yselda", "palais-miroirs-fumes", "npc-elia-sorne", "secret-sceau-double"],
+        "tags": ["espionne", "intermédiaire", "information"]
+      },
+      {
+        "id": "npc-elia-sorne",
+        "name": "Elia Sorne",
+        "description": "Jeune archiviste du Synode, ironique et insomniaque, qui transporte toujours plusieurs paires de gants pour ne pas contaminer les encres.",
+        "role": "Experte capable d’authentifier la Charte et de guider les personnages vers les preuves fondatrices.",
+        "desire": "Publier la vérité historique sans devenir l’instrument d’un prétendant.",
+        "fear": "Que la vérité déclenche une guerre pire que le mensonge qu’elle corrige.",
+        "secret": "Une personne utilise son nom et son sceau de copiste pour déplacer des documents royaux.",
+        "importance": "Elle relie les indices matériels, les archives et les conséquences politiques de leur révélation.",
+        "connections": ["abbaye-cendre-blanche", "npc-prelat-severan", "npc-isoria-vel", "objet-charte-varenne"],
+        "tags": ["archiviste", "alliée", "preuve"]
+      },
+      {
+        "id": "npc-tomas-renne",
+        "name": "Tomas Renne",
+        "description": "Député des quartiers de Varenne, boulanger devenu porte-parole après avoir empêché le pillage de son propre fournil.",
+        "role": "Voix politique des habitants de la capitale et mesure concrète du coût humain des intrigues nobles.",
+        "desire": "Ouvrir les greniers et instaurer un contrôle public des réserves.",
+        "fear": "Que la foule qu’il contient cesse de l’écouter et massacre des innocents.",
+        "secret": "Il négocie avec des contrebandiers de la Ligue pour nourrir trois quartiers, ce qui pourrait le faire pendre.",
+        "importance": "Il peut offrir une légitimité populaire, déclencher une assemblée ou empêcher une émeute.",
+        "connections": ["port-varenne", "npc-selka-vorr", "conflit-greniers", "hook-six-semaines-grain"],
+        "tags": ["roturier", "porte-parole", "famine"]
+      },
+      {
+        "id": "npc-cassian-orbe",
+        "name": "Cassian Orbe",
+        "description": "Médecin royal élégant et épuisé, connu pour tenir un registre précis de chaque substance administrée au roi.",
+        "role": "Témoin principal de la mort d’Aldemar et cible de toutes les accusations d’empoisonnement.",
+        "desire": "Prouver que le roi est mort de sa maladie avant qu’un camp ne fabrique un coupable utile.",
+        "fear": "Que son traitement expérimental ait accéléré la mort sans en être la cause première.",
+        "secret": "Les poumons du roi contenaient de la cendre rouge identique à celle des mines, alors qu’il n’avait jamais visité Sorelle.",
+        "importance": "Son diagnostic peut calmer une théorie de meurtre ou révéler le lien entre la Couronne et les mines.",
+        "connections": ["citadelle-sept-cloches", "mines-sorelle", "secret-origine-cendres", "hook-autopsie-roi"],
+        "tags": ["médecin", "témoin", "surnaturel"]
+      }
+    ],
+    "items": [
+      {
+        "id": "objet-charte-varenne",
+        "name": "Charte de Varenne",
+        "description": "Deux feuilles de peau très fine cousues ensemble, couvertes de corrections anciennes et de sceaux dont certains ont été remplacés.",
+        "role": "Preuve juridique centrale de la succession et du pacte originel.",
+        "desire": "Être réunie à ses fragments et lue dans son contexte complet.",
+        "fear": "Être réduite à une phrase commode par le camp qui la possède.",
+        "secret": "Sous une couture, une clause effacée décrit la Couronne comme une charge élective révocable.",
+        "importance": "Son authenticité et son interprétation peuvent couronner, déposer ou délégitimer tous les prétendants.",
+        "connections": ["ile-roche-serment", "npc-elia-sorne", "secret-deux-chartes", "secret-pacte-electif"],
+        "tags": ["document", "quête", "preuve", "succession"]
+      },
+      {
+        "id": "objet-couronne-cendres",
+        "name": "Couronne des Cendres",
+        "description": "Un cercle de métal sombre veiné de rouge, étonnamment léger. Sa face intérieure porte treize noms dont quatre ont été martelés.",
+        "role": "Symbole du pouvoir royal et réceptacle matériel des serments fondateurs.",
+        "desire": "Être portée par quelqu’un reconnu selon le pacte véritable.",
+        "fear": "Couronner un parjure et libérer les serments accumulés sous forme de cendres vivantes.",
+        "secret": "Elle ne juge pas le sang du porteur, mais la conformité de son accession au pacte originel.",
+        "importance": "Le couronnement peut devenir une épreuve surnaturelle publique impossible à falsifier sans conséquences.",
+        "connections": ["citadelle-sept-cloches", "mines-sorelle", "secret-origine-cendres", "secret-pacte-electif"],
+        "tags": ["relique", "couronne", "serment", "surnaturel"]
+      },
+      {
+        "id": "objet-registre-sorelle",
+        "name": "Grand Registre de Sorelle",
+        "description": "Un livre de comptes relié de cuir rouge, codé par poids de sel plutôt que par monnaie, où plusieurs versements portent des noms de fleurs.",
+        "role": "Preuve financière des doubles financements, des détournements de solde et des achats d’armes.",
+        "desire": "Être décodé avec les manifestes du port et les registres de la garnison.",
+        "fear": "Disparaître dans un incendie comptable avant que ses chiffres ne deviennent des accusations.",
+        "secret": "Le trésor royal a payé la dernière solde des Marches, mais l’argent a été redirigé vers une compagnie contrôlée par un proche du roi.",
+        "importance": "Il peut briser la Ligue, innocenter ses dirigeants ou révéler que la crise des soldes fut organisée depuis la cour.",
+        "connections": ["ligue-sel", "port-varenne", "npc-selka-vorr", "secret-solde-volee"],
+        "tags": ["registre", "finance", "preuve", "conspiration"]
+      }
+    ],
+    "conflicts": [
+      {
+        "id": "conflit-succession",
+        "title": "Deux lois pour une couronne",
+        "description": "Maëlys et Odran invoquent deux copies contradictoires de la Charte tandis que le Synode refuse de trancher sans l’originale.",
+        "stakes": "La définition même de la monarchie, la survie de la paix féodale et la légitimité de toute décision future.",
+        "participants": ["maison-ardenne", "maison-corvail", "synode-neuf"],
+        "escalation": ["Guerre de propagande", "Arrestation de témoins", "Couronnements concurrents", "Guerre civile ouverte"]
+      },
+      {
+        "id": "conflit-greniers",
+        "title": "Six semaines de grain",
+        "description": "La Ligue retient les barges pendant que les quartiers populaires exigent l’ouverture des réserves royales.",
+        "stakes": "La famine à Varenne, la loyauté de la garde et le pouvoir politique des créanciers.",
+        "participants": ["ligue-sel", "maison-ardenne"],
+        "escalation": ["Rationnement", "Marché noir", "Émeutes", "Prise des greniers"]
+      },
+      {
+        "id": "conflit-soldes",
+        "title": "Les boucliers impayés",
+        "description": "Les garnisons de la Bruine cessent d’obéir aux ordres de la cour tout en continuant à défendre les villages.",
+        "stakes": "L’ouverture des cols, l’entrée d’une armée vétérane dans la succession et la sécurité du nord.",
+        "participants": ["fraternite-bruine", "maison-corvail", "maison-ardenne"],
+        "escalation": ["Refus des rotations", "Occupation des péages", "Reconnaissance d’un prétendant", "Marche vers la capitale"]
+      },
+      {
+        "id": "conflit-premiere-bataille",
+        "title": "La bataille que personne ne veut commencer",
+        "description": "Deux armées se font face aux Chênes Pendus pendant que des provocateurs cherchent à produire le premier mort utile.",
+        "stakes": "Celui qui frappe le premier peut perdre la légitimité, mais celui qui recule peut perdre ses vassaux.",
+        "participants": ["maison-ardenne", "maison-corvail", "ligue-sel"],
+        "escalation": ["Duels et insultes", "Disparition de fourrageurs", "Fausse attaque nocturne", "Charge générale"]
+      },
+      {
+        "id": "conflit-serments-cendre",
+        "title": "La cendre se souvient",
+        "description": "Les manifestations de cendre révèlent certains parjures, mais personne ne sait si elles disent toute la vérité ou seulement une partie manipulable.",
+        "stakes": "La confiance dans les tribunaux, la possibilité de négocier et la transformation du surnaturel en arme politique.",
+        "participants": ["synode-neuf", "ligue-sel", "maison-ardenne", "maison-corvail"],
+        "escalation": ["Rumeurs", "Épreuves publiques", "Faux miracles", "Refus général de prêter serment"]
+      }
+    ],
+    "secrets": [
+      {
+        "id": "secret-deux-chartes",
+        "truth": "Deux versions officielles de la Charte furent produites dès la fondation : l’une pour les villes, favorable à la descendance directe, l’autre pour les seigneurs, privilégiant les héritiers masculins.",
+        "clues": ["Les fibres des deux copies viennent du même lot de peau", "Le registre des encres de l’abbaye mentionne deux équipes de copistes la même nuit", "Un sceau de ville apparaît sous la cire d’une copie féodale"],
+        "relatedIds": ["objet-charte-varenne", "abbaye-cendre-blanche", "npc-elia-sorne"]
+      },
+      {
+        "id": "secret-pacte-electif",
+        "truth": "Le pacte originel ne fondait pas une monarchie héréditaire : les maisons élisaient un gardien révocable, puis la première dynastie a progressivement transformé cette charge en couronne.",
+        "clues": ["Les mots révélés à marée basse utilisent le terme gardien", "Quatre noms martelés dans la Couronne correspondent à des familles non royales", "Le prélat Sévéran se souvient d’une clause grattée"],
+        "relatedIds": ["ile-roche-serment", "objet-couronne-cendres", "npc-prelat-severan"]
+      },
+      {
+        "id": "secret-origine-cendres",
+        "truth": "La Couronne fut forgée avec un métal extrait d’une ancienne salle de serment sous Sorelle ; elle accumule la trace des engagements royaux et réagit à leur violation.",
+        "clues": ["La cendre des poumons du roi contient du sel rouge", "Les veines de la Couronne correspondent au minerai de la galerie royale", "Les mineurs rêvent des treize premiers noms"],
+        "relatedIds": ["mines-sorelle", "objet-couronne-cendres", "npc-cassian-orbe"]
+      },
+      {
+        "id": "secret-solde-volee",
+        "truth": "La solde des Marches a bien quitté le trésor, puis fut détournée par une société appartenant au frère défunt de la reine douairière pour financer une tentative de régence.",
+        "clues": ["Le registre de Sorelle mentionne les versements sous le code iris", "Les reçus de la garnison s’arrêtent le même jour", "Une lettre du palais demande de préserver une réserve politique"],
+        "relatedIds": ["objet-registre-sorelle", "npc-reine-yselda", "fort-brumehaute"]
+      },
+      {
+        "id": "secret-promesses-roi",
+        "truth": "Aldemar avait promis la succession à Maëlys, une régence à Yselda et la reconnaissance d’Odran comme protecteur du royaume, comptant sur sa survie pour ne jamais concilier ces engagements.",
+        "clues": ["Trois lettres utilisent la même formule privée", "Les dates correspondent à trois crises différentes", "De la cendre apparaît sur chaque promesse lorsqu’elles sont réunies"],
+        "relatedIds": ["palais-miroirs-fumes", "npc-reine-yselda", "npc-maelys-ardenne", "npc-odran-corvail"]
+      },
+      {
+        "id": "secret-sceau-double",
+        "truth": "Le sceau royal disparu a été remplacé depuis deux ans par un double presque parfait, utilisé pour garantir des emprunts que le Conseil n’a jamais approuvés.",
+        "clues": ["Une imperfection en forme de croissant manque sur les actes récents", "Isoria a remis le sceau à une fausse Elia", "La Ligue conserve un contrat portant l’empreinte du double"],
+        "relatedIds": ["npc-isoria-vel", "npc-elia-sorne", "ligue-sel"]
+      },
+      {
+        "id": "secret-troisieme-cloche",
+        "truth": "La troisième cloche n’annonce pas un décès : elle résonne lorsqu’un serment royal majeur devient simultanément impossible à tenir et impossible à annuler.",
+        "clues": ["Les chroniques relient ses anciens sons à des crises de succession", "Le conduit mène au tribunal oublié", "La cloche porte la même composition métallique que la Couronne"],
+        "relatedIds": ["citadelle-sept-cloches", "objet-couronne-cendres", "conflit-serments-cendre"]
+      }
+    ],
+    "hooks": [
+      {
+        "id": "hook-page-charte",
+        "title": "La page et la demi-charte",
+        "premise": "Protéger la page qui détient un fragment de la Charte, la livrer à une faction ou utiliser son avance pour négocier plusieurs accès.",
+        "urgency": "La garde ferme la citadelle et commencera les fouilles par les serviteurs avant d’interroger les nobles.",
+        "relatedIds": ["citadelle-sept-cloches", "objet-charte-varenne", "npc-elia-sorne"]
+      },
+      {
+        "id": "hook-six-semaines-grain",
+        "title": "Six semaines de grain",
+        "premise": "Négocier la reprise des livraisons, révéler les armes cachées ou aider les quartiers à prendre le contrôle des réserves.",
+        "urgency": "Un registre falsifié fera croire dès demain que les greniers sont plus pleins qu’ils ne le sont.",
+        "relatedIds": ["port-varenne", "npc-tomas-renne", "npc-selka-vorr", "conflit-greniers"]
+      },
+      {
+        "id": "hook-serment-sans-solde",
+        "title": "Un serment sans solde",
+        "premise": "Porter une offre aux garnisons, enquêter sur l’argent disparu ou reconnaître la légitimité de leur refus d’obéir.",
+        "urgency": "Le prochain convoi doit franchir les péages dans quatre jours et pourrait être saisi.",
+        "relatedIds": ["fort-brumehaute", "npc-marechal-rovan", "objet-registre-sorelle", "conflit-soldes"]
+      },
+      {
+        "id": "hook-banquet-trois-fiancailles",
+        "title": "Le banquet des trois fiançailles",
+        "premise": "Découvrir lequel des trois projets de mariage est sincère, empêcher un empoisonnement politique ou transformer le banquet en négociation publique.",
+        "urgency": "La reine douairière annoncera une alliance avant la fin de la soirée, même si elle doit en inventer les termes.",
+        "relatedIds": ["palais-miroirs-fumes", "npc-reine-yselda", "npc-isoria-vel", "secret-promesses-roi"]
+      },
+      {
+        "id": "hook-maree-des-noms",
+        "title": "La marée des noms",
+        "premise": "Atteindre la Roche du Serment pendant la marée exceptionnelle et décider qui pourra témoigner de l’inscription révélée.",
+        "urgency": "La prochaine marée comparable n’aura pas lieu avant neuf ans et des agents ont reçu l’ordre de briser la pierre.",
+        "relatedIds": ["ile-roche-serment", "npc-elia-sorne", "secret-pacte-electif"]
+      },
+      {
+        "id": "hook-autopsie-roi",
+        "title": "Les cendres dans les poumons",
+        "premise": "Protéger le médecin royal, reproduire son analyse et choisir quand rendre publique une preuve qui nourrit les accusations d’empoisonnement.",
+        "urgency": "Le corps doit être scellé dans la crypte au coucher du soleil et plusieurs factions réclament déjà Cassian.",
+        "relatedIds": ["npc-cassian-orbe", "mines-sorelle", "secret-origine-cendres"]
+      },
+      {
+        "id": "hook-premier-mort",
+        "title": "Le premier mort de la guerre",
+        "premise": "Identifier les provocateurs des Chênes Pendus, organiser un retrait qui ne ressemble pas à une défaite ou laisser l’incident servir un projet politique.",
+        "urgency": "Un faux déserteur doit tirer sur un parlementaire à la prochaine relève de garde.",
+        "relatedIds": ["plaine-chenes-pendus", "npc-odran-corvail", "conflit-premiere-bataille", "ligue-sel"]
+      }
+    ],
+    "timeline": [
+      {
+        "id": "event-fermeture-port",
+        "event": "La Ligue ferme officiellement le port et exige un siège au Conseil en échange du grain.",
+        "trigger": "Deux jours après les funérailles si aucun accord commercial n’est signé."
+      },
+      {
+        "id": "event-proclamation-odran",
+        "event": "Odran se proclame Protecteur provisoire du royaume sans prendre encore le titre de roi.",
+        "trigger": "Quand Maëlys ordonne une arrestation contre un seigneur Corvail ou après quatre jours d’impasse."
+      },
+      {
+        "id": "event-emeute-greniers",
+        "event": "Les quartiers de Varenne marchent sur les greniers ; Tomas Renne doit choisir entre les guider et les arrêter.",
+        "trigger": "Une semaine sans livraison ou révélation publique de réserves insuffisantes."
+      },
+      {
+        "id": "event-occupation-peages",
+        "event": "La Fraternité de la Bruine occupe les péages royaux et prélève elle-même la solde des garnisons.",
+        "trigger": "Cinq jours sans réponse officielle à ses demandes."
+      },
+      {
+        "id": "event-faux-miracle",
+        "event": "Une faction organise une manifestation de fausse cendre pour accuser un rival de parjure.",
+        "trigger": "Dès que les phénomènes de cendre deviennent une preuve admise par le Conseil."
+      },
+      {
+        "id": "event-premiere-bataille",
+        "event": "Une provocation tue un parlementaire aux Chênes Pendus et les deux armées commencent à se déployer.",
+        "trigger": "Huit jours après les funérailles si les provocateurs ne sont pas neutralisés."
+      },
+      {
+        "id": "event-couronnements-concurrents",
+        "event": "Maëlys est couronnée à la Citadelle tandis qu’Odran reçoit une couronne de campagne aux Chênes Pendus.",
+        "trigger": "Deux semaines d’impasse ou destruction de la Charte originale."
+      },
+      {
+        "id": "event-reveil-couronne",
+        "event": "La Couronne libère les voix des serments royaux contradictoires dans toute la capitale.",
+        "trigger": "Lorsqu’un prétendant est couronné en connaissant la fausseté de sa propre légitimité."
+      }
+    ]
+  }
+}

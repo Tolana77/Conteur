@@ -9,6 +9,32 @@ export interface Message {
   content: string;
   timestamp: number;
   actions?: ChatActionIntent[];
+  actionReceipt?: GameActionReceipt;
+}
+
+export interface GameActionReceipt {
+  id: string;
+  timestamp: number;
+  actions: Array<{
+    kind: ChatActionIntentKind;
+    sourceId: string;
+    sourceLabel: string;
+    target?: { id: string; label: string; kind: ActionTargetKind };
+  }>;
+  changes: Array<{
+    kind: "hp" | "quantity" | "charges" | "condition" | "position" | "resource";
+    entityId: string;
+    label: string;
+    before: number | string;
+    after: number | string;
+    delta?: number;
+  }>;
+  rolls: Array<{
+    formula: string;
+    result: number;
+    reason?: string;
+    visibility: DiceVisibility;
+  }>;
 }
 
 export type ChatActionIntentKind = "useItem" | "useAbility" | "attack";

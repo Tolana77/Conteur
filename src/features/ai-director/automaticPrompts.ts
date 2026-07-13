@@ -1,4 +1,5 @@
 import type { GameState } from "../../store/useGameStore";
+import type { GameActionReceipt } from "../../app/types";
 import { getAgentCommandSchemaText } from "./commandPermissions";
 import type { AutomaticDomainAgent } from "./automaticRouting";
 import type { AiResolutionDraft } from "./types";
@@ -8,6 +9,7 @@ export interface NarrationPacket {
   results: Array<{ status: "success" | "error" | "info"; message: string }>;
   warnings: string[];
   questions: string[];
+  actionReceipts: GameActionReceipt[];
 }
 
 const AGENT_INSTRUCTIONS: Record<AutomaticDomainAgent, string> = {
@@ -45,13 +47,24 @@ export function buildAutomaticNarrationPrompt(
   return [
     "Tu es le Narrateur d'un jeu de rôle fantasy. Réponds en français, brièvement, avec une prose concrète et immersive.",
     "Raconte uniquement les faits et résultats du paquet. Ne crée ni jet, ni dégât, ni changement d'état supplémentaire.",
-    "Toute modification du monde ou d'un inventaire n'existe que si elle apparaît dans Paquet.results avec status=success.",
+    "Toute modification du monde ou d'un inventaire n'existe que si elle apparaît dans Paquet.results avec status=success ou dans Paquet.actionReceipts.",
+    "Paquet.actionReceipts décrit les actions déjà exécutées : la source existait avant l'action, même si sa quantité vaut maintenant zéro.",
+    "Pour les PV, quantités, charges et jets, recopie exclusivement les valeurs before/after/delta/result des reçus. Ne recalcule rien.",
+    "Un jet de soin et les PV effectivement récupérés sont deux valeurs distinctes : le gain effectif est le delta de PV, notamment si la cible atteint son maximum.",
+    "L'état de Joueur et Contexte est postérieur aux reçus et ne doit jamais servir à nier leur source.",
     "Une demande sans succès moteur reste une intention ou un échec : ne raconte jamais qu'elle a réussi.",
     "Si un fait dit qu'une liste est exhaustive, restitue uniquement ses éléments et n'en invente aucun.",
     'Réponds uniquement par {"narration":"..."}.',
     `Joueur: ${JSON.stringify(character ? { name: character.name, classe: character.classe, niveau: character.niveau } : null)}`,
     `Style: ${truncate(state.campaign.style, 160)}`,
-    `Cadre: ${JSON.stringify({ lore: truncate(state.campaign.world.lore, 280), facts: state.campaign.world.facts.slice(-2).map((fact) => truncate(fact, 160)) })}`,
+    `Cadre: ${JSON.stringify({
+      pitch: truncate(state.campaign.world.pitch ?? "", 180),
+      tone: truncate(state.campaign.world.tone ?? state.campaign.style, 100),
+      themes: state.campaign.world.themes?.slice(0, 3) ?? [],
+      rules: state.campaign.world.rules?.slice(0, 3).map((rule) => truncate(rule, 120)) ?? [],
+      lore: truncate(state.campaign.world.lore, 260),
+      facts: state.campaign.world.facts.slice(-2).map((fact) => truncate(fact, 140)),
+    })}`,
     `Action: ${truncate(playerInput, 900)}`,
     `Paquet: ${JSON.stringify(limitPacket(packet))}`,
     `Échanges récents: ${JSON.stringify(state.messages.slice(-3).map((message) => ({ sender: message.sender, content: truncate(message.content, 220) })))}`,
@@ -61,6 +74,7 @@ export function buildAutomaticNarrationPrompt(
 export function createNarrationPacket(
   draft: AiResolutionDraft,
   executionResults: Array<{ status: "success" | "error" | "info"; message: string }>,
+  actionReceipt?: GameActionReceipt,
 ): NarrationPacket {
   return {
     facts: [
@@ -77,6 +91,7 @@ export function createNarrationPacket(
     })),
     warnings: draft.warnings.slice(-3).map((warning) => truncate(warning, 180)),
     questions: draft.questions.slice(-3).map((question) => truncate(question, 180)),
+    actionReceipts: actionReceipt ? [sanitizeActionReceipt(actionReceipt)] : [],
   };
 }
 
@@ -189,11 +204,33 @@ function createWorldContext(state: GameState, input: string) {
     ...state.campaign.world.entities.items,
   ];
   return {
-    lore: truncate(state.campaign.world.lore, 500),
+    name: state.campaign.world.name ?? state.campaign.name,
+    pitch: truncate(state.campaign.world.pitch ?? "", 240),
+    tone: truncate(state.campaign.world.tone ?? state.campaign.style, 120),
+    themes: state.campaign.world.themes?.slice(0, 5) ?? [],
+    rules: rankByInput(state.campaign.world.rules ?? [], input, (rule) => rule).slice(0, 4).map((rule) => truncate(rule, 160)),
+    lore: truncate(state.campaign.world.lore, 420),
     facts: rankByInput(state.campaign.world.facts, input, (fact) => fact).slice(0, 5).map((fact) => truncate(fact, 220)),
     entities: rankByInput(entities, input, (entity) => `${entity.name} ${entity.description}`)
       .slice(0, 5)
-      .map((entity) => ({ id: entity.id, name: entity.name, type: entity.type, description: truncate(entity.description, 220) })),
+      .map((entity) => ({
+        id: entity.id,
+        name: entity.name,
+        type: entity.type,
+        description: truncate(entity.description, 180),
+        role: truncate(entity.details?.role ?? "", 100),
+        desire: truncate(entity.details?.desire ?? "", 100),
+        connections: entity.details?.connections?.slice(0, 3) ?? [],
+      })),
+    factions: rankByInput(state.campaign.world.factions ?? [], input, (faction) => `${faction.name} ${faction.goal} ${faction.method}`)
+      .slice(0, 3),
+    conflicts: rankByInput(state.campaign.world.conflicts ?? [], input, (conflict) => `${conflict.title} ${conflict.description} ${conflict.stakes}`)
+      .slice(0, 3),
+    hooks: rankByInput(state.campaign.world.hooks ?? [], input, (hook) => `${hook.title} ${hook.premise} ${hook.urgency}`)
+      .slice(0, 3),
+    secrets: rankByInput(state.campaign.world.secrets ?? [], input, (secret) => `${secret.truth} ${secret.clues.join(" ")}`)
+      .slice(0, 2),
+    timeline: (state.campaign.world.timeline ?? []).slice(0, 3),
     history: state.campaign.history.slice(-3).map((entry) => truncate(entry, 180)),
   };
 }
@@ -222,6 +259,18 @@ function limitPacket(packet: NarrationPacket): NarrationPacket {
     results: packet.results.slice(-5),
     warnings: packet.warnings.slice(-3),
     questions: packet.questions.slice(-3),
+    actionReceipts: packet.actionReceipts.slice(-1),
+  };
+}
+
+function sanitizeActionReceipt(receipt: GameActionReceipt): GameActionReceipt {
+  return {
+    ...receipt,
+    actions: receipt.actions.slice(0, 2),
+    changes: receipt.changes.slice(0, 12),
+    rolls: receipt.rolls
+      .filter((roll) => roll.visibility === "public" || roll.visibility === "summary")
+      .slice(0, 6),
   };
 }
 

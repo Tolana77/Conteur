@@ -26,7 +26,7 @@ function getNextPanel(currentPanel: PanelId, direction: 1 | -1): PanelId {
 }
 
 export function GamePage() {
-  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
+  const [consoleView, setConsoleView] = useState<"campaign" | "world" | null>(null);
   const [activePanel, setActivePanel] = useState<PanelId>("center");
   const [mapTargetIntentId, setMapTargetIntentId] = useState<string | null>(null);
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -70,7 +70,7 @@ export function GamePage() {
     }
 
     if (activePanel === "genre") {
-      return <GenreSelection />;
+      return <GenreSelection onOpenWorldWorkshop={() => setConsoleView("world")} />;
     }
 
     if (activePanel === "combat") {
@@ -126,7 +126,7 @@ export function GamePage() {
           </nav>
             <button
               className="h-full rounded border border-[#9C7A2E]/30 bg-[#221E29] px-3 py-2 text-sm font-bold text-[#E4D8BE] hover:bg-[#5A2233]/50"
-              onClick={() => setIsConsoleOpen(true)}
+              onClick={() => setConsoleView("campaign")}
               type="button"
             >
               ...
@@ -139,7 +139,9 @@ export function GamePage() {
         </div>
       </div>
 
-      {isConsoleOpen ? <CampaignConsole onClose={() => setIsConsoleOpen(false)} /> : null}
+      {consoleView ? (
+        <CampaignConsole initialView={consoleView} onClose={() => setConsoleView(null)} />
+      ) : null}
     </main>
   );
 }

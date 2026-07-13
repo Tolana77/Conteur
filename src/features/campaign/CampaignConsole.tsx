@@ -14,6 +14,7 @@ import {
 import { AiDirectorConsole } from "../ai-director/AiDirectorConsole";
 import { AiApiTraceConsole } from "../ai-director/AiApiTraceConsole";
 import { HighlightedGameText } from "../../ui/gameTerms";
+import { WorldWorkshop } from "../world/WorldWorkshop";
 
 const entitySections = [
   { key: "npcs", label: "NPC" },
@@ -23,9 +24,10 @@ const entitySections = [
 
 interface CampaignConsoleProps {
   onClose: () => void;
+  initialView?: "campaign" | "world";
 }
 
-export function CampaignConsole({ onClose }: CampaignConsoleProps) {
+export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignConsoleProps) {
   const [newFact, setNewFact] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [commandInput, setCommandInput] = useState("help");
@@ -167,8 +169,8 @@ export function CampaignConsole({ onClose }: CampaignConsoleProps) {
       <section className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden rounded border border-[#9C7A2E]/25 bg-[#221E29]">
         <header className="flex items-center justify-between border-b border-[#9C7A2E]/20 px-4 py-3">
           <div>
-            <p className="rune-label text-xs">Console admin</p>
-            <h2 className="ink-heading text-xl font-bold">Vue campagne</h2>
+            <p className="rune-label text-xs">{initialView === "world" ? "Création locale" : "Console admin"}</p>
+            <h2 className="ink-heading text-xl font-bold">{initialView === "world" ? "Nouveau monde" : "Vue campagne"}</h2>
           </div>
           <button
             className="fantasy-button rounded px-3 py-2 text-sm font-semibold"
@@ -186,6 +188,7 @@ export function CampaignConsole({ onClose }: CampaignConsoleProps) {
             </div>
           ) : null}
 
+          {initialView === "world" ? <WorldWorkshop /> : <>
           <section className="mb-6 grid gap-3 md:grid-cols-2">
             <div className="manuscript-card rounded p-3">
               <h3 className="ink-heading font-bold">{campaign.name}</h3>
@@ -411,6 +414,7 @@ export function CampaignConsole({ onClose }: CampaignConsoleProps) {
               </div>
             ))}
           </section>
+          </>}
         </div>
       </section>
     </div>

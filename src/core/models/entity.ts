@@ -5,4 +5,13 @@ export interface Entity {
   name: string;
   type: EntityType;
   description: string;
+  details?: {
+    role?: string;
+    desire?: string;
+    fear?: string;
+    secret?: string;
+    importance?: string;
+    connections?: string[];
+    tags?: string[];
+  };
 }

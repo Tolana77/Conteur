@@ -45,6 +45,7 @@ import type {
   DiceRoll,
   DiceVisibility,
   Entity,
+  GameActionReceipt,
   ItemInstance,
   ItemTemplate,
   Message,
@@ -129,6 +130,7 @@ export interface GameState {
   setShowItemTags: (showItemTags: boolean) => void;
   clearCharacterPortraits: () => void;
   resetGameState: () => void;
+  startCampaign: (campaign: Campaign, openingScene: string) => void;
   addGmMessage: (content: string) => void;
   sendPlayerMessage: (content: string) => void;
   roll: (sides: number) => DiceRoll;
@@ -586,6 +588,25 @@ function createInitialCombatScene(): CombatScene {
   };
 }
 
+function createEmptyCombatScene(): CombatScene {
+  const base = createInitialCombatScene();
+  return {
+    ...base,
+    id: `combat-${crypto.randomUUID()}`,
+    status: "inactive",
+    round: 1,
+    turnIndex: 0,
+    map: {
+      ...base.map,
+      obstacles: [],
+      elements: [],
+      details: [],
+    },
+    combatants: [],
+    log: [],
+  };
+}
+
 
 type GameDataState = Pick<
   GameState,
@@ -980,6 +1001,7 @@ function createMessage(
   sender: Message["sender"],
   content: string,
   actions: ChatActionIntent[] = [],
+  actionReceipt?: GameActionReceipt,
 ): Message {
   return {
     id: `message-${crypto.randomUUID()}`,
@@ -987,6 +1009,7 @@ function createMessage(
     content,
     timestamp: Date.now(),
     ...(actions.length > 0 ? { actions } : {}),
+    ...(actionReceipt ? { actionReceipt } : {}),
   };
 }
 
@@ -3926,6 +3949,147 @@ function executePlayerActionIntents(
   };
 }
 
+function createGameActionReceipt(
+  before: GameDataState,
+  after: ReturnType<typeof executePlayerActionIntents>,
+): GameActionReceipt | undefined {
+  if (after.executedIntents.length === 0) return undefined;
+
+  const changes: GameActionReceipt["changes"] = [];
+  const afterCharacters = new Map(after.characters.map((character) => [character.id, character]));
+  const afterItems = new Map(after.itemInstances.map((item) => [item.id, item]));
+  const beforeItems = new Map(before.itemInstances.map((item) => [item.id, item]));
+  const afterAbilities = new Map(after.abilityInstances.map((ability) => [ability.id, ability]));
+  const afterCombatants = new Map(after.combat.combatants.map((combatant) => [combatant.id, combatant]));
+
+  before.characters.forEach((character) => {
+    const current = afterCharacters.get(character.id);
+    if (!current || current.pv === character.pv) return;
+    changes.push({
+      kind: "hp",
+      entityId: character.id,
+      label: character.name,
+      before: character.pv,
+      after: current.pv,
+      delta: current.pv - character.pv,
+    });
+  });
+
+  new Set([...beforeItems.keys(), ...afterItems.keys()]).forEach((itemId) => {
+    const previous = beforeItems.get(itemId);
+    const current = afterItems.get(itemId);
+    const beforeQuantity = previous?.quantity ?? 0;
+    const afterQuantity = current?.quantity ?? 0;
+    if (beforeQuantity === afterQuantity) return;
+    const item = previous ?? current;
+    const template = item ? before.itemTemplates.find((candidate) => candidate.id === item.templateId) : undefined;
+    changes.push({
+      kind: "quantity",
+      entityId: itemId,
+      label: item ? String(item.overrides.name ?? template?.name ?? item.id) : itemId,
+      before: beforeQuantity,
+      after: afterQuantity,
+      delta: afterQuantity - beforeQuantity,
+    });
+  });
+
+  before.abilityInstances.forEach((ability) => {
+    const current = afterAbilities.get(ability.id);
+    const beforeCharges = Number(ability.current.charges ?? 0);
+    const afterCharges = Number(current?.current.charges ?? 0);
+    if (beforeCharges === afterCharges) return;
+    const template = before.abilityTemplates.find((candidate) => candidate.id === ability.templateId);
+    changes.push({
+      kind: "charges",
+      entityId: ability.id,
+      label: String(ability.overrides.name ?? template?.name ?? ability.id),
+      before: beforeCharges,
+      after: afterCharges,
+      delta: afterCharges - beforeCharges,
+    });
+  });
+
+  before.combat.combatants.forEach((combatant) => {
+    const current = afterCombatants.get(combatant.id);
+    if (!current) return;
+    if (combatant.sourceType !== "character" && current.hp !== combatant.hp) {
+      changes.push({
+        kind: "hp",
+        entityId: combatant.id,
+        label: combatant.name,
+        before: combatant.hp,
+        after: current.hp,
+        delta: current.hp - combatant.hp,
+      });
+    }
+    const previousConditions = [...combatant.conditions].sort().join(", ");
+    const currentConditions = [...current.conditions].sort().join(", ");
+    if (previousConditions !== currentConditions) {
+      changes.push({
+        kind: "condition",
+        entityId: combatant.id,
+        label: combatant.name,
+        before: previousConditions || "aucun",
+        after: currentConditions || "aucun",
+      });
+    }
+    if (combatant.position.x !== current.position.x || combatant.position.y !== current.position.y) {
+      changes.push({
+        kind: "position",
+        entityId: combatant.id,
+        label: combatant.name,
+        before: `${combatant.position.x},${combatant.position.y}`,
+        after: `${current.position.x},${current.position.y}`,
+      });
+    }
+    (["action", "bonus", "reaction", "movement"] as const).forEach((resource) => {
+      if (combatant.resources[resource] === current.resources[resource]) return;
+      changes.push({
+        kind: "resource",
+        entityId: combatant.id,
+        label: `${combatant.name} · ${resource}`,
+        before: combatant.resources[resource],
+        after: current.resources[resource],
+        delta: current.resources[resource] - combatant.resources[resource],
+      });
+    });
+  });
+
+  return {
+    id: `receipt-${crypto.randomUUID()}`,
+    timestamp: Date.now(),
+    actions: after.executedIntents.map((intent) => ({
+      kind: intent.kind,
+      sourceId: intent.targetId,
+      sourceLabel: resolveReceiptSourceLabel(before, intent),
+      ...(intent.target ? {
+        target: { id: intent.target.id, label: intent.target.label, kind: intent.target.kind },
+      } : {}),
+    })),
+    changes,
+    rolls: after.diceRolls.map((roll) => ({
+      formula: roll.formula,
+      result: roll.result,
+      reason: roll.reason,
+      visibility: roll.visibility,
+    })),
+  };
+}
+
+function resolveReceiptSourceLabel(state: GameDataState, intent: ChatActionIntent): string {
+  const item = state.itemInstances.find((candidate) => candidate.id === intent.targetId);
+  if (item) {
+    const template = state.itemTemplates.find((candidate) => candidate.id === item.templateId);
+    return String(item.overrides.name ?? template?.name ?? intent.label);
+  }
+  const ability = state.abilityInstances.find((candidate) => candidate.id === intent.targetId);
+  if (ability) {
+    const template = state.abilityTemplates.find((candidate) => candidate.id === ability.templateId);
+    return String(ability.overrides.name ?? template?.name ?? intent.label);
+  }
+  return intent.label;
+}
+
 function getInventoryOrder(item: ItemInstance, fallback: number): number {
   const order = Number(item.data.inventoryOrder);
   return Number.isFinite(order) ? order : fallback;
@@ -4911,6 +5075,25 @@ export const useGameStore = create<GameState>()(
       },
       clearCharacterPortraits: () => set({ characterPortraits: {} }),
       resetGameState: () => set(createInitialState()),
+      startCampaign: (campaign, openingScene) => {
+        set((state) => {
+          const itemInstances = state.itemInstances.filter((item) => item.location.type !== "world");
+          const characters = campaign.characters;
+          return {
+            campaign: { ...campaign, characters },
+            characters,
+            selectedCharacterId: characters.some((character) => character.id === state.selectedCharacterId)
+              ? state.selectedCharacterId
+              : characters[0]?.id ?? "",
+            messages: [createMessage("gm", openingScene)],
+            pendingActionIntents: [],
+            diceRolls: [],
+            itemInstances,
+            combat: createEmptyCombatScene(),
+            characterDerivedScores: createCharacterDerivedScores(characters, itemInstances, state.itemTemplates),
+          };
+        });
+      },
       addGmMessage: (content) => {
         const trimmedContent = content.trim();
 
@@ -4931,7 +5114,8 @@ export const useGameStore = create<GameState>()(
           return;
         }
 
-        const playerMessage = createMessage("player", trimmedContent, resolvedActions.executedIntents);
+        const actionReceipt = createGameActionReceipt(state, resolvedActions);
+        const playerMessage = createMessage("player", trimmedContent, resolvedActions.executedIntents, actionReceipt);
         const combatSummaryMessage = resolvedActions.executedIntents.length > 0
           ? createMessage(
               "gm",

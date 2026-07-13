@@ -584,6 +584,11 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
     return {
       ...base,
       world: {
+        name: snapshot.campaign.world.name ?? snapshot.campaign.name,
+        pitch: snapshot.campaign.world.pitch,
+        tone: snapshot.campaign.world.tone ?? snapshot.campaign.style,
+        themes: snapshot.campaign.world.themes,
+        rules: snapshot.campaign.world.rules,
         lore: snapshot.campaign.world.lore,
         facts: snapshot.campaign.world.facts,
         entities: [
@@ -595,7 +600,13 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
           name: entity.name,
           type: entity.type,
           description: entity.description,
+          details: entity.details,
         })),
+        factions: snapshot.campaign.world.factions,
+        conflicts: snapshot.campaign.world.conflicts,
+        hooks: snapshot.campaign.world.hooks,
+        secrets: snapshot.campaign.world.secrets,
+        timeline: snapshot.campaign.world.timeline,
         history: snapshot.campaign.history.slice(-12),
       },
     };
@@ -606,6 +617,9 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
       ...base,
       narrationInputs: {
         worldTone: snapshot.campaign.style,
+        worldPitch: snapshot.campaign.world.pitch,
+        themes: snapshot.campaign.world.themes?.slice(0, 4),
+        rules: snapshot.campaign.world.rules?.slice(0, 4),
         loreSummary: snapshot.campaign.world.lore,
         recentMessages: snapshot.messages.slice(-10).map((message) => ({
           sender: message.sender,

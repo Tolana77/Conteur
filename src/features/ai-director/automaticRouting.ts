@@ -30,20 +30,29 @@ export function routePlayerInput(playerInput: string, state: GameState): Automat
   const actionIntent = matches(text, /\b(jet|d20|d4|d6|d8|d10|d12|test|sauvegarde|difficulte|forcer|escalader|convaincre|discretion|perception|athletisme)\b/u);
   const worldIntent = matches(text, /\b(regarde|observe|fouille|cherche|inspecte|examine|ecoute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|lieu|pnj|rumeur|qui est|qu est ce|ou est|pourquoi)\b/u);
   const explicitWorldSubject = matches(text, /\b(lieu|pnj|rumeur|ville|village|foret|route|piece|salle|personne|homme|femme|creature|qui est|ou est)\b/u);
-  const structuredActions = getLatestPlayerActions(state);
+  const latestPlayerMessage = getLatestPlayerMessage(state);
+  const structuredActions = latestPlayerMessage?.actions ?? [];
+  const executedKinds = new Set(latestPlayerMessage?.actionReceipt?.actions.map((action) => action.kind) ?? []);
+  const hasExecutedCombatAction = executedKinds.has("attack");
+  const hasExecutedCharacterAction = executedKinds.has("useItem") || executedKinds.has("useAbility");
 
-  if (structuredActions.some((action) => action.kind === "attack")) add("combatManager", 12);
-  if (structuredActions.some((action) => action.kind === "useItem" || action.kind === "useAbility")) add("characterManager", 12);
-  if (state.combat.status === "active" && structuredActions.some((action) => action.target?.position)) add("combatManager", 9);
+  if (!hasExecutedCombatAction && structuredActions.some((action) => action.kind === "attack")) add("combatManager", 12);
+  if (!hasExecutedCharacterAction && structuredActions.some((action) => action.kind === "useItem" || action.kind === "useAbility")) add("characterManager", 12);
+  if (!hasExecutedCombatAction && state.combat.status === "active" && structuredActions.some((action) => action.target?.position)) add("combatManager", 9);
 
-  if (combatIntent) {
+  if (combatIntent && !hasExecutedCombatAction) {
     add("combatManager", 8);
   }
-  if (state.combat.status === "active" && matches(text, /\b(action|bouge|avance|recule|vise|arme|sort|capacite)\b/u)) {
+  if (
+    state.combat.status === "active" &&
+    !hasExecutedCombatAction &&
+    !hasExecutedCharacterAction &&
+    matches(text, /\b(action|bouge|avance|recule|vise|arme|sort|capacite)\b/u)
+  ) {
     add("combatManager", 6);
   }
 
-  if (characterIntent) {
+  if (characterIntent && !hasExecutedCharacterAction) {
     add("characterManager", 7);
   }
 
@@ -79,12 +88,12 @@ export function routePlayerInput(playerInput: string, state: GameState): Automat
   };
 }
 
-function getLatestPlayerActions(state: GameState) {
+function getLatestPlayerMessage(state: GameState) {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
-    if (message?.sender === "player") return message.actions ?? [];
+    if (message?.sender === "player") return message;
   }
-  return [];
+  return undefined;
 }
 
 function matches(text: string, expression: RegExp): boolean {

@@ -90,7 +90,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   }
 
   const executionResults = executeValidatedCommands(gatheredCommands);
-  const packet = createNarrationPacket(draft, executionResults);
+  const packet = createNarrationPacket(draft, executionResults, getLatestPlayerActionReceipt());
   let narration: string;
   let narrationWarning: string | null = null;
 
@@ -115,9 +115,28 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   };
 }
 
+function getLatestPlayerActionReceipt() {
+  const messages = useGameStore.getState().messages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.sender === "player") return message.actionReceipt;
+  }
+  return undefined;
+}
+
 function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrationPacket>): string {
   const resultMessages = packet.results.map((result) => result.message);
-  const confirmed = [...resultMessages, ...packet.facts, ...packet.questions].filter(Boolean);
+  const receiptMessages = packet.actionReceipts.map((receipt) => {
+    const actions = receipt.actions.map((action) =>
+      `${action.sourceLabel}${action.target ? ` sur ${action.target.label}` : ""}`,
+    );
+    const changes = receipt.changes.map((change) =>
+      `${change.kind} ${change.label}: ${change.before}→${change.after}${change.delta !== undefined ? ` (${change.delta >= 0 ? "+" : ""}${change.delta})` : ""}`,
+    );
+    const rolls = receipt.rolls.map((roll) => `${roll.reason ?? roll.formula}: ${roll.formula} = ${roll.result}`);
+    return [...actions, ...changes, ...rolls].join(" ; ");
+  });
+  const confirmed = [...resultMessages, ...receiptMessages, ...packet.facts, ...packet.questions].filter(Boolean);
   return confirmed.join(" ") || "Rien dans l'état actuel du monde ne permet de confirmer cette action.";
 }
 
@@ -194,8 +213,45 @@ function executeValidatedCommands(commands: SourcedCommand[]) {
       };
     }
 
-    return executeAiCommand(command, createSnapshot(state), state);
+    const result = executeAiCommand(command, createSnapshot(state), state);
+    return enrichCommandResult(command, state, useGameStore.getState(), result);
   });
+}
+
+function enrichCommandResult(
+  command: AiDirectorCommand,
+  before: GameState,
+  after: GameState,
+  result: ReturnType<typeof executeAiCommand>,
+): ReturnType<typeof executeAiCommand> {
+  if (result.status !== "success" || command.type !== "useItem") return result;
+
+  const itemBefore = before.itemInstances.find((item) => item.id === command.itemId);
+  const itemAfter = after.itemInstances.find((item) => item.id === command.itemId);
+  const template = itemBefore
+    ? before.itemTemplates.find((candidate) => candidate.id === itemBefore.templateId)
+    : undefined;
+  const sourceName = itemBefore ? String(itemBefore.overrides.name ?? template?.name ?? itemBefore.id) : command.itemId;
+  const details: string[] = [`Source confirmée avant action : ${sourceName}`];
+  details.push(`quantité ${itemBefore?.quantity ?? 0}→${itemAfter?.quantity ?? 0}`);
+
+  before.characters.forEach((character) => {
+    const current = after.characters.find((candidate) => candidate.id === character.id);
+    if (current && current.pv !== character.pv) {
+      const delta = current.pv - character.pv;
+      details.push(`PV ${character.name} ${character.pv}→${current.pv} (${delta >= 0 ? "+" : ""}${delta})`);
+    }
+  });
+
+  const previousRollIds = new Set(before.diceRolls.map((roll) => roll.id));
+  after.diceRolls
+    .filter((roll) => !previousRollIds.has(roll.id) && (roll.visibility === "public" || roll.visibility === "summary"))
+    .forEach((roll) => details.push(`jet ${roll.reason ?? roll.formula}: ${roll.formula} = ${roll.result}`));
+
+  return {
+    ...result,
+    message: `${sourceName} utilisé avec succès. ${details.join(" ; ")}.`,
+  };
 }
 
 function createSnapshot(state: GameState): AiPromptSnapshot {

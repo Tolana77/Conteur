@@ -11,6 +11,7 @@
 - Le Narrateur ne reçoit jamais l'état complet du jeu.
 - Une narration ne crée aucun état : seules les commandes exécutées par le moteur le peuvent.
 - Chaque commande conserve son agent d'origine jusqu'à l'exécution et produit un reçu typé `success`, `error` ou `info`.
+- Chaque action structurée conserve un reçu avant/après : source, cible, PV, quantités, charges, états, positions, ressources et jets visibles.
 - Un objet doit exister comme instance `world` avant de pouvoir être ramassé.
 - Les agents de jeu ordinaires ne peuvent ni créer ni donner arbitrairement un objet.
 
@@ -23,6 +24,11 @@
 5. L'agent métier propose faits et commandes appartenant strictement à son domaine.
 6. Le moteur revalide les permissions de l'agent d'origine, exécute chaque commande indépendamment et produit des reçus typés.
 7. Un paquet public borné est transmis au Narrateur, toujours en dernier.
+
+Le Narrateur interprète l'état courant comme un état **postérieur** aux reçus. Un
+consommable absent après l'action reste donc une source valide si le reçu indique
+sa quantité avant consommation. Les jets de soin et le gain effectif de PV sont
+conservés séparément afin de tenir compte du plafond de PV.
 
 ## Autorité sur les objets
 
