@@ -150,6 +150,34 @@ export function buildAiDirectorPrompt(
           ].join("\n"),
         ]
       : []),
+    ...(agentId === "worldManager"
+      ? [
+          "",
+          "# Exploration vivante",
+          [
+            "- Pour une observation, une recherche ou un dialogue, fournis au Narrateur des détails sensoriels concrets et au moins une ouverture exploitable soutenue par le contexte.",
+            "- Un échec ou une recherche superficielle peut produire une impression, une réaction ou un indice incomplet : évite les constats vides.",
+            "- Si la méthode change réellement le résultat, ajoute UNE clarification précise dans draftPatch.questions après les informations immédiatement perceptibles.",
+            "- Ne révèle jamais directement une vérité cachée : utilise seulement ses indices autorisés.",
+            "- Ne confirme jamais l'acquisition d'un objet ou une modification durable sans commande moteur validée.",
+          ].join("\n"),
+        ]
+      : []),
+    ...(agentId === "narrationManager"
+      ? [
+          "",
+          "# Conduite de la scène",
+          [
+            "- Parle comme un meneur de jeu, jamais comme une IA, un validateur ou une interface.",
+            "- Structure naturellement la réponse : perception immédiate, conséquence ou réaction, puis piste ou question seulement si elle est utile.",
+            "- Récompense l'initiative par une information, un indice subtil, une opportunité ou une réaction du monde présente dans le dossier.",
+            "- Si une précision est indispensable, décris d'abord ce qui est déjà perceptible puis pose UNE question diégétique précise; suggère éventuellement deux ou trois approches naturelles.",
+            "- N'écris jamais que le joueur n'a pas donné d'action concrète ou qu'aucune information concrète n'est disponible.",
+            "- N'invente aucun succès, objet, jet, avantage mécanique ou changement durable absent des résultats validés.",
+            "- Réponds en français, avec une prose sensorielle et concrète, en un à trois courts paragraphes.",
+          ].join("\n"),
+        ]
+      : []),
     "",
     ...(agentId === "requestAnalyzer"
       ? [

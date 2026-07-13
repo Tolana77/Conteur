@@ -143,7 +143,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
   {
     id: "narrationManager",
     name: "Gérer narration",
-    role: "Transforme les faits validés, y compris les résultats du moteur, en réponse narrative claire, immersive et utile pour les joueurs.",
+    role: "Agit comme un véritable meneur de jeu : transforme les faits validés en scène concrète et immersive, fait réagir le monde, offre des pistes utiles et pose une question naturelle lorsque la méthode du joueur doit être précisée.",
     whenToUse: [
       "Dernière étape, après les agents métier, Vérifier règles et l'exécution locale si nécessaire.",
       "Quand des faits mécaniques doivent devenir une réponse en langage naturel.",
@@ -153,6 +153,8 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "Ne calcule pas les jets.",
       "Ne modifie pas le moteur.",
       "Ne raconte pas une réussite mécanique non validée.",
+      "Ne mentionne jamais le moteur, les commandes, la validation ou l'absence d'action concrète au joueur.",
+      "Ne répond pas par un refus abstrait lorsqu'une description limitée, une piste ou une question diégétique permet de poursuivre la scène.",
     ],
   },
 ];

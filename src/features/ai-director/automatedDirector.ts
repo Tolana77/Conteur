@@ -136,8 +136,16 @@ function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrati
     const rolls = receipt.rolls.map((roll) => `${roll.reason ?? roll.formula}: ${roll.formula} = ${roll.result}`);
     return [...actions, ...changes, ...rolls].join(" ; ");
   });
-  const confirmed = [...resultMessages, ...receiptMessages, ...packet.facts, ...packet.questions].filter(Boolean);
-  return confirmed.join(" ") || "Rien dans l'état actuel du monde ne permet de confirmer cette action.";
+  const confirmed = [...resultMessages, ...receiptMessages, ...packet.facts].filter(Boolean);
+  const question = packet.questions.at(-1);
+
+  if (confirmed.length > 0) {
+    return `${confirmed.join(" ")}${question ? ` ${question}` : ""}`;
+  }
+
+  if (question) return `Vous prenez le temps d'observer la situation. ${question}`;
+
+  return "Vous prenez le temps d'observer la scène, mais rien ne s'impose encore avec certitude. Que cherchez-vous à comprendre, et comment vous y prenez-vous ?";
 }
 
 async function runCompactClassifier(playerInput: string): Promise<AutomaticDomainAgent | null> {

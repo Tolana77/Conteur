@@ -16,7 +16,7 @@ const AGENT_INSTRUCTIONS: Record<AutomaticDomainAgent, string> = {
   characterManager: "Résous uniquement l'impact sur la fiche, l'inventaire, les objets, les capacités, les charges ou les PV.",
   actionManager: "Résous uniquement les jets, tests, difficultés et oppositions. Pour un jet final exécutable, utilise la commande roll.",
   combatManager: "Résous uniquement tours, actions, cibles, portée, déplacement et conséquences tactiques à partir des ids fournis.",
-  worldManager: "Fournis uniquement les faits de scène, de lieu ou de PNJ utiles. Ne transforme pas une simple ambiance en changement durable.",
+  worldManager: "Fournis les faits de scène, détails sensoriels, réactions de PNJ et pistes concrètes utiles. Pour une exploration, propose au Narrateur au moins un détail observable et une ouverture exploitable à partir du contexte. Une vérité cachée reste cachée : transmets seulement un indice subtil déjà soutenu par le contexte. Ne transforme pas une simple ambiance en changement durable.",
 };
 
 export function buildAutomaticDomainPrompt(
@@ -27,6 +27,11 @@ export function buildAutomaticDomainPrompt(
   return [
     `Rôle: ${agentId}. ${AGENT_INSTRUCTIONS[agentId]}`,
     "Réponds sans narration et sans demander d'autre agent.",
+    ...(agentId === "worldManager" ? [
+      "Pour observer, chercher, examiner ou discuter, alimente draftPatch.facts et draftPatch.narrationInputs avec 1 à 3 éléments concrets : sensation, détail significatif, réaction, indice ou piste d'action.",
+      "Ne réponds pas par une absence générique d'information. Si la résolution dépend réellement de la méthode, place une seule clarification utile dans draftPatch.questions après avoir fourni ce qui est perceptible sans test.",
+      "Une récompense narrative peut être une piste, une confiance gagnée ou l'existence d'un objet à obtenir. Ne prétends jamais que l'objet est acquis sans commande moteur réussie.",
+    ] : []),
     "N'invente aucun id. Une commande absente vaut mieux qu'une commande incertaine.",
     "Les intentions structurées du chat portent alreadyExecuted=true : ne génère jamais de commande pour les rejouer; transmets seulement leur résultat utile au Narrateur.",
     `Commandes autorisées:\n${getAgentCommandSchemaText(agentId)}`,
@@ -45,7 +50,13 @@ export function buildAutomaticNarrationPrompt(
 ): string {
   const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
   return [
-    "Tu es le Narrateur d'un jeu de rôle fantasy. Réponds en français, brièvement, avec une prose concrète et immersive.",
+    "Tu es le Conteur, un véritable meneur de jeu de rôle fantasy. Réponds en français avec une prose concrète, sensorielle et immersive, en un à trois courts paragraphes.",
+    "Ne parle jamais comme un assistant, un validateur ou une interface. Ne mentionne ni moteur, ni paquet, ni commande, ni manque d'action concrète.",
+    "Fais vivre la scène : montre ce que le personnage perçoit immédiatement, puis donne une conséquence, une réaction ou une piste avec laquelle le joueur peut interagir.",
+    "Quand le joueur prend une initiative, récompense-la par une information utile, un indice subtil, une opportunité ou une réaction du monde si le paquet le permet. Un objet, un avantage mécanique ou un changement durable exige toutefois un succès explicitement validé.",
+    "Si la méthode du joueur est indispensable pour résoudre l'action, ne bloque pas la scène : décris d'abord ce qui est déjà perceptible, puis pose UNE question précise et naturelle. Tu peux suggérer deux ou trois approches diégétiques sans imposer une liste de commandes.",
+    "Si aucune découverte décisive n'est confirmée, décris un résultat limité mais intéressant et oriente vers une piste existante. N'écris jamais « vous ne trouvez aucune information concrète » ou « vous ne faites pas d'action concrète ».",
+    "Une réponse purement narrative ou sociale ne nécessite pas forcément de question : laisse aussi les PNJ agir, hésiter, mentir, proposer ou demander quelque chose selon les faits disponibles.",
     "Raconte uniquement les faits et résultats du paquet. Ne crée ni jet, ni dégât, ni changement d'état supplémentaire.",
     "Toute modification du monde ou d'un inventaire n'existe que si elle apparaît dans Paquet.results avec status=success ou dans Paquet.actionReceipts.",
     "Paquet.actionReceipts décrit les actions déjà exécutées : la source existait avant l'action, même si sa quantité vaut maintenant zéro.",
@@ -54,6 +65,7 @@ export function buildAutomaticNarrationPrompt(
     "L'état de Joueur et Contexte est postérieur aux reçus et ne doit jamais servir à nier leur source.",
     "Une demande sans succès moteur reste une intention ou un échec : ne raconte jamais qu'elle a réussi.",
     "Si un fait dit qu'une liste est exhaustive, restitue uniquement ses éléments et n'en invente aucun.",
+    "Les questions présentes dans Paquet.questions sont des besoins de clarification internes : reformule-les comme une question naturelle du Conteur, sans vocabulaire technique.",
     'Réponds uniquement par {"narration":"..."}.',
     `Joueur: ${JSON.stringify(character ? { name: character.name, classe: character.classe, niveau: character.niveau } : null)}`,
     `Style: ${truncate(state.campaign.style, 160)}`,
