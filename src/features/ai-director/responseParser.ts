@@ -384,14 +384,30 @@ function normalizeCommand(command: unknown, index: number, errors: string[]): Ai
   }
 
   if (type === "resolveGameAction") {
+    const difficulty = isImprovisedDifficulty(candidate.difficulty) ? candidate.difficulty : undefined;
+    const dc = getNumber(candidate.dc);
+    const outcomes = getPlainObject(candidate.outcomes);
+
     return typeof candidate.action === "string"
       ? [{
           type,
           actorId: getOptionalString(candidate.actorId),
           action: candidate.action,
-          difficulty: getOptionalString(candidate.difficulty),
-          proposedCheck: getOptionalString(candidate.proposedCheck),
+          method: getOptionalString(candidate.method),
+          desiredOutcome: getOptionalString(candidate.desiredOutcome),
+          difficulty,
+          stat: getOptionalString(candidate.stat),
+          skill: getOptionalString(candidate.skill),
+          dc: dc ?? undefined,
           stakes: getOptionalString(candidate.stakes),
+          costs: normalizeImprovisedCosts(candidate.costs),
+          outcomes: outcomes ? {
+            critical: getOptionalString(outcomes.critical),
+            success: getOptionalString(outcomes.success),
+            partial: getOptionalString(outcomes.partial),
+            failure: getOptionalString(outcomes.failure),
+          } : undefined,
+          visibility: isDiceVisibility(candidate.visibility) ? candidate.visibility : undefined,
         }]
       : addCommandError(errors, index, "action manquante.");
   }
@@ -542,6 +558,21 @@ function getPosition(value: unknown): { x: number; y: number } | undefined {
   return x !== null && y !== null ? { x, y } : undefined;
 }
 
+function normalizeImprovisedCosts(value: unknown): Array<{ itemId: string; quantity: number; timing?: "attempt" | "success" }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const costs = value.flatMap((entry) => {
+    const candidate = getPlainObject(entry);
+    const quantity = getNumber(candidate?.quantity);
+    if (!candidate || typeof candidate.itemId !== "string" || quantity === null || quantity <= 0) return [];
+    return [{
+      itemId: candidate.itemId,
+      quantity: Math.max(1, Math.round(quantity)),
+      timing: candidate.timing === "success" ? "success" as const : "attempt" as const,
+    }];
+  });
+  return costs.length ? costs : undefined;
+}
+
 function getRequiredString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -569,6 +600,14 @@ function isResolutionVisibility(value: unknown): value is AiResolutionVisibility
 
 function isPriority(value: unknown): value is "low" | "normal" | "high" {
   return value === "low" || value === "normal" || value === "high";
+}
+
+function isImprovisedDifficulty(value: unknown): value is "routine" | "plausible" | "difficult" | "extreme" | "legendary" {
+  return value === "routine" ||
+    value === "plausible" ||
+    value === "difficult" ||
+    value === "extreme" ||
+    value === "legendary";
 }
 
 function isSafetyCategory(value: unknown): value is AiSafetyCategory {

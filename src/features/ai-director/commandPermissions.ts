@@ -24,7 +24,11 @@ export const aiCommandSchemas: AiCommandSchema[] = [
   { type: "abilityCheck", schema: "{ type, characterId, stat, dc?, skill?, visibility?, reason? }", description: "Demande un test de caractéristique." },
   { type: "skillCheck", schema: "{ type, characterId, skill, stat?, dc?, visibility?, reason? }", description: "Demande un test de compétence." },
   { type: "contestCheck", schema: "{ type, actorId, targetId, actorFormula, targetFormula, reason? }", description: "Résout un duel opposé." },
-  { type: "resolveGameAction", schema: "{ type, actorId?, action, difficulty?, proposedCheck?, stakes? }", description: "Cadre une action gamifiée non standard." },
+  {
+    type: "resolveGameAction",
+    schema: "{ type, actorId?, action, method?, desiredOutcome?, difficulty: routine|plausible|difficult|extreme|legendary, stat?, skill?, dc?, stakes?, costs?: [{ itemId, quantity, timing?: attempt|success }], outcomes?: { critical?, success?, partial?, failure? }, visibility? }",
+    description: "Résout localement une improvisation par un test gradué et journalisé.",
+  },
   { type: "calculateHazardDamage", schema: "{ type, hazard, formula, damageType?, save? }", description: "Calcule un danger: chute, piège, environnement." },
   { type: "createCombatScene", schema: "{ type, scene, reason? }", description: "Propose une scène de combat complète." },
   { type: "createCombatTerrain", schema: "{ type, terrain, reason? }", description: "Propose terrain, obstacles, zones et détails de carte." },
@@ -92,6 +96,8 @@ const domainCommandPermissions: Record<AiAgentId, AiCommandType[]> = {
   worldManager: [
     "revealMapDetail",
     "hideMapDetail",
+    "skillCheck",
+    "resolveGameAction",
   ],
   narrationManager: [
     "sendNarration",

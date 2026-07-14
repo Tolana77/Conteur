@@ -1,5 +1,6 @@
 import type { Character, CombatScene, ItemInstance, ItemTemplate } from "../../app/types";
 import { isCommandAllowedForAgent } from "./commandPermissions";
+import { resolveDifficultyClass } from "./improvisedActions";
 import type { AiAgentId, AiDirectorCommand } from "./types";
 
 export interface AiCommandValidation {
@@ -139,14 +140,42 @@ function validateAiCommand(
     return error(command, "Historique joueur non exécutable directement pour l'instant. À placer dans proposedCommands.");
   }
 
-  if (
-    command.type === "abilityCheck" ||
-    command.type === "skillCheck" ||
-    command.type === "contestCheck" ||
-    command.type === "resolveGameAction" ||
-    command.type === "calculateHazardDamage"
-  ) {
-    return error(command, "Commande d'action structurée non exécutable directement. Utilise roll pour un jet final, ou garde cette commande en proposedCommands.");
+  if (command.type === "abilityCheck" || command.type === "skillCheck") {
+    const character = context.characters.find((candidate) =>
+      candidate.id === resolveCharacterId(command.characterId, context.selectedCharacterId));
+    if (!character) return error(command, `Personnage introuvable: ${command.characterId}`);
+    if (command.dc !== undefined && (command.dc < 5 || command.dc > 35)) {
+      return error(command, "Le DD d'un test doit être compris entre 5 et 35.");
+    }
+
+    return ready(command, `${character.name} effectuera un test DD ${resolveDifficultyClass(undefined, command.dc)}.`);
+  }
+
+  if (command.type === "resolveGameAction") {
+    const actorId = resolveCharacterId(command.actorId ?? "selected", context.selectedCharacterId);
+    const character = context.characters.find((candidate) => candidate.id === actorId);
+    if (!character) return error(command, `Personnage introuvable: ${command.actorId ?? "selected"}`);
+    if (!command.action.trim()) return error(command, "L'action improvisée est vide.");
+    if (command.dc !== undefined && (command.dc < 5 || command.dc > 35)) {
+      return error(command, "Le DD d'une improvisation doit être compris entre 5 et 35.");
+    }
+
+    const requiredByItem = new Map<string, number>();
+    (command.costs ?? []).forEach((cost) =>
+      requiredByItem.set(cost.itemId, (requiredByItem.get(cost.itemId) ?? 0) + Math.max(1, Math.round(cost.quantity))));
+    for (const [itemId, quantity] of requiredByItem) {
+      const item = context.itemInstances.find((candidate) => candidate.id === itemId);
+      if (!item || item.location.parent !== actorId || item.quantity < quantity) {
+        return error(command, `Composante indisponible ou insuffisante: ${itemId} x${quantity}.`);
+      }
+    }
+
+    const dc = resolveDifficultyClass(command.difficulty, command.dc);
+    return ready(command, `${character.name} tentera « ${command.action} » contre DD ${dc}.`);
+  }
+
+  if (command.type === "contestCheck" || command.type === "calculateHazardDamage") {
+    return error(command, "Cette résolution structurée nécessite encore une conversion en commande moteur dédiée.");
   }
 
   if (

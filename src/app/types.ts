@@ -12,6 +12,20 @@ export interface Message {
   actionReceipt?: GameActionReceipt;
 }
 
+export interface PendingGameDecision {
+  id: string;
+  originalInput: string;
+  question: string;
+  createdAt: number;
+}
+
+export interface NarrativeMomentum {
+  activeHookId?: string;
+  offTrackActions: number;
+  guidance: "none" | "subtle" | "clear" | "consequence";
+  updatedAt: number;
+}
+
 export interface GameActionReceipt {
   id: string;
   timestamp: number;

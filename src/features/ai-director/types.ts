@@ -26,6 +26,21 @@ export interface AiAgentRequest {
   input?: unknown;
 }
 
+export type ImprovisedDifficulty = "routine" | "plausible" | "difficult" | "extreme" | "legendary";
+
+export interface ImprovisedOutcomeHints {
+  critical?: string;
+  success?: string;
+  partial?: string;
+  failure?: string;
+}
+
+export interface ImprovisedResourceCost {
+  itemId: string;
+  quantity: number;
+  timing?: "attempt" | "success";
+}
+
 export type AiDirectorCommand =
   | { type: "sendNarration"; content: string }
   | { type: "adminCommand"; command: string; reason?: string }
@@ -42,7 +57,21 @@ export type AiDirectorCommand =
   | { type: "abilityCheck"; characterId: string; stat: string; dc?: number; skill?: string; visibility?: "public" | "gmOnly" | "hidden" | "summary"; reason?: string }
   | { type: "skillCheck"; characterId: string; skill: string; stat?: string; dc?: number; visibility?: "public" | "gmOnly" | "hidden" | "summary"; reason?: string }
   | { type: "contestCheck"; actorId: string; targetId: string; actorFormula: string; targetFormula: string; reason?: string }
-  | { type: "resolveGameAction"; actorId?: string; action: string; difficulty?: string; proposedCheck?: string; stakes?: string }
+  | {
+      type: "resolveGameAction";
+      actorId?: string;
+      action: string;
+      method?: string;
+      desiredOutcome?: string;
+      difficulty?: ImprovisedDifficulty;
+      stat?: string;
+      skill?: string;
+      dc?: number;
+      stakes?: string;
+      costs?: ImprovisedResourceCost[];
+      outcomes?: ImprovisedOutcomeHints;
+      visibility?: "public" | "gmOnly" | "hidden" | "summary";
+    }
   | { type: "calculateHazardDamage"; hazard: string; formula: string; damageType?: string; save?: { stat: string; dc: number; halfOnSuccess?: boolean } }
   | { type: "createCombatScene"; scene: Record<string, unknown>; reason?: string }
   | { type: "createCombatTerrain"; terrain: Record<string, unknown>; reason?: string }

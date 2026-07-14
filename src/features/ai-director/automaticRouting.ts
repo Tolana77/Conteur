@@ -8,7 +8,6 @@ export type AutomaticDomainAgent = Extract<
 
 export interface AutomaticRoute {
   agents: AutomaticDomainAgent[];
-  needsClassifier: boolean;
   needsSafetyReview: boolean;
   reason: string;
 }
@@ -28,7 +27,7 @@ export function routePlayerInput(playerInput: string, state: GameState): Automat
   const combatIntent = matches(text, /\b(attaque|attaquer|frappe|tirer|tire|combat|ennemi|cible|portee|deplace|deplacement|desengage|reaction|initiative)\b/u);
   const characterIntent = matches(text, /\b(inventaire|sac|objet|potion|fiole|parchemin|equipe|desequipe|consomme|bois|utilise|lance|sort|capacite|charge|stat|pv|soigne|soin)\b/u);
   const actionIntent = matches(text, /\b(jet|d20|d4|d6|d8|d10|d12|test|sauvegarde|difficulte|forcer|escalader|convaincre|discretion|perception|athletisme)\b/u);
-  const worldIntent = matches(text, /\b(regarde|observe|fouille|cherche|inspecte|examine|ecoute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|lieu|pnj|rumeur|qui est|qu est ce|ou est|pourquoi)\b/u);
+  const worldIntent = matches(text, /\b(regarde|observe|fouille|cherche|inspecte|examine|ecoute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|salue|reponds|dis|lieu|pnj|rumeur|qui est|qu est ce|ou est|pourquoi)\b/u);
   const explicitWorldSubject = matches(text, /\b(lieu|pnj|rumeur|ville|village|foret|route|piece|salle|personne|homme|femme|creature|qui est|ou est)\b/u);
   const latestPlayerMessage = getLatestPlayerMessage(state);
   const structuredActions = latestPlayerMessage?.actions ?? [];
@@ -71,18 +70,23 @@ export function routePlayerInput(playerInput: string, state: GameState): Automat
     scores.set("characterManager", (scores.get("characterManager") ?? 0) + 2);
   }
 
+  const isSmallTalk = /^(bonjour|bonsoir|salut|coucou|merci|au revoir|bonne nuit|ca va)[!.?\s]*$/u.test(text.trim());
+  const looksLikePlayerAction = /^(?:je|j|nous|on)\s/u.test(text.trim()) || /\b(j essaie|je tente|je veux|je voudrais)\b/u.test(text);
+
+  // Une action libre inconnue va directement à l'arbitre générique. Cela
+  // remplace un appel de classification et garde un seul spécialiste IA.
+  if (scores.size === 0 && !isSmallTalk && looksLikePlayerAction) {
+    add("actionManager", 5);
+  }
+
   const agents = DOMAIN_PRIORITY
     .filter((agent) => scores.has(agent))
     .sort((left, right) => (scores.get(right) ?? 0) - (scores.get(left) ?? 0))
-    .slice(0, 2);
+    .slice(0, 1);
 
   const needsSafetyReview = matches(text, /\b(suicide|me tuer|mutil|torture|violer|ignore les instructions|ignore instructions|prompt systeme)\b/u);
-  const isSmallTalk = /^(bonjour|bonsoir|salut|coucou|merci|au revoir|bonne nuit|ca va)[!.?\s]*$/u.test(text.trim());
-  const needsClassifier = agents.length === 0 && !needsSafetyReview && !isSmallTalk && text.trim().length > 3;
-
   return {
     agents,
-    needsClassifier,
     needsSafetyReview,
     reason: agents.length ? `Domaines détectés: ${agents.join(", ")}` : "Réponse narrative directe",
   };

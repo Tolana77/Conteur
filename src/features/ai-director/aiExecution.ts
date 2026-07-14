@@ -2,6 +2,7 @@ import { executeAdminCommand, type AdminCommandResult } from "../admin/adminComm
 import type { GameState } from "../../store/useGameStore";
 import type { AiPromptSnapshot } from "./promptBuilder";
 import type { AiDirectorCommand } from "./types";
+import { executeImprovisedCheck } from "./improvisedActions";
 
 type AiExecutionActions = Pick<
   GameState,
@@ -30,6 +31,8 @@ type AiExecutionActions = Pick<
   | "moveCombatant"
   | "nextCombatTurn"
   | "rollFormula"
+  | "spendItemQuantity"
+  | "recordCampaignEvent"
 >;
 
 export function executeAiCommand(
@@ -40,6 +43,19 @@ export function executeAiCommand(
   if (command.type === "sendNarration") {
     actions.addGmMessage(command.content);
     return { status: "success", message: "Narration ajoutée au chat.", command: "sendNarration" };
+  }
+
+  if (command.type === "abilityCheck" || command.type === "skillCheck" || command.type === "resolveGameAction") {
+    return executeImprovisedCheck(command, {
+      characters: snapshot.characters,
+      selectedCharacterId: snapshot.selectedCharacterId,
+      derivedScores: snapshot.characterDerivedScores,
+      itemInstances: snapshot.itemInstances,
+      itemTemplates: snapshot.itemTemplates,
+      rollFormula: actions.rollFormula,
+      spendItemQuantity: actions.spendItemQuantity,
+      recordCampaignEvent: actions.recordCampaignEvent,
+    });
   }
 
   const adminCommand = toAdminCommand(command);

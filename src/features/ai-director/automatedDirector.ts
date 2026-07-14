@@ -12,6 +12,7 @@ import { runAgentOverHttp } from "./httpAiGateway";
 import { createEmptyResolutionDraft, type AiPromptSnapshot } from "./promptBuilder";
 import { parseAiDirectorResponse } from "./responseParser";
 import { validateAiCommands } from "./validation";
+import { advanceNarrativeMomentum } from "./narrativeMomentum";
 import type {
   AiAgentId,
   AiDirectorCommand,
@@ -33,12 +34,21 @@ interface SourcedCommand {
 
 /**
  * Boucle automatique économique : routage local, zéro orchestrateur IA,
- * au plus deux agents métier, validation/exécution locale, puis Narrateur.
+ * au plus un spécialiste, validation/exécution locale, puis Narrateur.
  */
 export async function runAutomatedDirector(playerInput: string): Promise<AutomatedDirectorResult> {
   const initialState = useGameStore.getState();
-  const route = routePlayerInput(playerInput, initialState);
-  const localResolution = resolveAutomaticLocalRequest(playerInput, initialState);
+  const pendingDecision = initialState.pendingGameDecision;
+  const effectiveInput = pendingDecision
+    ? `${truncate(pendingDecision.originalInput, 600)}\nPrécision du joueur : ${truncate(playerInput, 400)}`
+    : playerInput;
+  initialState.setPendingGameDecision(null);
+  if (!pendingDecision) {
+    initialState.setNarrativeMomentum(advanceNarrativeMomentum(playerInput, initialState));
+  }
+
+  const route = routePlayerInput(effectiveInput, initialState);
+  const localResolution = resolveAutomaticLocalRequest(effectiveInput, initialState);
   const selectedAgents = localResolution.handled ? [] : [...route.agents];
   let draft = createEmptyResolutionDraft();
   const agentsRun: AiAgentId[] = [];
@@ -51,7 +61,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
 
   if (route.needsSafetyReview) {
     try {
-      const safety = await runSafetyReview(playerInput);
+      const safety = await runSafetyReview(effectiveInput);
       agentsRun.push("requestAnalyzer");
       draft = mergeResolutionDraft(draft, safety.draftPatch);
     } catch (error) {
@@ -59,19 +69,9 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
     }
   }
 
-  if (route.needsClassifier && !localResolution.handled) {
+  for (const agentId of [...new Set(selectedAgents)].slice(0, 1)) {
     try {
-      const classifiedAgent = await runCompactClassifier(playerInput);
-      agentsRun.push("requestAnalyzer");
-      if (classifiedAgent) selectedAgents.push(classifiedAgent);
-    } catch (error) {
-      draft = mergeResolutionDraft(draft, { warnings: [`Classement indisponible : ${errorMessage(error)}`] });
-    }
-  }
-
-  for (const agentId of [...new Set(selectedAgents)].slice(0, 2)) {
-    try {
-      const response = await runDomainAgent(agentId, playerInput);
+      const response = await runDomainAgent(agentId, effectiveInput);
       agentsRun.push(agentId);
       draft = mergeResolutionDraft(draft, response.draftPatch);
 
@@ -89,13 +89,24 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
     }
   }
 
-  const executionResults = executeValidatedCommands(gatheredCommands);
+  const clarification = draft.questions.at(-1);
+  const executionResults = clarification ? [] : executeValidatedCommands(gatheredCommands);
+
+  if (clarification) {
+    useGameStore.getState().setPendingGameDecision({
+      id: `decision-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      originalInput: truncate(effectiveInput, 900),
+      question: clarification,
+      createdAt: Date.now(),
+    });
+  }
+
   const packet = createNarrationPacket(draft, executionResults, getLatestPlayerActionReceipt());
   let narration: string;
   let narrationWarning: string | null = null;
 
   try {
-    narration = await runNarrator(playerInput, packet);
+    narration = await runNarrator(effectiveInput, packet);
   } catch (error) {
     narrationWarning = `Narrateur indisponible : ${errorMessage(error)}`;
     narration = createGroundedFallbackNarration(packet);
@@ -146,20 +157,6 @@ function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrati
   if (question) return `Vous prenez le temps d'observer la situation. ${question}`;
 
   return "Vous prenez le temps d'observer la scène, mais rien ne s'impose encore avec certitude. Que cherchez-vous à comprendre, et comment vous y prenez-vous ?";
-}
-
-async function runCompactClassifier(playerInput: string): Promise<AutomaticDomainAgent | null> {
-  const prompt = [
-    "Classe une demande de jeu de rôle dans UN domaine, sans la résoudre.",
-    "characterManager=fiche/objet/capacité; actionManager=test/action physique ou sociale; combatManager=combat tactique; worldManager=exploration/PNJ/lieu; null=conversation pure.",
-    'Réponds uniquement par {"agentRequests":[{"agent":"...","reason":""}],"commands":[],"narration":""} ou {"agentRequests":[],"commands":[],"narration":""}.',
-    `Demande: ${truncate(playerInput, 500)}`,
-  ].join("\n");
-  const response = parseRequiredResponse(await runAgentOverHttp("requestAnalyzer", prompt), "requestAnalyzer");
-  const candidate = response.agentRequests[0]?.agent;
-  return candidate === "characterManager" || candidate === "actionManager" || candidate === "combatManager" || candidate === "worldManager"
-    ? candidate
-    : null;
 }
 
 async function runDomainAgent(agentId: AutomaticDomainAgent, playerInput: string): Promise<AiDirectorResponse> {
@@ -268,6 +265,7 @@ function createSnapshot(state: GameState): AiPromptSnapshot {
     characters: state.characters,
     selectedCharacterId: state.selectedCharacterId,
     messages: state.messages,
+    narrativeMomentum: state.narrativeMomentum,
     combat: state.combat,
     itemTemplates: state.itemTemplates,
     itemInstances: state.itemInstances,

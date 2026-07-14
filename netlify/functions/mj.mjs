@@ -112,12 +112,12 @@ function getMaxTokens(agentId) {
   const configuredMaximum = Number.parseInt(process.env.AI_PROVIDER_MAX_TOKENS ?? "700", 10);
   const agentMaximums = {
     narrationManager: 320,
-    requestAnalyzer: 350,
-    rulesValidator: 300,
-    characterManager: 600,
-    actionManager: 500,
-    combatManager: 650,
-    worldManager: 500,
+    requestAnalyzer: 260,
+    rulesValidator: 260,
+    characterManager: 450,
+    actionManager: 420,
+    combatManager: 550,
+    worldManager: 420,
   };
   const maximum = agentMaximums[agentId] ?? 600;
   return Math.min(Number.isFinite(configuredMaximum) ? configuredMaximum : 700, maximum);
@@ -128,10 +128,10 @@ function getMaxPromptLength(agentId) {
     narrationManager: 7_000,
     requestAnalyzer: 6_000,
     rulesValidator: 10_000,
-    characterManager: 14_000,
-    actionManager: 9_000,
-    combatManager: 16_000,
-    worldManager: 10_000,
+    characterManager: 9_000,
+    actionManager: 7_000,
+    combatManager: 12_000,
+    worldManager: 8_000,
   };
   return limits[agentId] ?? 16_000;
 }

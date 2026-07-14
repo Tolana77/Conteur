@@ -49,12 +49,14 @@ import type {
   ItemInstance,
   ItemTemplate,
   Message,
+  NarrativeMomentum,
+  PendingGameDecision,
   CharacterStats,
 } from "../app/types";
 import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 21;
+export const GAME_STORAGE_VERSION = 23;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -77,6 +79,8 @@ export interface GameState {
   characters: Character[];
   selectedCharacterId: string;
   messages: Message[];
+  narrativeMomentum: NarrativeMomentum;
+  pendingGameDecision: PendingGameDecision | null;
   pendingActionIntents: ChatActionIntent[];
   diceRolls: DiceRoll[];
   characterPortraits: Record<string, string>;
@@ -105,6 +109,7 @@ export interface GameState {
   giveItem: (characterId: string, templateId: string, quantity?: number) => ItemInstance | null;
   pickupItem: (itemId: string, characterId: string) => boolean;
   removeItem: (itemId: string) => void;
+  spendItemQuantity: (itemId: string, quantity: number) => boolean;
   useItem: (itemId: string) => void;
   useAbility: (abilityId: string) => boolean;
   rechargeAbility: (abilityId: string) => void;
@@ -133,6 +138,9 @@ export interface GameState {
   startCampaign: (campaign: Campaign, openingScene: string) => void;
   addGmMessage: (content: string) => void;
   sendPlayerMessage: (content: string) => void;
+  setPendingGameDecision: (decision: PendingGameDecision | null) => void;
+  setNarrativeMomentum: (momentum: NarrativeMomentum) => void;
+  recordCampaignEvent: (entry: string) => void;
   roll: (sides: number) => DiceRoll;
   rollFormula: (formula: string, visibility?: DiceVisibility, reason?: string) => DiceRoll;
   updateWorldFact: (index: number, value: string) => void;
@@ -615,6 +623,8 @@ type GameDataState = Pick<
   | "characters"
   | "selectedCharacterId"
   | "messages"
+  | "narrativeMomentum"
+  | "pendingGameDecision"
   | "pendingActionIntents"
   | "diceRolls"
   | "characterPortraits"
@@ -638,6 +648,8 @@ function createInitialState(): GameDataState {
     characters: exampleCampaign.characters,
     selectedCharacterId: characterId,
     messages: initialMessages,
+    narrativeMomentum: createInitialNarrativeMomentum(),
+    pendingGameDecision: null,
     pendingActionIntents: [],
     diceRolls: [],
     characterPortraits: {},
@@ -682,6 +694,8 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     return {
       ...initialState,
       messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
+      narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
+      pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
       pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
         ? candidate.pendingActionIntents
         : [],
@@ -736,6 +750,8 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       ? candidate.selectedCharacterId ?? initialState.selectedCharacterId
       : candidate.characters?.[0]?.id ?? initialState.selectedCharacterId,
     messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
+    narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
+    pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
     pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
       ? candidate.pendingActionIntents
       : [],
@@ -775,6 +791,44 @@ function normalizeAiApiTraces(value: unknown): AiApiTrace[] {
     typeof trace.prompt === "string" &&
     typeof trace.response === "string",
   ).slice(0, 10);
+}
+
+function normalizePendingGameDecision(value: unknown): PendingGameDecision | null {
+  if (!value || typeof value !== "object") return null;
+  const decision = value as Partial<PendingGameDecision>;
+
+  return typeof decision.id === "string" &&
+    typeof decision.originalInput === "string" &&
+    typeof decision.question === "string" &&
+    typeof decision.createdAt === "number"
+    ? {
+        id: decision.id,
+        originalInput: decision.originalInput,
+        question: decision.question,
+        createdAt: decision.createdAt,
+      }
+    : null;
+}
+
+function createInitialNarrativeMomentum(): NarrativeMomentum {
+  return { offTrackActions: 0, guidance: "none", updatedAt: 0 };
+}
+
+function normalizeNarrativeMomentum(value: unknown): NarrativeMomentum {
+  if (!value || typeof value !== "object") return createInitialNarrativeMomentum();
+  const momentum = value as Partial<NarrativeMomentum>;
+  const guidance = momentum.guidance === "subtle" || momentum.guidance === "clear" || momentum.guidance === "consequence"
+    ? momentum.guidance
+    : "none";
+
+  return {
+    activeHookId: typeof momentum.activeHookId === "string" ? momentum.activeHookId : undefined,
+    offTrackActions: typeof momentum.offTrackActions === "number"
+      ? Math.max(0, Math.min(6, Math.round(momentum.offTrackActions)))
+      : 0,
+    guidance,
+    updatedAt: typeof momentum.updatedAt === "number" ? momentum.updatedAt : 0,
+  };
 }
 
 function normalizeCombatScene(
@@ -4355,6 +4409,31 @@ export const useGameStore = create<GameState>()(
           };
         });
       },
+      spendItemQuantity: (itemId, quantity) => {
+        const amount = Math.max(1, Math.round(quantity));
+        const item = get().itemInstances.find((candidate) => candidate.id === itemId);
+        if (!item || item.quantity < amount) return false;
+
+        set((state) => {
+          const removed = item.quantity === amount;
+          const itemInstances = removed
+            ? state.itemInstances.filter((candidate) => candidate.id !== itemId)
+            : updateItem(state.itemInstances, itemId, (candidate) => ({
+                ...candidate,
+                quantity: candidate.quantity - amount,
+              }));
+
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...state, itemInstances }),
+            abilityInstances: removed
+              ? removeGrantedAbilitiesForItem(state.abilityInstances, itemId)
+              : state.abilityInstances,
+          };
+        });
+
+        return true;
+      },
       useItem: (itemId) => {
         set((state) => {
           const item = state.itemInstances.find((candidate) => candidate.id === itemId);
@@ -5086,6 +5165,8 @@ export const useGameStore = create<GameState>()(
               ? state.selectedCharacterId
               : characters[0]?.id ?? "",
             messages: [createMessage("gm", openingScene)],
+            narrativeMomentum: createInitialNarrativeMomentum(),
+            pendingGameDecision: null,
             pendingActionIntents: [],
             diceRolls: [],
             itemInstances,
@@ -5139,6 +5220,19 @@ export const useGameStore = create<GameState>()(
           pendingActionIntents: [],
           diceRolls: [...resolvedActions.diceRolls, ...state.diceRolls].slice(0, 8),
         });
+      },
+      setPendingGameDecision: (decision) => set({ pendingGameDecision: decision }),
+      setNarrativeMomentum: (momentum) => set({ narrativeMomentum: momentum }),
+      recordCampaignEvent: (entry) => {
+        const trimmedEntry = entry.trim();
+        if (!trimmedEntry) return;
+
+        set((state) => ({
+          campaign: {
+            ...state.campaign,
+            history: [...state.campaign.history, trimmedEntry].slice(-100),
+          },
+        }));
       },
       roll: (sides) => {
         const selectedCharacter = get().characters.find((character) => character.id === get().selectedCharacterId);
@@ -5255,6 +5349,8 @@ export const useGameStore = create<GameState>()(
         characters: state.characters,
         selectedCharacterId: state.selectedCharacterId,
         messages: state.messages,
+        narrativeMomentum: state.narrativeMomentum,
+        pendingGameDecision: state.pendingGameDecision,
         pendingActionIntents: state.pendingActionIntents,
         diceRolls: state.diceRolls,
         characterPortraits: state.characterPortraits,

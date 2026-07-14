@@ -8,6 +8,7 @@ import type {
   ItemInstance,
   ItemTemplate,
   Message,
+  NarrativeMomentum,
 } from "../../app/types";
 import { aiAgentDefinitions } from "./agents";
 import { getAgentCommandSchemaText } from "./commandPermissions";
@@ -37,6 +38,7 @@ export interface AiPromptSnapshot {
   characters: Character[];
   selectedCharacterId: string;
   messages: Message[];
+  narrativeMomentum: NarrativeMomentum;
   combat: CombatScene;
   itemTemplates: ItemTemplate[];
   itemInstances: ItemInstance[];
@@ -160,6 +162,20 @@ export function buildAiDirectorPrompt(
             "- Si la méthode change réellement le résultat, ajoute UNE clarification précise dans draftPatch.questions après les informations immédiatement perceptibles.",
             "- Ne révèle jamais directement une vérité cachée : utilise seulement ses indices autorisés.",
             "- Ne confirme jamais l'acquisition d'un objet ou une modification durable sans commande moteur validée.",
+          ].join("\n"),
+        ]
+      : []),
+    ...(agentId === "actionManager"
+      ? [
+          "",
+          "# Arbitrage des improvisations",
+          [
+            "- Toute intention compréhensible peut être tentée, même si elle n'est pas prévue par le scénario.",
+            "- Action triviale sans enjeu: aucun jet. Action incertaine avec conséquence intéressante: UNE commande resolveGameAction.",
+            "- Échelle: plausible DD10, difficult DD15, extreme DD22, legendary DD28; réserve jusqu'à DD35 aux exploits presque impossibles.",
+            "- Une préparation pertinente, un coût ou un risque accepté doit réellement améliorer la faisabilité.",
+            "- Déclare critical/success/partial/failure dans outcomes. Chaque échec doit faire évoluer la situation.",
+            "- N'utilise jamais roll brut pour remplacer l'arbitrage et ne demande une précision que si elle change vraiment le test.",
           ].join("\n"),
         ]
       : []),
@@ -646,6 +662,7 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
       narrationInputs: {
         worldTone: snapshot.campaign.style,
         worldPitch: snapshot.campaign.world.pitch,
+        narrativeMomentum: snapshot.narrativeMomentum,
         themes: snapshot.campaign.world.themes?.slice(0, 4),
         rules: snapshot.campaign.world.rules?.slice(0, 4),
         loreSummary: snapshot.campaign.world.lore,

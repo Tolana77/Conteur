@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
-import { executeAdminCommand, type AdminCommandResult } from "../admin/adminCommands";
+import type { AdminCommandResult } from "../admin/adminCommands";
 import { useGameStore } from "../../store/useGameStore";
 import { aiAgentDefinitions } from "./agents";
-import { buildAiDirectorPrompt, createEmptyResolutionDraft, type AiPromptSnapshot } from "./promptBuilder";
+import { buildAiDirectorPrompt, createEmptyResolutionDraft } from "./promptBuilder";
 import { isCommandAllowedForAgent } from "./commandPermissions";
 import { AiGatewayError, runAgentOverHttp } from "./httpAiGateway";
 import { parseAiDirectorResponse } from "./responseParser";
 import { validateAiCommands, type AiCommandValidation } from "./validation";
+import { executeAiCommand } from "./aiExecution";
 import type {
   AiAgentId,
   AiAgentRequest,
@@ -38,43 +39,20 @@ export function AiDirectorConsole() {
   const characters = useGameStore((state) => state.characters);
   const selectedCharacterId = useGameStore((state) => state.selectedCharacterId);
   const messages = useGameStore((state) => state.messages);
+  const narrativeMomentum = useGameStore((state) => state.narrativeMomentum);
   const combat = useGameStore((state) => state.combat);
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
   const characterDerivedScores = useGameStore((state) => state.characterDerivedScores);
-  const addGmMessage = useGameStore((state) => state.addGmMessage);
-  const dealDamage = useGameStore((state) => state.dealDamage);
-  const healCharacter = useGameStore((state) => state.healCharacter);
-  const setCharacterPv = useGameStore((state) => state.setCharacterPv);
-  const changeCharacterStat = useGameStore((state) => state.changeCharacterStat);
-  const equipItem = useGameStore((state) => state.equipItem);
-  const unequipItem = useGameStore((state) => state.unequipItem);
-  const giveItem = useGameStore((state) => state.giveItem);
-  const pickupItem = useGameStore((state) => state.pickupItem);
-  const removeItem = useGameStore((state) => state.removeItem);
-  const useItem = useGameStore((state) => state.useItem);
-  const useAbility = useGameStore((state) => state.useAbility);
-  const rechargeAbility = useGameStore((state) => state.rechargeAbility);
-  const setAbilityCharges = useGameStore((state) => state.setAbilityCharges);
-  const rest = useGameStore((state) => state.rest);
-  const startEncounter = useGameStore((state) => state.startEncounter);
-  const startCombat = useGameStore((state) => state.startCombat);
-  const endCombat = useGameStore((state) => state.endCombat);
-  const addCharacterToCombat = useGameStore((state) => state.addCharacterToCombat);
-  const addEntityToCombat = useGameStore((state) => state.addEntityToCombat);
-  const revealMapDetail = useGameStore((state) => state.revealMapDetail);
-  const hideMapDetail = useGameStore((state) => state.hideMapDetail);
-  const moveCombatant = useGameStore((state) => state.moveCombatant);
-  const nextCombatTurn = useGameStore((state) => state.nextCombatTurn);
-  const rollFormula = useGameStore((state) => state.rollFormula);
 
   const storageSnapshot = useMemo(() => ({
     campaign,
     characters,
     selectedCharacterId,
     messages,
+    narrativeMomentum,
     combat,
     itemTemplates,
     itemInstances,
@@ -91,62 +69,9 @@ export function AiDirectorConsole() {
     itemInstances,
     itemTemplates,
     messages,
+    narrativeMomentum,
     selectedCharacterId,
   ]);
-  const actions = useMemo(() => ({
-    addGmMessage,
-    dealDamage,
-    healCharacter,
-    setCharacterPv,
-    changeCharacterStat,
-    equipItem,
-    unequipItem,
-    giveItem,
-    pickupItem,
-    removeItem,
-    useItem,
-    useAbility,
-    rechargeAbility,
-    setAbilityCharges,
-    rest,
-    startEncounter,
-    startCombat,
-    endCombat,
-    addCharacterToCombat,
-    addEntityToCombat,
-    revealMapDetail,
-    hideMapDetail,
-    moveCombatant,
-    nextCombatTurn,
-    rollFormula,
-  }), [
-    addCharacterToCombat,
-    addEntityToCombat,
-    addGmMessage,
-    changeCharacterStat,
-    dealDamage,
-    endCombat,
-    equipItem,
-    giveItem,
-    pickupItem,
-    healCharacter,
-    hideMapDetail,
-    moveCombatant,
-    nextCombatTurn,
-    rechargeAbility,
-    removeItem,
-    rest,
-    revealMapDetail,
-    rollFormula,
-    setAbilityCharges,
-    setCharacterPv,
-    startCombat,
-    startEncounter,
-    unequipItem,
-    useAbility,
-    useItem,
-  ]);
-
   const request = useMemo(() => parseManualAgentRequest(selectedAgentId, manualAgentRequest), [manualAgentRequest, selectedAgentId]);
   const prompt = useMemo(
     () => buildAiDirectorPrompt(storageSnapshot, selectedAgentId, { playerInput, request, resolutionDraft }),
@@ -272,7 +197,7 @@ export function AiDirectorConsole() {
     }
 
     const commands = createCommandsWithNarration(selectedAgentId, parsed.response.narration, parsed.response.commands);
-    const results = commands.map((command) => executeAiCommand(command, storageSnapshot, actions));
+    const results = commands.map((command) => executeAiCommand(command, storageSnapshot, useGameStore.getState()));
     setExecutionHistory((history) => [...results, ...history].slice(0, 10));
     const executionDraft = createExecutionDraft(results);
     const nextDraft = mergeResolutionDraft(resolutionDraft, executionDraft);
@@ -782,149 +707,4 @@ function createCommandsWithNarration(agentId: AiAgentId, narration: string, comm
   return trimmedNarration && !hasNarrationCommand && isCommandAllowedForAgent(agentId, "sendNarration")
     ? [{ type: "sendNarration", content: trimmedNarration }, ...commands]
     : commands;
-}
-
-function executeAiCommand(
-  command: AiDirectorCommand,
-  snapshot: AiPromptSnapshot,
-  actions: {
-    addGmMessage: (content: string) => void;
-    dealDamage: ReturnType<typeof useGameStore.getState>["dealDamage"];
-    healCharacter: ReturnType<typeof useGameStore.getState>["healCharacter"];
-    setCharacterPv: ReturnType<typeof useGameStore.getState>["setCharacterPv"];
-    changeCharacterStat: ReturnType<typeof useGameStore.getState>["changeCharacterStat"];
-    equipItem: ReturnType<typeof useGameStore.getState>["equipItem"];
-    unequipItem: ReturnType<typeof useGameStore.getState>["unequipItem"];
-    giveItem: ReturnType<typeof useGameStore.getState>["giveItem"];
-    pickupItem: ReturnType<typeof useGameStore.getState>["pickupItem"];
-    removeItem: ReturnType<typeof useGameStore.getState>["removeItem"];
-    useItem: ReturnType<typeof useGameStore.getState>["useItem"];
-    useAbility: ReturnType<typeof useGameStore.getState>["useAbility"];
-    rechargeAbility: ReturnType<typeof useGameStore.getState>["rechargeAbility"];
-    setAbilityCharges: ReturnType<typeof useGameStore.getState>["setAbilityCharges"];
-    rest: ReturnType<typeof useGameStore.getState>["rest"];
-    startEncounter: ReturnType<typeof useGameStore.getState>["startEncounter"];
-    startCombat: ReturnType<typeof useGameStore.getState>["startCombat"];
-    endCombat: ReturnType<typeof useGameStore.getState>["endCombat"];
-    addCharacterToCombat: ReturnType<typeof useGameStore.getState>["addCharacterToCombat"];
-    addEntityToCombat: ReturnType<typeof useGameStore.getState>["addEntityToCombat"];
-    revealMapDetail: ReturnType<typeof useGameStore.getState>["revealMapDetail"];
-    hideMapDetail: ReturnType<typeof useGameStore.getState>["hideMapDetail"];
-    moveCombatant: ReturnType<typeof useGameStore.getState>["moveCombatant"];
-    nextCombatTurn: ReturnType<typeof useGameStore.getState>["nextCombatTurn"];
-    rollFormula: ReturnType<typeof useGameStore.getState>["rollFormula"];
-  },
-): AdminCommandResult & { command: string } {
-  if (command.type === "sendNarration") {
-    actions.addGmMessage(command.content);
-    return { status: "success", message: "Narration ajoutée au chat.", command: "sendNarration" };
-  }
-
-  const adminCommand = toAdminCommand(command);
-
-  if (!adminCommand) {
-    return { status: "error", message: "Commande non exécutable.", command: JSON.stringify(command) };
-  }
-
-  const result = executeAdminCommand(adminCommand, {
-    characters: snapshot.characters,
-    selectedCharacterId: snapshot.selectedCharacterId,
-    itemTemplates: snapshot.itemTemplates,
-    itemInstances: snapshot.itemInstances,
-    abilityTemplates: snapshot.abilityTemplates,
-    abilityInstances: snapshot.abilityInstances,
-    combat: snapshot.combat,
-    dealDamage: actions.dealDamage,
-    healCharacter: actions.healCharacter,
-    setCharacterPv: actions.setCharacterPv,
-    changeCharacterStat: actions.changeCharacterStat,
-    equipItem: actions.equipItem,
-    unequipItem: actions.unequipItem,
-    giveItem: actions.giveItem,
-    pickupItem: actions.pickupItem,
-    removeItem: actions.removeItem,
-    useItem: actions.useItem,
-    useAbility: actions.useAbility,
-    rechargeAbility: actions.rechargeAbility,
-    setAbilityCharges: actions.setAbilityCharges,
-    rest: actions.rest,
-    startEncounter: actions.startEncounter,
-    startCombat: actions.startCombat,
-    endCombat: actions.endCombat,
-    addCharacterToCombat: actions.addCharacterToCombat,
-    addEntityToCombat: actions.addEntityToCombat,
-    revealMapDetail: actions.revealMapDetail,
-    hideMapDetail: actions.hideMapDetail,
-    moveCombatant: actions.moveCombatant,
-    nextCombatTurn: actions.nextCombatTurn,
-    rollFormula: actions.rollFormula,
-  });
-
-  return { ...result, command: adminCommand };
-}
-
-function toAdminCommand(command: AiDirectorCommand): string | null {
-  if (command.type === "adminCommand") {
-    return command.command;
-  }
-
-  if (command.type === "dealDamage") {
-    return `dealDamage ${command.characterId} ${command.amount} ${command.damageType ?? "force"}`;
-  }
-
-  if (command.type === "heal") {
-    return `heal ${command.characterId} ${command.amount}`;
-  }
-
-  if (command.type === "useItem") {
-    return `useItem ${command.itemId}`;
-  }
-
-  if (command.type === "giveItem") {
-    return `giveItem ${command.characterId} ${command.templateId} ${command.quantity ?? 1}`;
-  }
-
-  if (command.type === "pickupItem") {
-    return `pickupItem ${command.characterId} ${command.itemId}`;
-  }
-
-  if (command.type === "destroyItem") {
-    return `removeItem ${command.itemId}`;
-  }
-
-  if (command.type === "changeCharacterStat") {
-    const value = command.mode === "add" && command.value >= 0 ? `+${command.value}` : String(command.value);
-    return `changeStat ${command.characterId} ${command.stat} ${value}`;
-  }
-
-  if (command.type === "moveCombatant") {
-    return `moveCombatant ${command.combatantId} ${command.to.x} ${command.to.y}`;
-  }
-
-  if (command.type === "revealMapDetail") {
-    return `revealDetail ${command.detailId}`;
-  }
-
-  if (command.type === "hideMapDetail") {
-    return `hideDetail ${command.detailId}`;
-  }
-
-  if (command.type === "roll") {
-    const reason = command.reason ? ` "${command.reason.replace(/"/g, "'")}"` : "";
-    return `roll "${command.formula.replace(/"/g, "'")}" ${command.visibility ?? "public"}${reason}`;
-  }
-
-  if (command.type === "startCombat") {
-    return "startCombat";
-  }
-
-  if (command.type === "endCombat") {
-    return "endCombat";
-  }
-
-  if (command.type === "nextCombatTurn") {
-    return "nextTurn";
-  }
-
-  return null;
 }
