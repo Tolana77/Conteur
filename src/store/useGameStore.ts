@@ -9,12 +9,18 @@ import {
 } from "../features/campaign";
 import { rollDiceFormula } from "../features/dice";
 import {
-  advanceNarrativeScene,
-  applyNarrativeScenePatch,
   createInitialNarrativeScene,
   normalizeNarrativeScene,
-  recordNarratedBeat,
 } from "../core/game-engine/narrativeScene";
+import {
+  createLocalGameRuntimeAdapter,
+  type GameActorRole,
+  type GameCommand,
+  type GameCommandInput,
+  type GameCommandResult,
+  type GameEvent,
+  type GameRuntimeSnapshot,
+} from "../core/game-engine";
 import {
   canUseAbility,
   createAbilityInstance,
@@ -91,7 +97,7 @@ import type {
 import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 27;
+export const GAME_STORAGE_VERSION = 28;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -110,6 +116,8 @@ interface UiSettings {
 
 export interface GameState {
   storageVersion: number;
+  gameRevision: number;
+  gameEvents: GameEvent[];
   campaign: Campaign;
   characters: Character[];
   selectedCharacterId: string;
@@ -133,6 +141,7 @@ export interface GameState {
   aiApiTraces: AiApiTrace[];
   campaignStartSnapshot: CampaignStartSnapshot;
   narrativeScene: NarrativeSceneState;
+  dispatchGameCommand: (command: GameCommand) => GameCommandResult;
   selectCharacter: (characterId: string) => void;
   setCharacterPortrait: (characterId: string, portrait: string) => void;
   dealDamage: (characterId: string, amount: number, damageType?: string) => void;
@@ -676,6 +685,8 @@ function createEmptyCombatScene(): CombatScene {
 type GameDataState = Pick<
   GameState,
   | "storageVersion"
+  | "gameRevision"
+  | "gameEvents"
   | "campaign"
   | "characters"
   | "selectedCharacterId"
@@ -701,6 +712,37 @@ type GameDataState = Pick<
   | "narrativeScene"
 >;
 
+const localGameRuntime = createLocalGameRuntimeAdapter();
+const LOCAL_GAME_EVENT_LIMIT = 200;
+
+function toGameRuntimeSnapshot(state: GameDataState): GameRuntimeSnapshot {
+  return {
+    revision: state.gameRevision,
+    campaign: state.campaign,
+    characters: state.characters,
+    messages: state.messages,
+    narrativeScene: state.narrativeScene,
+    processedCommandIds: [...new Set(state.gameEvents.map((event) => event.commandId))],
+  };
+}
+
+function createStoreGameCommand(
+  state: GameDataState,
+  input: GameCommandInput,
+  actorRole: GameActorRole = "system",
+): GameCommand {
+  const actorId = actorRole === "player"
+    ? state.selectedCharacterId || "local-player"
+    : actorRole === "gm"
+      ? "local-gm"
+      : "local-system";
+  return localGameRuntime.createCommand(
+    toGameRuntimeSnapshot(state),
+    input,
+    { id: actorId, role: actorRole },
+  );
+}
+
 function createInitialState(): GameDataState {
   const characterId = defaultCampaign.characters[0]?.id ?? "";
   const itemInstances: ItemInstance[] = [];
@@ -724,6 +766,8 @@ function createInitialState(): GameDataState {
 
   return {
     storageVersion: GAME_STORAGE_VERSION,
+    gameRevision: 0,
+    gameEvents: [],
     campaign: defaultCampaign,
     characters: defaultCampaign.characters,
     selectedCharacterId: characterId,
@@ -765,6 +809,8 @@ function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<Ga
 
   return {
     storageVersion: GAME_STORAGE_VERSION,
+    gameRevision: 0,
+    gameEvents: [],
     campaign: { ...start.campaign, characters },
     characters,
     selectedCharacterId: characters.some((character) => character.id === start.selectedCharacterId)
@@ -906,6 +952,8 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     ? mergeById(candidate.enemyTemplates, initialState.enemyTemplates)
     : initialState.enemyTemplates;
   const narrativeScene = normalizeNarrativeScene(candidate.narrativeScene, campaign);
+  const gameEvents = normalizeGameEvents(candidate.gameEvents, campaign.id);
+  const gameRevision = normalizeGameRevision(candidate.gameRevision, gameEvents);
   const normalizedCampaignStartSnapshot = normalizeCampaignStartSnapshot(candidate.campaignStartSnapshot);
   const campaignStartSnapshot = normalizedCampaignStartSnapshot
     ? cloneCampaignStartSnapshot(normalizedCampaignStartSnapshot)
@@ -927,6 +975,8 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
 
   return {
     ...initialState,
+    gameRevision,
+    gameEvents,
     campaign,
     characters,
     selectedCharacterId,
@@ -961,6 +1011,28 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       effectTemplates,
     ),
   };
+}
+
+function normalizeGameEvents(value: unknown, campaignId: string): GameEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((candidate): candidate is GameEvent => {
+    if (!candidate || typeof candidate !== "object") return false;
+    const event = candidate as Partial<GameEvent>;
+    return event.protocolVersion === 1 &&
+      typeof event.id === "string" &&
+      typeof event.commandId === "string" &&
+      event.campaignId === campaignId &&
+      typeof event.actorId === "string" &&
+      Number.isInteger(event.revision) &&
+      Number(event.revision) >= 0 &&
+      Number.isFinite(event.occurredAt) &&
+      typeof event.type === "string";
+  }).slice(-200);
+}
+
+function normalizeGameRevision(value: unknown, events: GameEvent[]): number {
+  const persistedRevision = typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+  return events.reduce((maximum, event) => Math.max(maximum, event.revision), persistedRevision);
 }
 
 function normalizeDisabledContentTemplateIds(value: unknown): DisabledContentTemplateIds {
@@ -4916,6 +4988,25 @@ export const useGameStore = create<GameState>()(
   persist(
     (set, get) => ({
       ...createInitialState(),
+      dispatchGameCommand: (command) => {
+        const state = get();
+        const result = localGameRuntime.execute(toGameRuntimeSnapshot(state), command);
+        if (!result.ok) return result;
+
+        set((current) => ({
+          gameRevision: result.state.revision,
+          gameEvents: [...current.gameEvents, ...result.events].slice(-LOCAL_GAME_EVENT_LIMIT),
+          campaign: result.state.campaign,
+          characters: result.state.characters,
+          messages: result.state.messages,
+          narrativeScene: result.state.narrativeScene,
+          ...withCharacterDerivedScores({
+            ...current,
+            characters: result.state.characters,
+          }),
+        }));
+        return result;
+      },
       selectCharacter: (characterId) => set({ selectedCharacterId: characterId }),
       setCharacterPortrait: (characterId, portrait) => {
         set((state) => ({
@@ -4926,68 +5017,43 @@ export const useGameStore = create<GameState>()(
         }));
       },
       dealDamage: (characterId, amount, damageType = "force") => {
-        set((state) => {
-          const characters = applyDamageToCharacters(
-            state.characters,
-            characterId,
-            amount,
-            damageType,
-            state.itemInstances,
-            state.itemTemplates,
-            state.effectTemplates,
-          );
-
-          return {
-            characters,
-            campaign: { ...state.campaign, characters },
-            ...withCharacterDerivedScores({ ...state, characters }),
-          };
-        });
+        const state = get();
+        const resolvedCharacters = applyDamageToCharacters(
+          state.characters,
+          characterId,
+          amount,
+          damageType,
+          state.itemInstances,
+          state.itemTemplates,
+          state.effectTemplates,
+        );
+        const resolvedCharacter = resolvedCharacters.find((character) => character.id === characterId);
+        if (!resolvedCharacter) return;
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "character.setHp",
+          payload: { characterId, hp: resolvedCharacter.pv, reason: `damage:${damageType}` },
+        }));
       },
       healCharacter: (characterId, amount) => {
-        set((state) => {
-          const characters = updateCharacter(state.characters, characterId, (character) => ({
-            ...character,
-            pv: clamp(character.pv + amount, 0, character.maxPv),
-          }));
-
-          return {
-            characters,
-            campaign: { ...state.campaign, characters },
-            ...withCharacterDerivedScores({ ...state, characters }),
-          };
-        });
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "character.adjustHp",
+          payload: { characterId, amount, reason: "heal" },
+        }));
       },
       setCharacterPv: (characterId, pv) => {
-        set((state) => {
-          const characters = updateCharacter(state.characters, characterId, (character) => ({
-            ...character,
-            pv: clamp(pv, 0, character.maxPv),
-          }));
-
-          return {
-            characters,
-            campaign: { ...state.campaign, characters },
-            ...withCharacterDerivedScores({ ...state, characters }),
-          };
-        });
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "character.setHp",
+          payload: { characterId, hp: pv, reason: "manual" },
+        }));
       },
       changeCharacterStat: (characterId, stat, value, mode) => {
-        set((state) => {
-          const characters = updateCharacter(state.characters, characterId, (character) => ({
-            ...character,
-            stats: {
-              ...character.stats,
-              [stat]: mode === "add" ? character.stats[stat] + value : value,
-            },
-          }));
-
-          return {
-            characters,
-            campaign: { ...state.campaign, characters },
-            ...withCharacterDerivedScores({ ...state, characters }),
-          };
-        });
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "character.changeStat",
+          payload: { characterId, stat, value, mode },
+        }));
       },
       equipItem: (itemId) => {
         set((state) => {
@@ -5554,21 +5620,11 @@ export const useGameStore = create<GameState>()(
         return ability;
       },
       appendCharacterHistory: (characterId, entry) => {
-        const trimmedEntry = entry.trim();
-        if (!trimmedEntry || !get().characters.some((character) => character.id === characterId)) {
-          return false;
-        }
-        set((state) => {
-          const characters = updateCharacter(state.characters, characterId, (character) => ({
-            ...character,
-            history: [...(character.history ?? []), trimmedEntry].slice(-100),
-          }));
-          return {
-            characters,
-            campaign: { ...state.campaign, characters },
-          };
-        });
-        return true;
+        const state = get();
+        return get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "character.appendHistory",
+          payload: { characterId, entry },
+        })).ok;
       },
       spawnEnemyFromTemplate: (templateId, input) => {
         const state = get();
@@ -6288,30 +6344,32 @@ export const useGameStore = create<GameState>()(
         set((state) => createCampaignRuntimeState(state.campaignStartSnapshot));
       },
       advanceNarrativeScene: (playerAction) => {
-        set((state) => ({
-          narrativeScene: advanceNarrativeScene(state.narrativeScene, playerAction),
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "narrative.advanceScene",
+          payload: { playerAction },
         }));
       },
       applyNarrativeScenePatch: (patch) => {
-        set((state) => ({
-          narrativeScene: applyNarrativeScenePatch(state.narrativeScene, patch, state.campaign),
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "narrative.patchScene",
+          payload: { patch },
         }));
       },
       recordNarratedBeat: (narration) => {
-        set((state) => ({
-          narrativeScene: recordNarratedBeat(state.narrativeScene, narration),
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "narrative.recordBeat",
+          payload: { narration },
         }));
       },
       addGmMessage: (content) => {
-        const trimmedContent = content.trim();
-
-        if (!trimmedContent) {
-          return;
-        }
-
-        set((state) => ({
-          messages: [...state.messages, createMessage("gm", trimmedContent)],
-        }));
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "chat.addGmMessage",
+          payload: { content },
+        }, "gm"));
       },
       sendPlayerMessage: (content) => {
         const state = get();
@@ -6351,14 +6409,10 @@ export const useGameStore = create<GameState>()(
       setPendingGameDecision: (decision) => set({ pendingGameDecision: decision }),
       setNarrativeMomentum: (momentum) => set({ narrativeMomentum: momentum }),
       recordCampaignEvent: (entry) => {
-        const trimmedEntry = entry.trim();
-        if (!trimmedEntry) return;
-
-        set((state) => ({
-          campaign: {
-            ...state.campaign,
-            history: [...state.campaign.history, trimmedEntry].slice(-100),
-          },
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "campaign.appendHistory",
+          payload: { entry },
         }));
       },
       roll: (sides) => {
@@ -6390,70 +6444,32 @@ export const useGameStore = create<GameState>()(
         return rollResult;
       },
       updateWorldFact: (index, value) => {
-        set((state) => {
-          const facts = [...state.campaign.world.facts];
-          facts[index] = value;
-
-          return {
-            campaign: {
-              ...state.campaign,
-              world: {
-                ...state.campaign.world,
-                facts,
-              },
-            },
-          };
-        });
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "world.updateFact",
+          payload: { index, value },
+        }, "gm"));
       },
       addWorldFact: (value) => {
-        const trimmedValue = value.trim();
-
-        if (!trimmedValue) {
-          return;
-        }
-
-        set((state) => ({
-          campaign: {
-            ...state.campaign,
-            world: {
-              ...state.campaign.world,
-              facts: [...state.campaign.world.facts, trimmedValue],
-            },
-          },
-        }));
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "world.addFact",
+          payload: { value },
+        }, "gm"));
       },
       removeWorldFact: (index) => {
-        set((state) => ({
-          campaign: {
-            ...state.campaign,
-            world: {
-              ...state.campaign.world,
-              facts: state.campaign.world.facts.filter((_, factIndex) => factIndex !== index),
-            },
-          },
-        }));
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "world.removeFact",
+          payload: { index },
+        }, "gm"));
       },
       updateEntity: (entity) => {
-        set((state) => {
-          const entityKey =
-            entity.type === "npc" ? "npcs" : entity.type === "location" ? "locations" : "items";
-          const currentEntities = state.campaign.world.entities[entityKey];
-
-          return {
-            campaign: {
-              ...state.campaign,
-              world: {
-                ...state.campaign.world,
-                entities: {
-                  ...state.campaign.world.entities,
-                  [entityKey]: currentEntities.map((item) =>
-                    item.id === entity.id ? entity : item,
-                  ),
-                },
-              },
-            },
-          };
-        });
+        const state = get();
+        get().dispatchGameCommand(createStoreGameCommand(state, {
+          type: "world.upsertEntity",
+          payload: { entity },
+        }, "gm"));
       },
       addAiApiTrace: (trace) => {
         set((state) => ({
@@ -6472,6 +6488,8 @@ export const useGameStore = create<GameState>()(
       }),
       partialize: (state) => ({
         storageVersion: state.storageVersion,
+        gameRevision: state.gameRevision,
+        gameEvents: state.gameEvents,
         campaign: state.campaign,
         characters: state.characters,
         selectedCharacterId: state.selectedCharacterId,

@@ -36,6 +36,8 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
     Array<AdminCommandResult & { input: string }>
   >([]);
   const storageVersion = useGameStore((state) => state.storageVersion);
+  const gameRevision = useGameStore((state) => state.gameRevision);
+  const gameEventCount = useGameStore((state) => state.gameEvents.length);
   const campaign = useGameStore((state) => state.campaign);
   const characters = useGameStore((state) => state.characters);
   const messages = useGameStore((state) => state.messages);
@@ -219,6 +221,14 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
                   <div>
                     <dt className="text-[#E4D8BE]/50">Version active</dt>
                     <dd className="font-bold text-[#E4D8BE]">{storageVersion}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#E4D8BE]/50">Révision moteur</dt>
+                    <dd className="font-bold text-[#E4D8BE]">{gameRevision}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#E4D8BE]/50">Événements récents</dt>
+                    <dd className="font-bold text-[#E4D8BE]">{gameEventCount}</dd>
                   </div>
                   <div>
                     <dt className="text-[#E4D8BE]/50">Personnages</dt>
