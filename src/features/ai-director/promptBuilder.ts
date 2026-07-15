@@ -5,13 +5,24 @@ import type {
   Character,
   CharacterDerivedScores,
   CombatScene,
+  EffectTemplate,
+  EnemyTemplate,
   ItemInstance,
   ItemTemplate,
   Message,
   NarrativeMomentum,
+  NarrativeSceneState,
 } from "../../app/types";
 import { aiAgentDefinitions } from "./agents";
 import { getAgentCommandSchemaText } from "./commandPermissions";
+import {
+  assetContentSchemaText,
+  contentCreationIdInstruction,
+  effectOperationCatalog,
+  enemyContentSchemaText,
+  isContentTemplateActive,
+  type DisabledContentTemplateIds,
+} from "../content";
 import type {
   AiAgentId,
   AiAgentRequest,
@@ -44,7 +55,11 @@ export interface AiPromptSnapshot {
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
   abilityInstances: AbilityInstance[];
+  effectTemplates: EffectTemplate[];
+  enemyTemplates: EnemyTemplate[];
+  disabledContentTemplateIds: DisabledContentTemplateIds;
   characterDerivedScores: Record<string, CharacterDerivedScores>;
+  narrativeScene: NarrativeSceneState;
 }
 
 export interface AiDirectorPromptOptions {
@@ -96,7 +111,9 @@ export function buildAiDirectorPrompt(
     "",
     "# Interdictions",
     ...agent.forbiddenTasks.map((item) => `- ${item}`),
-    "- N'invente pas d'id. Utilise uniquement les ids présents dans le contexte.",
+    isContentCreationAgent(agentId)
+      ? `- ${contentCreationIdInstruction}`
+      : "- N'invente pas d'id. Utilise uniquement les ids présents dans le contexte.",
     "- N'écris aucun texte hors JSON final.",
     "- Ne crée pas de commande inconnue.",
     "- Ne supprime jamais les informations déjà présentes dans le dossier de résolution; ajoute uniquement ce que ton rôle apporte via draftPatch.",
@@ -179,6 +196,22 @@ export function buildAiDirectorPrompt(
           ].join("\n"),
         ]
       : []),
+    ...(agentId === "assetTemplateManager"
+      ? [
+          "",
+          "# Contrat de création de contenu",
+          assetContentSchemaText,
+          "Crée les dépendances dans l'ordre effet, capacité, objet, puis instance. Le moteur réordonnera les commandes avant leur validation.",
+        ]
+      : []),
+    ...(agentId === "tacticalTemplateManager"
+      ? [
+          "",
+          "# Contrat de création d'ennemi",
+          enemyContentSchemaText,
+          "Réutilise une capacité existante par abilityTemplateIds; suggère assetTemplateManager uniquement si elle manque.",
+        ]
+      : []),
     ...(agentId === "narrationManager"
       ? [
           "",
@@ -224,6 +257,7 @@ export function createEmptyResolutionDraft(): AiResolutionDraft {
     suggestedAgents: [],
     proposedCommands: [],
     narrationInputs: [],
+    scenePatches: [],
     safety: [],
     warnings: [],
     questions: [],
@@ -257,7 +291,7 @@ export function createDraftViewForAgent(draft: AiResolutionDraft, agentId: AiAge
     case "characterManager":
       return createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
         factTerms: ["personnage", "character", "inventaire", "objet", "item", "équipement", "capac", "charge", "pv", "stat"],
-        commandTypes: ["useItem", "pickupItem", "destroyItem", "modifyItem", "changeCharacterStat", "updateCharacterHistory", "heal"],
+        commandTypes: ["useItem", "giveItem", "pickupItem", "createItem", "destroyItem", "modifyItem", "grantAbility", "changeCharacterStat", "updateCharacterHistory", "heal"],
       });
 
     case "actionManager":
@@ -266,11 +300,13 @@ export function createDraftViewForAgent(draft: AiResolutionDraft, agentId: AiAge
         commandTypes: ["roll", "abilityCheck", "skillCheck", "contestCheck", "resolveGameAction", "calculateHazardDamage"],
       });
 
-    case "combatManager":
-      return createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
+    case "combatManager": {
+      const view = createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
         factTerms: ["combat", "ennemi", "cible", "portée", "portee", "terrain", "position", "déplacement", "attaque", "initiative"],
         commandTypes: ["dealDamage", "moveCombatant", "startCombat", "endCombat", "nextCombatTurn", "revealMapDetail", "hideMapDetail"],
       });
+      return { ...view, scenePatches: draft.scenePatches.slice(-3) };
+    }
 
     case "combatSetupManager":
       return createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
@@ -290,11 +326,13 @@ export function createDraftViewForAgent(draft: AiResolutionDraft, agentId: AiAge
         commandTypes: ["createItemTemplate", "createEffectTemplate", "createAbilityTemplate", "createItem"],
       });
 
-    case "worldManager":
-      return createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
+    case "worldManager": {
+      const view = createDomainDraftView(base, draft, recentIntentions, recentQuestions, recentWarnings, {
         factTerms: ["monde", "univers", "lore", "lieu", "pnj", "rumeur", "faction", "histoire", "scène", "scene"],
         commandTypes: ["revealMapDetail", "hideMapDetail"],
       });
+      return { ...view, scenePatches: draft.scenePatches.slice(-4) };
+    }
 
     case "narrationManager":
       return {
@@ -306,6 +344,7 @@ export function createDraftViewForAgent(draft: AiResolutionDraft, agentId: AiAge
         narrationInputs: draft.narrationInputs
           .filter((input) => input.visibility !== "hidden" && input.visibility !== "gmOnly")
           .slice(-8),
+        scenePatches: draft.scenePatches.slice(-4),
         safety: nonNormalSafety,
         questions: recentQuestions,
       };
@@ -438,6 +477,7 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
       task: "Extraire les intentions, repérer les risques et choisir les prochains agents nécessaires. Ne demande pas encore de contexte détaillé.",
       recentSituation: {
         combatStatus: snapshot.combat.status,
+        narrativeScene: createPromptSceneContext(snapshot.narrativeScene),
         activeCombatantId: snapshot.combat.combatants[snapshot.combat.turnIndex]?.id ?? null,
         selectedCharacterState: selectedCharacter
           ? {
@@ -479,6 +519,8 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
   }
 
   if (agentId === "combatSetupManager") {
+    const activeEnemyTemplates = snapshot.enemyTemplates.filter((template) =>
+      isContentTemplateActive(snapshot.disabledContentTemplateIds, "enemy", template.id));
     return {
       ...base,
       combatSetup: {
@@ -505,11 +547,21 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
           })),
         },
         availableTacticalTemplatesHint: "Si un ennemi, obstacle ou terrain manque, suggère tacticalTemplateManager.",
+        enemyTemplates: activeEnemyTemplates.slice(0, 40).map((template) => ({
+          id: template.id,
+          name: template.name,
+          level: template.level,
+          category: template.category,
+        })),
       },
     };
   }
 
   if (agentId === "tacticalTemplateManager") {
+    const activeEnemyTemplates = snapshot.enemyTemplates.filter((template) =>
+      isContentTemplateActive(snapshot.disabledContentTemplateIds, "enemy", template.id));
+    const activeAbilityTemplates = snapshot.abilityTemplates.filter((template) =>
+      isContentTemplateActive(snapshot.disabledContentTemplateIds, "ability", template.id));
     return {
       ...base,
       tacticalTemplateSystem: {
@@ -525,17 +577,48 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
         })),
         currentTerrainKinds: Array.from(new Set(snapshot.combat.map.elements.map((element) => element.kind))),
         currentMapDetailTags: Array.from(new Set((snapshot.combat.map.details ?? []).flatMap((detail) => detail.tags))).slice(0, 20),
+        enemyTemplates: activeEnemyTemplates.slice(0, 40),
+        reusableCombatAbilities: activeAbilityTemplates
+          .filter((template) => Boolean(template.combatRole))
+          .slice(0, 40)
+          .map((template) => ({ id: template.id, name: template.name, combatRole: template.combatRole })),
       },
     };
   }
 
   if (agentId === "assetTemplateManager") {
+    const activeItemTemplates = snapshot.itemTemplates.filter((template) =>
+      isContentTemplateActive(snapshot.disabledContentTemplateIds, "item", template.id));
+    const activeAbilityTemplates = snapshot.abilityTemplates.filter((template) =>
+      isContentTemplateActive(snapshot.disabledContentTemplateIds, "ability", template.id));
+    const activeEffectTemplates = snapshot.effectTemplates.filter((template) =>
+      isContentTemplateActive(snapshot.disabledContentTemplateIds, "effect", template.id));
+    const relevantItemTemplates = rankTemplates(
+      activeItemTemplates,
+      playerInput,
+      (template) => `${template.name} ${template.description} ${template.type} ${template.types.join(" ")} ${template.tags.join(" ")}`,
+      10,
+    );
+    const relevantAbilityTemplates = rankTemplates(
+      activeAbilityTemplates,
+      playerInput,
+      (template) => `${template.name} ${template.description} ${template.types.join(" ")} ${template.tags.join(" ")}`,
+      8,
+    );
+    const relevantEffectTemplates = rankTemplates(
+      activeEffectTemplates,
+      playerInput,
+      (template) => `${template.name} ${template.description} ${template.tags.join(" ")}`,
+      8,
+    );
     return {
       ...base,
       assetTemplateSystem: {
         task: "Créer ou réutiliser des templates d'objets, effets et capacités. Préférer un template existant + overrides si possible.",
-        itemTemplates: createReusableItemTemplateContext(snapshot.itemTemplates),
-        abilityTemplates: snapshot.abilityTemplates.map((template) => ({
+        itemTemplateIds: activeItemTemplates.map((template) => template.id).slice(0, 120),
+        relevantItemTemplates: createReusableItemTemplateContext(relevantItemTemplates),
+        abilityTemplateIds: activeAbilityTemplates.map((template) => template.id).slice(0, 120),
+        relevantAbilityTemplates: relevantAbilityTemplates.map((template) => ({
           id: template.id,
           name: template.name,
           types: template.types,
@@ -545,10 +628,9 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
           charges: template.charges,
           effects: template.effects,
         })),
-        effectIdsInUse: Array.from(new Set([
-          ...snapshot.itemTemplates.flatMap((template) => template.effects.map((effect) => effect.effectId)),
-          ...snapshot.abilityTemplates.flatMap((template) => template.effects.map((effect) => effect.effectId)),
-        ])).sort(),
+        effectTemplateIds: activeEffectTemplates.map((template) => template.id).slice(0, 120),
+        effectOperations: effectOperationCatalog,
+        relevantEffectTemplates,
       },
     };
   }
@@ -628,6 +710,7 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
     return {
       ...base,
       world: {
+        scene: createPromptSceneContext(snapshot.narrativeScene),
         name: snapshot.campaign.world.name ?? snapshot.campaign.name,
         pitch: snapshot.campaign.world.pitch,
         tone: snapshot.campaign.world.tone ?? snapshot.campaign.style,
@@ -663,6 +746,7 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
         worldTone: snapshot.campaign.style,
         worldPitch: snapshot.campaign.world.pitch,
         narrativeMomentum: snapshot.narrativeMomentum,
+        scene: createPromptSceneContext(snapshot.narrativeScene),
         themes: snapshot.campaign.world.themes?.slice(0, 4),
         rules: snapshot.campaign.world.rules?.slice(0, 4),
         loreSummary: snapshot.campaign.world.lore,
@@ -790,6 +874,25 @@ function createCombatContext(combat: CombatScene) {
   };
 }
 
+function createPromptSceneContext(scene: NarrativeSceneState) {
+  return {
+    id: scene.id,
+    revision: scene.revision,
+    turn: scene.turn,
+    elapsedMinutes: scene.elapsedMinutes,
+    locationId: scene.locationId,
+    locationLabel: scene.locationLabel,
+    playerPosition: scene.playerPosition,
+    presentEntityIds: scene.presentEntityIds,
+    socialTension: scene.socialTension,
+    alertLevel: scene.alertLevel,
+    activeEvents: scene.activeEvents,
+    recentConsequences: scene.recentConsequences.slice(-5),
+    lastPlayerAction: scene.lastPlayerAction,
+    lastNarratedBeat: scene.lastNarratedBeat,
+  };
+}
+
 function createCharacterSummary(character: Character, includeExactHp: boolean) {
   return {
     id: character.id,
@@ -890,6 +993,41 @@ function createReusableItemTemplateContext(templates: ItemTemplate[]) {
     base: template.base,
     effects: template.effects,
   }));
+}
+
+function isContentCreationAgent(agentId: AiAgentId): boolean {
+  return agentId === "assetTemplateManager" || agentId === "tacticalTemplateManager";
+}
+
+function rankTemplates<T>(
+  values: T[],
+  input: string | undefined,
+  searchable: (value: T) => string,
+  limit: number,
+): T[] {
+  const terms = normalizeSearchTerms(input ?? "");
+  if (!terms.length) return values.slice(0, limit);
+
+  return values
+    .map((value, index) => {
+      const haystack = normalizeSearchText(searchable(value));
+      const score = terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
+      return { value, index, score };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, limit)
+    .map(({ value }) => value);
+}
+
+function normalizeSearchTerms(value: string): string[] {
+  return [...new Set(normalizeSearchText(value).split(/\s+/u).filter((term) => term.length >= 3))].slice(0, 12);
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLocaleLowerCase("fr-FR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/gu, "");
 }
 
 function createAbilityContext(snapshot: AiPromptSnapshot, scope: "combat" | "all") {

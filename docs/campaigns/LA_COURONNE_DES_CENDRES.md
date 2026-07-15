@@ -43,5 +43,5 @@ souverain à la place des joueurs.
 
 Copier le contenu de
 `data/worlds/la-couronne-des-cendres.json` dans la zone « Réponse de l'IA » de
-l'Atelier des mondes. Le fichier suit `schemaVersion: 1` et ne nécessite aucun
-appel API.
+l'Atelier des mondes. Le fichier suit `schemaVersion: 2`, inclut un personnage
+et son inventaire de départ, et ne nécessite aucun appel API.

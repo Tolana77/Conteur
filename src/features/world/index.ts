@@ -1,1 +1,1 @@
-export { exampleWorld } from "./exampleWorld";
+export { emptyWorld } from "./emptyWorld";

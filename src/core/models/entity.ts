@@ -13,5 +13,6 @@ export interface Entity {
     importance?: string;
     connections?: string[];
     tags?: string[];
+    enemyTemplateId?: string;
   };
 }

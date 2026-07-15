@@ -16,10 +16,22 @@ recollée dans l'application.
 
 ## Activation
 
-L'activation conserve les personnages, objets d'inventaire, équipements,
-capacités et portraits. Elle remplace la conversation, le monde et la scène de
-combat, et retire uniquement les instances d'objets localisées dans l'ancien
-monde.
+Le contrat `schemaVersion: 2` décrit également le groupe de départ et ses objets.
+L'activation crée donc une partie neuve : personnages, caractéristiques,
+capacités de catalogue, inventaires, équipements, conversation et scène de
+combat. Aucune instance de la campagne précédente n'est recyclée. Les portraits
+et les réglages purement visuels restent locaux à l'interface.
+
+Les objets de départ réutilisent un `templateId` du catalogue quand il existe.
+Un objet sans template correspondant reçoit un template simple propre au monde.
+
+## Recommencer
+
+Au démarrage d'une campagne, Zustand conserve séparément une copie immuable de
+son état initial. Le bouton `Univers > Recommencer la campagne` restaure cette
+copie : monde, groupe, PV, objets, quantités, équipements, capacités et charges.
+La progression courante est remplacée sans effacer la bibliothèque de mondes ni
+les réglages de l'application.
 
 Les secrets restent réservés au contexte de l'agent Monde. Le Narrateur reçoit
 uniquement la promesse, le ton, les thèmes, les règles et les faits publics.

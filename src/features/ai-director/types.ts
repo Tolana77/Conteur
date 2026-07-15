@@ -1,4 +1,4 @@
-import type { CombatPosition } from "../../app/types";
+import type { CombatPosition, NarrativeScenePatch } from "../../app/types";
 
 export type AiAgentId =
   | "requestAnalyzer"
@@ -49,11 +49,12 @@ export type AiDirectorCommand =
   | { type: "useItem"; characterId: string; itemId: string; targetId?: string }
   | { type: "giveItem"; characterId: string; templateId: string; quantity?: number }
   | { type: "pickupItem"; characterId: string; itemId: string }
-  | { type: "createItem"; templateId?: string; template?: Record<string, unknown>; instance?: Record<string, unknown>; reason?: string }
+  | { type: "createItem"; templateId?: string; template?: Record<string, unknown>; instance?: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
   | { type: "destroyItem"; itemId: string; reason?: string }
   | { type: "modifyItem"; itemId: string; path: string; value: string | number | boolean; reason?: string }
   | { type: "changeCharacterStat"; characterId: string; stat: string; value: number; mode: "add" | "set"; reason?: string }
   | { type: "updateCharacterHistory"; characterId: string; entry: string; visibility?: AiResolutionVisibility }
+  | { type: "grantAbility"; characterId: string; templateId: string; reason?: string }
   | { type: "abilityCheck"; characterId: string; stat: string; dc?: number; skill?: string; visibility?: "public" | "gmOnly" | "hidden" | "summary"; reason?: string }
   | { type: "skillCheck"; characterId: string; skill: string; stat?: string; dc?: number; visibility?: "public" | "gmOnly" | "hidden" | "summary"; reason?: string }
   | { type: "contestCheck"; actorId: string; targetId: string; actorFormula: string; targetFormula: string; reason?: string }
@@ -76,12 +77,12 @@ export type AiDirectorCommand =
   | { type: "createCombatScene"; scene: Record<string, unknown>; reason?: string }
   | { type: "createCombatTerrain"; terrain: Record<string, unknown>; reason?: string }
   | { type: "addEnemyToScene"; enemyTemplateId?: string; enemy?: Record<string, unknown>; position?: CombatPosition; reason?: string }
-  | { type: "createEnemyTemplate"; template: Record<string, unknown>; reason?: string }
-  | { type: "createTacticalElementTemplate"; template: Record<string, unknown>; reason?: string }
-  | { type: "createTerrainTemplate"; template: Record<string, unknown>; reason?: string }
-  | { type: "createItemTemplate"; template: Record<string, unknown>; reason?: string }
-  | { type: "createEffectTemplate"; template: Record<string, unknown>; reason?: string }
-  | { type: "createAbilityTemplate"; template: Record<string, unknown>; reason?: string }
+  | { type: "createEnemyTemplate"; template: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
+  | { type: "createTacticalElementTemplate"; template: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
+  | { type: "createTerrainTemplate"; template: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
+  | { type: "createItemTemplate"; template: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
+  | { type: "createEffectTemplate"; template: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
+  | { type: "createAbilityTemplate"; template: Record<string, unknown>; mode?: "create" | "replace"; reason?: string }
   | { type: "moveCombatant"; combatantId: string; to: CombatPosition }
   | { type: "revealMapDetail"; detailId: string }
   | { type: "hideMapDetail"; detailId: string }
@@ -142,6 +143,7 @@ export interface AiResolutionDraft {
   suggestedAgents: AiAgentRequest[];
   proposedCommands: AiDirectorCommand[];
   narrationInputs: AiNarrationInput[];
+  scenePatches: NarrativeScenePatch[];
   safety: AiSafetyAssessment[];
   warnings: string[];
   questions: string[];

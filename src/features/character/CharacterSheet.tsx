@@ -15,6 +15,7 @@ import type {
   AbilityRechargeTrigger,
   AbilityTemplate,
   CharacterDerivedScores,
+  EffectTemplate,
   ItemEffectRef,
   ItemInstance,
   ItemTemplate,
@@ -423,9 +424,6 @@ function CharacterIdentityHeader({ character }: { character: SafeCharacter }) {
         <span className="absolute bottom-1.5 left-1.5 h-3 w-3 border-b border-l border-[#9C7A2E]/80" />
         <span className="absolute bottom-1.5 right-1.5 h-3 w-3 border-b border-r border-[#9C7A2E]/80" />
         <h2 className="ink-heading text-3xl font-black leading-tight">{character.name}</h2>
-        <p className="mt-1 text-sm font-semibold italic text-[#9C7A2E]">
-          Retraité stratégique
-        </p>
         <p className="mt-1 text-sm text-[#E4D8BE]/65">
           {character.espece} · {character.classe} · niveau {character.niveau}
         </p>
@@ -973,11 +971,18 @@ function CurrentAbilitiesModule({
 }) {
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const effectTemplates = useGameStore((state) => state.effectTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const addActionIntent = useGameStore((state) => state.addActionIntent);
   const abilities = useMemo(
-    () => createAbilityView(characterId, abilityTemplates, abilityInstances, itemInstances).slice(0, 4),
-    [abilityInstances, abilityTemplates, characterId, itemInstances],
+    () => createAbilityView(
+      characterId,
+      abilityTemplates,
+      abilityInstances,
+      itemInstances,
+      effectTemplates,
+    ).slice(0, 4),
+    [abilityInstances, abilityTemplates, characterId, effectTemplates, itemInstances],
   );
 
   if (abilities.length === 0) {
@@ -1672,6 +1677,7 @@ function ItemGrantedAbilityLine({ item }: { item: ResolvedInventoryItem }) {
   const [selectedAbility, setSelectedAbility] = useState<ResolvedAbility | null>(null);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const effectTemplates = useGameStore((state) => state.effectTemplates);
 
   if (item.grantedAbilityTemplateIds.length === 0 || getItemVisibilityState(item, "effects") !== "known") {
     return null;
@@ -1701,7 +1707,7 @@ function ItemGrantedAbilityLine({ item }: { item: ResolvedInventoryItem }) {
         charges: instance ? getAbilityCharges(instance, template) : template.charges?.initial ?? template.charges?.max ?? null,
         maxCharges: getAbilityMaxCharges(template),
         recharge: template.charges?.recharge ?? null,
-        effects: template.effects,
+        effects: resolveNamedEffectRefs(template.effects, effectTemplates),
       } satisfies ResolvedAbility;
     })
     .filter((ability): ability is ResolvedAbility => Boolean(ability));
@@ -1799,11 +1805,18 @@ function AbilitiesModule({
 }) {
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const effectTemplates = useGameStore((state) => state.effectTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const addActionIntent = useGameStore((state) => state.addActionIntent);
   const abilities = useMemo(
-    () => createAbilityView(character.id, abilityTemplates, abilityInstances, itemInstances),
-    [abilityInstances, abilityTemplates, character.id, itemInstances],
+    () => createAbilityView(
+      character.id,
+      abilityTemplates,
+      abilityInstances,
+      itemInstances,
+      effectTemplates,
+    ),
+    [abilityInstances, abilityTemplates, character.id, effectTemplates, itemInstances],
   );
 
   if (abilities.length === 0 && character.competences.length === 0) {
@@ -1880,6 +1893,7 @@ function createAbilityView(
   templates: AbilityTemplate[],
   instances: AbilityInstance[],
   itemInstances: ItemInstance[] = [],
+  effectTemplates: EffectTemplate[] = [],
 ): ResolvedAbility[] {
   return instances
     .filter((ability) => {
@@ -1918,7 +1932,10 @@ function createAbilityView(
           charges: getAbilityCharges(ability, template),
           maxCharges: getAbilityMaxCharges(template),
           recharge: template.charges?.recharge ?? null,
-          effects: [...template.effects, ...ability.effects],
+          effects: resolveNamedEffectRefs(
+            [...template.effects, ...ability.effects],
+            effectTemplates,
+          ),
         },
       ];
     });
@@ -2169,13 +2186,17 @@ function createFavoriteActions(character: SafeCharacter): string[] {
 function resolveInventoryItem(
   item: ItemInstance,
   templates: ItemTemplate[],
+  effectTemplates: EffectTemplate[] = [],
 ): ResolvedInventoryItem | null {
   const template = templates.find((candidate) => candidate.id === item.templateId);
 
   if (!template) {
     return null;
   }
-  const effects = [...template.effects, ...item.effects];
+  const effects = resolveNamedEffectRefs(
+    [...template.effects, ...item.effects],
+    effectTemplates,
+  );
 
   return {
     id: item.id,
@@ -2271,10 +2292,11 @@ function createInventoryView(
   characterId: string,
   itemTemplates: ItemTemplate[],
   itemInstances: ItemInstance[],
+  effectTemplates: EffectTemplate[] = [],
 ): CharacterInventoryView {
   const characterItems = itemInstances
     .filter((item) => item.location.parent === characterId)
-    .map((item) => resolveInventoryItem(item, itemTemplates))
+    .map((item) => resolveInventoryItem(item, itemTemplates, effectTemplates))
     .filter((item): item is ResolvedInventoryItem => Boolean(item));
 
   return {
@@ -2590,6 +2612,18 @@ function formatItemEffect(effect: ItemEffectRef): string {
   return `${name}${levelLabel}`;
 }
 
+function resolveNamedEffectRefs(
+  effects: ItemEffectRef[],
+  templates: EffectTemplate[],
+): ItemEffectRef[] {
+  const names = new Map(templates.map((template) => [template.id, template.name]));
+  return effects.map((effect) => ({
+    ...effect,
+    nom: effect.nom ?? names.get(effect.effectId),
+    variables: { ...(effect.variables ?? {}) },
+  }));
+}
+
 function getStatFromEffectLabel(label: string): keyof CharacterStats | null {
   const statEntry = Object.entries(statLabels).find(([, abbreviation]) =>
     label.toUpperCase().startsWith(abbreviation),
@@ -2646,6 +2680,7 @@ export function CharacterSheet({ onNavigateToReading }: { onNavigateToReading?: 
   );
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
+  const effectTemplates = useGameStore((state) => state.effectTemplates);
 
   const normalizedCharacter = useMemo(
     () => (rawCharacter ? normalizeCharacter(rawCharacter) : null),
@@ -2654,9 +2689,14 @@ export function CharacterSheet({ onNavigateToReading }: { onNavigateToReading?: 
   const inventory = useMemo(
     () =>
       normalizedCharacter
-        ? createInventoryView(normalizedCharacter.id, itemTemplates, itemInstances)
+        ? createInventoryView(
+            normalizedCharacter.id,
+            itemTemplates,
+            itemInstances,
+            effectTemplates,
+          )
         : { equipped: [], bag: [] },
-    [itemInstances, itemTemplates, normalizedCharacter],
+    [effectTemplates, itemInstances, itemTemplates, normalizedCharacter],
   );
   const statBreakdowns = useMemo(
     () =>

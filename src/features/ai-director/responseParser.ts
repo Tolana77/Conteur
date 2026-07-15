@@ -8,6 +8,7 @@ import type {
   AiSafetyCategory,
   AiSafetyLevel,
 } from "./types";
+import type { NarrativeAlertLevel, NarrativeScenePatch } from "../../app/types";
 import { getAllCommandTypes, type AiCommandType } from "./commandPermissions";
 
 const agentIds: AiAgentId[] = [
@@ -196,6 +197,17 @@ function normalizeDraftPatch(value: unknown, errors: string[]): AiResolutionDraf
     });
   }
 
+  const rawScenePatches = Array.isArray(candidate.scenePatches)
+    ? candidate.scenePatches
+    : candidate.scenePatch && typeof candidate.scenePatch === "object"
+      ? [candidate.scenePatch]
+      : [];
+  if (rawScenePatches.length > 0) {
+    patch.scenePatches = rawScenePatches.flatMap((scenePatch, index) =>
+      normalizeScenePatch(scenePatch, index, errors),
+    );
+  }
+
   if (Array.isArray(candidate.safety)) {
     patch.safety = candidate.safety.flatMap((assessment, index) => {
       if (!assessment || typeof assessment !== "object") {
@@ -231,6 +243,67 @@ function normalizeDraftPatch(value: unknown, errors: string[]): AiResolutionDraf
   }
 
   return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+function normalizeScenePatch(
+  value: unknown,
+  index: number,
+  errors: string[],
+): NarrativeScenePatch[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push(`draftPatch.scenePatch ${index + 1}: objet attendu.`);
+    return [];
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const patch: NarrativeScenePatch = {};
+  if (candidate.locationId === null || typeof candidate.locationId === "string") {
+    patch.locationId = candidate.locationId;
+  }
+  if (typeof candidate.locationLabel === "string") patch.locationLabel = candidate.locationLabel;
+  if (typeof candidate.playerPosition === "string") patch.playerPosition = candidate.playerPosition;
+  if (Array.isArray(candidate.presentEntityIds)) patch.presentEntityIds = normalizeStringArray(candidate.presentEntityIds);
+
+  const elapsedMinutes = getNumber(candidate.elapsedMinutes);
+  if (elapsedMinutes !== null) patch.elapsedMinutes = elapsedMinutes;
+  const socialTensionDelta = getNumber(candidate.socialTensionDelta);
+  if (socialTensionDelta !== null) patch.socialTensionDelta = socialTensionDelta;
+  const alertLevel = getNumber(candidate.alertLevel);
+  if (alertLevel !== null && Number.isInteger(alertLevel) && alertLevel >= 0 && alertLevel <= 4) {
+    patch.alertLevel = alertLevel as NarrativeAlertLevel;
+  }
+
+  if (Array.isArray(candidate.upsertEvents)) {
+    patch.upsertEvents = candidate.upsertEvents.flatMap((event, eventIndex) => {
+      if (!event || typeof event !== "object" || Array.isArray(event)) {
+        errors.push(`draftPatch.scenePatch ${index + 1}.upsertEvents ${eventIndex + 1}: objet attendu.`);
+        return [];
+      }
+      const item = event as Record<string, unknown>;
+      const id = getRequiredString(item.id);
+      const description = getRequiredString(item.description);
+      if (!id || !description) {
+        errors.push(`draftPatch.scenePatch ${index + 1}.upsertEvents ${eventIndex + 1}: id ou description manquant.`);
+        return [];
+      }
+      const turnsRemaining = getNumber(item.turnsRemaining);
+      const urgency = item.urgency === "background" || item.urgency === "immediate"
+        ? item.urgency
+        : "rising";
+      return [{
+        id,
+        description,
+        stage: getOptionalString(item.stage) ?? "en cours",
+        turnsRemaining: turnsRemaining !== null ? Math.max(0, Math.round(turnsRemaining)) : 1,
+        urgency,
+        relatedEntityIds: normalizeStringArray(item.relatedEntityIds) ?? [],
+      }];
+    });
+  }
+  if (Array.isArray(candidate.resolveEventIds)) patch.resolveEventIds = normalizeStringArray(candidate.resolveEventIds);
+  if (Array.isArray(candidate.consequences)) patch.consequences = normalizeStringArray(candidate.consequences);
+
+  return Object.keys(patch).length > 0 ? [patch] : [];
 }
 
 function normalizeCommand(command: unknown, index: number, errors: string[]): AiDirectorCommand[] {
@@ -297,7 +370,14 @@ function normalizeCommand(command: unknown, index: number, errors: string[]): Ai
     const instance = getPlainObject(candidate.instance);
 
     return typeof candidate.templateId === "string" || template || instance
-      ? [{ type, templateId: getOptionalString(candidate.templateId), template, instance, reason: getOptionalString(candidate.reason) }]
+      ? [{
+          type,
+          templateId: getOptionalString(candidate.templateId),
+          template,
+          instance,
+          mode: getCreationMode(candidate.mode),
+          reason: getOptionalString(candidate.reason),
+        }]
       : addCommandError(errors, index, "templateId, template ou instance attendu.");
   }
 
@@ -333,6 +413,17 @@ function normalizeCommand(command: unknown, index: number, errors: string[]): Ai
           visibility: isResolutionVisibility(candidate.visibility) ? candidate.visibility : undefined,
         }]
       : addCommandError(errors, index, "characterId ou entry invalide.");
+  }
+
+  if (type === "grantAbility") {
+    return typeof candidate.characterId === "string" && typeof candidate.templateId === "string"
+      ? [{
+          type,
+          characterId: candidate.characterId,
+          templateId: candidate.templateId,
+          reason: getOptionalString(candidate.reason),
+        }]
+      : addCommandError(errors, index, "characterId ou templateId invalide.");
   }
 
   if (type === "abilityCheck") {
@@ -456,7 +547,12 @@ function normalizeCommand(command: unknown, index: number, errors: string[]): Ai
     const template = getPlainObject(candidate.template);
 
     return template
-      ? [{ type, template, reason: getOptionalString(candidate.reason) } as AiDirectorCommand]
+      ? [{
+          type,
+          template,
+          mode: getCreationMode(candidate.mode),
+          reason: getOptionalString(candidate.reason),
+        } as AiDirectorCommand]
       : addCommandError(errors, index, "template invalide.");
   }
 
@@ -523,6 +619,10 @@ function getNumber(value: unknown): number | null {
 
 function getOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function getCreationMode(value: unknown): "create" | "replace" | undefined {
+  return value === "create" || value === "replace" ? value : undefined;
 }
 
 function getPrimitiveValue(value: unknown): string | number | boolean | null {

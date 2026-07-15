@@ -1,4 +1,4 @@
-export { createAbilityInstance, createInitialAbilityInstances } from "./abilityInstances";
+export { createAbilityInstance } from "./abilityInstances";
 export {
   canUseAbility,
   getAbilityCharges,

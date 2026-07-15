@@ -20,4 +20,5 @@ export interface Character {
   maxPv: number;
   inventaire: InventoryItem[];
   competences: string[];
+  history?: string[];
 }

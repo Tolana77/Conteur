@@ -1,9 +1,17 @@
-import type { WorldBlueprint, WorldCreationBrief } from "../features/world/worldBlueprint";
-import type { Campaign } from "../core/models";
+import {
+  parseWorldBlueprint,
+  type WorldBlueprint,
+  type WorldCreationBrief,
+} from "../features/world/worldBlueprint";
+import {
+  cloneCampaignStartSnapshot,
+  normalizeCampaignStartSnapshot,
+  type CampaignStartSnapshot,
+} from "../features/campaign/campaignStart";
 
 const WORLD_LIBRARY_KEY = "le-conteur:world-blueprints:v1";
 const WORLD_BRIEF_KEY = "le-conteur:world-creation-brief:v1";
-const CAMPAIGN_BACKUP_KEY = "le-conteur:last-campaign-backup:v1";
+const CAMPAIGN_BACKUP_KEY = "le-conteur:last-campaign-backup:v2";
 
 export interface SavedWorldBlueprint {
   id: string;
@@ -14,7 +22,7 @@ export interface SavedWorldBlueprint {
 
 export interface CampaignBackup {
   savedAt: number;
-  campaign: Campaign;
+  snapshot: CampaignStartSnapshot;
 }
 
 export function listWorldBlueprints(): SavedWorldBlueprint[] {
@@ -24,6 +32,10 @@ export function listWorldBlueprints(): SavedWorldBlueprint[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(isSavedWorldBlueprint)
+      .flatMap((saved) => {
+        const migrated = parseWorldBlueprint(JSON.stringify(saved.blueprint));
+        return migrated.blueprint ? [{ ...saved, blueprint: migrated.blueprint }] : [];
+      })
       .sort((left, right) => right.savedAt - left.savedAt)
       .slice(0, 20);
   } catch {
@@ -58,7 +70,23 @@ export function loadWorldCreationBrief(fallback: WorldCreationBrief): WorldCreat
   if (typeof localStorage === "undefined") return fallback;
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(WORLD_BRIEF_KEY) ?? "null");
-    return isWorldCreationBrief(parsed) ? parsed : fallback;
+    if (isWorldCreationBrief(parsed)) return parsed;
+    if (!parsed || typeof parsed !== "object") return fallback;
+    const candidate = parsed as Partial<WorldCreationBrief>;
+    return {
+      ...fallback,
+      ...(typeof candidate.concept === "string" ? { concept: candidate.concept } : {}),
+      ...(typeof candidate.genre === "string" ? { genre: candidate.genre } : {}),
+      ...(typeof candidate.tone === "string" ? { tone: candidate.tone } : {}),
+      ...(typeof candidate.themes === "string" ? { themes: candidate.themes } : {}),
+      ...(typeof candidate.scope === "string" ? { scope: candidate.scope } : {}),
+      ...(typeof candidate.playerRole === "string" ? { playerRole: candidate.playerRole } : {}),
+      ...(typeof candidate.desiredElements === "string" ? { desiredElements: candidate.desiredElements } : {}),
+      ...(typeof candidate.forbiddenElements === "string" ? { forbiddenElements: candidate.forbiddenElements } : {}),
+      ...(candidate.complexity === "compact" || candidate.complexity === "standard" || candidate.complexity === "dense"
+        ? { complexity: candidate.complexity }
+        : {}),
+    };
   } catch {
     return fallback;
   }
@@ -68,8 +96,11 @@ export function saveWorldCreationBrief(brief: WorldCreationBrief): void {
   localStorage.setItem(WORLD_BRIEF_KEY, JSON.stringify(brief));
 }
 
-export function saveCampaignBackup(campaign: Campaign): void {
-  localStorage.setItem(CAMPAIGN_BACKUP_KEY, JSON.stringify({ savedAt: Date.now(), campaign }));
+export function saveCampaignBackup(snapshot: CampaignStartSnapshot): void {
+  localStorage.setItem(
+    CAMPAIGN_BACKUP_KEY,
+    JSON.stringify({ savedAt: Date.now(), snapshot: cloneCampaignStartSnapshot(snapshot) }),
+  );
 }
 
 export function loadCampaignBackup(): CampaignBackup | null {
@@ -78,8 +109,9 @@ export function loadCampaignBackup(): CampaignBackup | null {
     const parsed: unknown = JSON.parse(localStorage.getItem(CAMPAIGN_BACKUP_KEY) ?? "null");
     if (!parsed || typeof parsed !== "object") return null;
     const candidate = parsed as Partial<CampaignBackup>;
-    return typeof candidate.savedAt === "number" && candidate.campaign && typeof candidate.campaign === "object"
-      ? candidate as CampaignBackup
+    const snapshot = normalizeCampaignStartSnapshot(candidate.snapshot);
+    return typeof candidate.savedAt === "number" && snapshot
+      ? { savedAt: candidate.savedAt, snapshot }
       : null;
   } catch {
     return null;
@@ -104,6 +136,8 @@ function isWorldCreationBrief(value: unknown): value is WorldCreationBrief {
     && typeof candidate.themes === "string"
     && typeof candidate.scope === "string"
     && typeof candidate.playerRole === "string"
+    && typeof candidate.startingParty === "string"
+    && typeof candidate.startingEquipment === "string"
     && typeof candidate.desiredElements === "string"
     && typeof candidate.forbiddenElements === "string"
     && (candidate.complexity === "compact" || candidate.complexity === "standard" || candidate.complexity === "dense");

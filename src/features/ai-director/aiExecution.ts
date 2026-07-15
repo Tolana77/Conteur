@@ -3,6 +3,15 @@ import type { GameState } from "../../store/useGameStore";
 import type { AiPromptSnapshot } from "./promptBuilder";
 import type { AiDirectorCommand } from "./types";
 import { executeImprovisedCheck } from "./improvisedActions";
+import {
+  parseAbilityTemplate,
+  parseEffectTemplate,
+  parseEnemySpawnInput,
+  parseEnemyTemplate,
+  parseItemInstanceInput,
+  parseItemTemplate,
+  type ContentCatalogKnownIds,
+} from "../content";
 
 type AiExecutionActions = Pick<
   GameState,
@@ -16,6 +25,7 @@ type AiExecutionActions = Pick<
   | "giveItem"
   | "pickupItem"
   | "removeItem"
+  | "modifyItemField"
   | "useItem"
   | "useAbility"
   | "rechargeAbility"
@@ -33,12 +43,21 @@ type AiExecutionActions = Pick<
   | "rollFormula"
   | "spendItemQuantity"
   | "recordCampaignEvent"
+  | "registerEffectTemplate"
+  | "registerItemTemplate"
+  | "registerAbilityTemplate"
+  | "registerEnemyTemplate"
+  | "createItemInstance"
+  | "grantAbilityToCharacter"
+  | "spawnEnemyFromTemplate"
+  | "appendCharacterHistory"
 >;
 
 export function executeAiCommand(
   command: AiDirectorCommand,
   snapshot: AiPromptSnapshot,
   actions: AiExecutionActions,
+  options: { knownCatalogIds?: ContentCatalogKnownIds } = {},
 ): AdminCommandResult & { command: string } {
   if (command.type === "sendNarration") {
     actions.addGmMessage(command.content);
@@ -56,6 +75,110 @@ export function executeAiCommand(
       spendItemQuantity: actions.spendItemQuantity,
       recordCampaignEvent: actions.recordCampaignEvent,
     });
+  }
+
+  if (command.type === "modifyItem") {
+    const success = actions.modifyItemField(command.itemId, command.path, command.value);
+    return {
+      status: success ? "success" : "error",
+      message: success
+        ? `${command.itemId}.${command.path} a été modifié.`
+        : `Impossible de modifier ${command.itemId}.${command.path}.`,
+      command: command.type,
+    };
+  }
+
+  if (command.type === "updateCharacterHistory") {
+    const characterId = command.characterId === "selected"
+      ? snapshot.selectedCharacterId
+      : command.characterId;
+    const success = actions.appendCharacterHistory(characterId, command.entry);
+    return {
+      status: success ? "success" : "error",
+      message: success ? `Historique de ${characterId} mis à jour.` : `Historique de ${characterId} non modifié.`,
+      command: command.type,
+    };
+  }
+
+  const catalogContext = {
+    effectTemplates: snapshot.effectTemplates,
+    abilityTemplates: snapshot.abilityTemplates,
+    itemTemplates: snapshot.itemTemplates,
+    enemyTemplates: snapshot.enemyTemplates,
+    knownIds: options.knownCatalogIds,
+  };
+
+  if (command.type === "createEffectTemplate") {
+    const parsed = parseEffectTemplate(command.template);
+    if (!parsed.value) return executionError(command, parsed.errors);
+    const success = actions.registerEffectTemplate(parsed.value, command.mode, { source: "ai" });
+    return creationResult(command, success, `Effet ${parsed.value.name}`);
+  }
+
+  if (command.type === "createAbilityTemplate") {
+    const parsed = parseAbilityTemplate(command.template, catalogContext);
+    if (!parsed.value) return executionError(command, parsed.errors);
+    const success = actions.registerAbilityTemplate(parsed.value, command.mode, { source: "ai" });
+    return creationResult(command, success, `Capacité ${parsed.value.name}`);
+  }
+
+  if (command.type === "createItemTemplate") {
+    const parsed = parseItemTemplate(command.template, catalogContext);
+    if (!parsed.value) return executionError(command, parsed.errors);
+    const success = actions.registerItemTemplate(parsed.value, command.mode, { source: "ai" });
+    return creationResult(command, success, `Template d'objet ${parsed.value.name}`);
+  }
+
+  if (command.type === "createEnemyTemplate") {
+    const parsed = parseEnemyTemplate(command.template, catalogContext);
+    if (!parsed.value) return executionError(command, parsed.errors);
+    const success = actions.registerEnemyTemplate(parsed.value, command.mode, { source: "ai" });
+    return creationResult(command, success, `Ennemi ${parsed.value.name}`);
+  }
+
+  if (command.type === "createItem") {
+    let templateId = command.templateId;
+    let inlineTemplate = null;
+    if (command.template) {
+      const parsedTemplate = parseItemTemplate(command.template, catalogContext);
+      if (!parsedTemplate.value) return executionError(command, parsedTemplate.errors);
+      inlineTemplate = parsedTemplate.value;
+      templateId = parsedTemplate.value.id;
+    }
+    if (!command.instance) return executionError(command, ["Le champ instance est requis."]);
+    const instanceSource = normalizeItemInstanceAliases(command.instance, snapshot.selectedCharacterId);
+    const parsedInstance = parseItemInstanceInput(instanceSource, templateId);
+    if (!parsedInstance.value) return executionError(command, parsedInstance.errors);
+    if (inlineTemplate && !actions.registerItemTemplate(inlineTemplate, command.mode, { source: "ai" })) {
+      return creationResult(command, false, `Template d'objet ${inlineTemplate.name}`);
+    }
+    const item = actions.createItemInstance(parsedInstance.value);
+    return item
+      ? { status: "success", message: `Objet ${item.id} créé depuis ${item.templateId}.`, command: command.type }
+      : { status: "error", message: "L'instance d'objet n'a pas pu être créée.", command: command.type };
+  }
+
+  if (command.type === "grantAbility") {
+    const characterId = command.characterId === "selected"
+      ? snapshot.selectedCharacterId
+      : command.characterId;
+    const ability = actions.grantAbilityToCharacter(characterId, command.templateId);
+    return ability
+      ? { status: "success", message: `Capacité ${command.templateId} accordée à ${characterId}.`, command: command.type }
+      : { status: "error", message: "La capacité n'a pas pu être accordée.", command: command.type };
+  }
+
+  if (command.type === "addEnemyToScene") {
+    if (!command.enemyTemplateId) return executionError(command, ["enemyTemplateId est requis."]);
+    const parsed = parseEnemySpawnInput({
+      ...(command.enemy ?? {}),
+      ...(command.position ? { position: command.position } : {}),
+    });
+    if (!parsed.value) return executionError(command, parsed.errors);
+    const combatantId = actions.spawnEnemyFromTemplate(command.enemyTemplateId, parsed.value);
+    return combatantId
+      ? { status: "success", message: `${command.enemyTemplateId} ajouté à la scène (${combatantId}).`, command: command.type }
+      : { status: "error", message: "L'ennemi n'a pas pu être ajouté à la scène.", command: command.type };
   }
 
   const adminCommand = toAdminCommand(command);
@@ -98,6 +221,41 @@ export function executeAiCommand(
   });
 
   return { ...result, command: adminCommand };
+}
+
+function normalizeItemInstanceAliases(
+  instance: Record<string, unknown>,
+  selectedCharacterId: string,
+): Record<string, unknown> {
+  const location = instance.location && typeof instance.location === "object" && !Array.isArray(instance.location)
+    ? instance.location as Record<string, unknown>
+    : { type: "inventory", parent: selectedCharacterId };
+  return {
+    ...instance,
+    location: {
+      ...location,
+      parent: location.parent === "selected" ? selectedCharacterId : location.parent,
+    },
+  };
+}
+
+function executionError(
+  command: AiDirectorCommand,
+  errors: string[],
+): AdminCommandResult & { command: string } {
+  return { status: "error", message: errors.join(" "), command: command.type };
+}
+
+function creationResult(
+  command: AiDirectorCommand,
+  success: boolean,
+  label: string,
+): AdminCommandResult & { command: string } {
+  return {
+    status: success ? "success" : "error",
+    message: success ? `${label} créé et enregistré.` : `${label} existe déjà ou n'a pas pu être enregistré.`,
+    command: command.type,
+  };
 }
 
 function toAdminCommand(command: AiDirectorCommand): string | null {

@@ -2,7 +2,15 @@ import { useGameStore } from "../../store/useGameStore";
 
 export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: () => void }) {
   const campaign = useGameStore((state) => state.campaign);
+  const restartCampaign = useGameStore((state) => state.restartCampaign);
   const world = campaign.world;
+
+  function confirmRestart() {
+    const confirmed = window.confirm(
+      `Recommencer « ${campaign.name} » depuis son état initial ? Toute la progression de cette partie sera perdue.`,
+    );
+    if (confirmed) restartCampaign();
+  }
 
   return (
     <section className="paper-surface h-full min-h-0 overflow-y-auto p-4">
@@ -16,13 +24,22 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
                 {world.pitch ?? world.lore}
               </p>
             </div>
-            <button
-              className="fantasy-button rounded px-4 py-2 text-sm font-semibold"
-              onClick={onOpenWorldWorkshop}
-              type="button"
-            >
-              Créer un monde
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="rounded border border-[#9C7A2E]/45 px-4 py-2 text-sm text-[#E4D8BE]/80 hover:bg-[#9C7A2E]/10"
+                onClick={confirmRestart}
+                type="button"
+              >
+                Recommencer la campagne
+              </button>
+              <button
+                className="fantasy-button rounded px-4 py-2 text-sm font-semibold"
+                onClick={onOpenWorldWorkshop}
+                type="button"
+              >
+                Créer un monde
+              </button>
+            </div>
           </div>
           {world.themes?.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -35,16 +52,18 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
           ) : null}
         </header>
 
-        <section>
-          <h3 className="rune-label mb-2 text-sm">Vérités publiques</h3>
-          <div className="grid gap-2 md:grid-cols-2">
-            {world.facts.map((fact) => (
-              <p className="border-l-2 border-[#9C7A2E]/50 bg-[#221E29] px-3 py-2 text-sm text-[#E4D8BE]/75" key={fact}>
-                {fact}
-              </p>
-            ))}
-          </div>
-        </section>
+        {world.facts.length ? (
+          <section>
+            <h3 className="rune-label mb-2 text-sm">Vérités publiques</h3>
+            <div className="grid gap-2 md:grid-cols-2">
+              {world.facts.map((fact) => (
+                <p className="border-l-2 border-[#9C7A2E]/50 bg-[#221E29] px-3 py-2 text-sm text-[#E4D8BE]/75" key={fact}>
+                  {fact}
+                </p>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {world.factions?.length ? (
           <section>

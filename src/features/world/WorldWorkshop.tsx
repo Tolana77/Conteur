@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
+import { initialAbilityTemplates } from "../abilities";
+import { initialItemTemplates } from "../items";
+import { initialEffectTemplates, initialEnemyTemplates } from "../content";
 import {
   deleteWorldBlueprint,
   listWorldBlueprints,
@@ -13,7 +16,7 @@ import {
 import {
   buildWorldCreationPrompt,
   buildWorldRepairPrompt,
-  createCampaignFromBlueprint,
+  createCampaignStartFromBlueprint,
   defaultWorldCreationBrief,
   parseWorldBlueprint,
   type WorldCreationBrief,
@@ -22,8 +25,7 @@ import {
 const fieldClass = "w-full rounded border border-[#9C7A2E]/25 bg-[#15121A] px-3 py-2 text-sm text-[#E4D8BE] outline-none focus:border-[#9C7A2E]";
 
 export function WorldWorkshop() {
-  const campaign = useGameStore((state) => state.campaign);
-  const characters = useGameStore((state) => state.characters);
+  const campaignStartSnapshot = useGameStore((state) => state.campaignStartSnapshot);
   const startCampaign = useGameStore((state) => state.startCampaign);
   const [brief, setBrief] = useState<WorldCreationBrief>(() =>
     loadWorldCreationBrief(defaultWorldCreationBrief),
@@ -31,7 +33,10 @@ export function WorldWorkshop() {
   const [rawResponse, setRawResponse] = useState("");
   const [library, setLibrary] = useState<SavedWorldBlueprint[]>(() => listWorldBlueprints());
   const [notice, setNotice] = useState<string | null>(null);
-  const prompt = useMemo(() => buildWorldCreationPrompt(brief), [brief]);
+  const prompt = useMemo(
+    () => buildWorldCreationPrompt(brief, initialItemTemplates, initialAbilityTemplates),
+    [brief],
+  );
   const parsed = useMemo(
     () => rawResponse.trim() ? parseWorldBlueprint(rawResponse) : null,
     [rawResponse],
@@ -64,23 +69,26 @@ export function WorldWorkshop() {
       `Commencer « ${blueprint.campaign.name} » ? La conversation et la scène de combat actuelles seront remplacées.`,
     );
     if (!confirmed) return;
-    saveCampaignBackup(campaign);
+    saveCampaignBackup(campaignStartSnapshot);
     saveWorldBlueprint(blueprint);
-    const nextCampaign = createCampaignFromBlueprint(blueprint, characters);
-    startCampaign(nextCampaign, blueprint.campaign.openingScene);
+    const nextCampaign = createCampaignStartFromBlueprint(
+      blueprint,
+      initialItemTemplates,
+      initialAbilityTemplates,
+      initialEffectTemplates,
+      initialEnemyTemplates,
+    );
+    startCampaign(nextCampaign);
     setLibrary(listWorldBlueprints());
     setNotice(`${blueprint.campaign.name} est maintenant la campagne active.`);
   }
 
   function restoreBackup() {
     const currentBackup = loadCampaignBackup();
-    if (!currentBackup || !window.confirm(`Restaurer « ${currentBackup.campaign.name} » ?`)) return;
-    saveCampaignBackup(campaign);
-    startCampaign(
-      currentBackup.campaign,
-      currentBackup.campaign.world.openingScene ?? `Retour dans ${currentBackup.campaign.name}.`,
-    );
-    setNotice(`${currentBackup.campaign.name} restaurée.`);
+    if (!currentBackup || !window.confirm(`Restaurer « ${currentBackup.snapshot.campaign.name} » ?`)) return;
+    saveCampaignBackup(campaignStartSnapshot);
+    startCampaign(currentBackup.snapshot);
+    setNotice(`${currentBackup.snapshot.campaign.name} restaurée.`);
   }
 
   function loadSavedWorld(saved: SavedWorldBlueprint) {
@@ -122,6 +130,8 @@ export function WorldWorkshop() {
           <WorkshopField label="Thèmes" value={brief.themes} onChange={(value) => patchBrief("themes", value)} />
           <WorkshopField label="Échelle" value={brief.scope} onChange={(value) => patchBrief("scope", value)} />
           <WorkshopField label="Rôle des personnages" value={brief.playerRole} onChange={(value) => patchBrief("playerRole", value)} />
+          <WorkshopField label="Groupe de départ" value={brief.startingParty} onChange={(value) => patchBrief("startingParty", value)} large />
+          <WorkshopField label="Équipement de départ" value={brief.startingEquipment} onChange={(value) => patchBrief("startingEquipment", value)} large />
           <WorkshopField label="Éléments souhaités" value={brief.desiredElements} onChange={(value) => patchBrief("desiredElements", value)} large />
           <WorkshopField label="À éviter" value={brief.forbiddenElements} onChange={(value) => patchBrief("forbiddenElements", value)} large />
           <label className="grid gap-1 text-xs text-[#E4D8BE]/65">
@@ -203,7 +213,9 @@ export function WorldWorkshop() {
               <button className="rounded border border-[#3F5641] bg-[#3F5641]/35 px-3 py-2 text-sm font-semibold text-[#E4D8BE]" onClick={() => activateBlueprint()} type="button">Commencer</button>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4 lg:grid-cols-8">
+            <Count label="Personnages" value={parsed.blueprint.party.characters.length} />
+            <Count label="Objets de départ" value={parsed.blueprint.party.startingItems.length} />
             <Count label="Factions" value={parsed.blueprint.world.factions.length} />
             <Count label="Lieux" value={parsed.blueprint.world.locations.length} />
             <Count label="PNJ" value={parsed.blueprint.world.npcs.length} />

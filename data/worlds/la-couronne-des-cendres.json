@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "campaign": {
     "name": "La Couronne des Cendres",
     "style": "Fantasy féodale sombre, intrigues dynastiques, diplomatie, guerre limitée et surnaturel ambigu",
@@ -7,6 +7,70 @@
     "elevatorPitch": "Le roi de Valdorne meurt au moment où la famine, les dettes et les anciennes rancunes fracturent le royaume. Tandis que cinq puissances préparent la succession, des cendres tombent dans les salles où l’on prononce un faux serment.",
     "centralQuestion": "Qui peut légitimement gouverner un royaume dont la loi de succession repose peut-être sur un mensonge fondateur ?",
     "openingScene": "Les personnages assistent aux funérailles du roi Aldemar dans la Citadelle des Sept Cloches. Au moment où sa fille Maëlys doit jurer de respecter le testament royal, la troisième cloche sonne seule, une pluie de cendres tombe sous les voûtes et le cercueil se fend : le sceau du roi a disparu. Trois messagers ferment aussitôt les portes, chacun accusant un camp différent. Avant que la garde ne fouille l’assemblée, une jeune page glisse aux personnages une moitié de charte couverte de cire noire et murmure que l’autre moitié se trouve sur le cadavre d’un homme qui n’est pas encore mort. Ils doivent choisir entre protéger la page, remettre la charte à une faction ou profiter du chaos pour enquêter sur le cercueil."
+  },
+  "party": {
+    "characters": [
+      {
+        "id": "character-elian-varenne",
+        "name": "Élian de Varenne",
+        "espece": "Humain",
+        "classe": "Éclaireur de cour",
+        "niveau": 3,
+        "stats": {
+          "force": 10,
+          "dexterite": 15,
+          "constitution": 12,
+          "intelligence": 13,
+          "sagesse": 14,
+          "charisme": 11
+        },
+        "pv": 24,
+        "maxPv": 24,
+        "competences": ["Investigation", "Perspicacité", "Discrétion", "Survie"],
+        "abilityTemplateIds": ["abl_second_wind", "abl_sixth_sense"]
+      }
+    ],
+    "startingItems": [
+      {
+        "id": "starting-shortbow-varenne",
+        "ownerId": "character-elian-varenne",
+        "templateId": "tpl_shortbow",
+        "name": "Arc court de Varenne",
+        "description": "Un arc discret portant le poinçon effacé des gardes du fleuve.",
+        "type": "weapon",
+        "types": ["weapon"],
+        "tags": ["arc", "bois", "cour"],
+        "quantity": 1,
+        "weight": 0.9,
+        "equipped": true
+      },
+      {
+        "id": "starting-healing-potion-varenne",
+        "ownerId": "character-elian-varenne",
+        "templateId": "tpl_healing_potion",
+        "name": "Fiole de l’hospice",
+        "description": "Une dose de remède confiée par les sœurs du Synode.",
+        "type": "consumable",
+        "types": ["consumable"],
+        "tags": ["potion", "soin", "synode"],
+        "quantity": 1,
+        "weight": 0.3,
+        "equipped": false
+      },
+      {
+        "id": "starting-rations-varenne",
+        "ownerId": "character-elian-varenne",
+        "templateId": "tpl_rations",
+        "name": "Rations de voyage",
+        "description": "Pain noir, viande salée et deux pommes ridées.",
+        "type": "consumable",
+        "types": ["consumable", "food"],
+        "tags": ["ration", "provisions"],
+        "quantity": 3,
+        "weight": 0.5,
+        "equipped": false
+      }
+    ]
   },
   "world": {
     "name": "Le Royaume de Valdorne",

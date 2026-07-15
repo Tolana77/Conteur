@@ -1,4 +1,23 @@
-import type { Character, CombatScene, ItemInstance, ItemTemplate } from "../../app/types";
+import type {
+  AbilityTemplate,
+  Character,
+  CombatScene,
+  EffectTemplate,
+  EnemyTemplate,
+  ItemInstance,
+  ItemTemplate,
+} from "../../app/types";
+import {
+  parseAbilityTemplate,
+  parseEffectTemplate,
+  parseEnemySpawnInput,
+  parseEnemyTemplate,
+  parseItemInstanceInput,
+  parseItemTemplate,
+  validateEffectReferences,
+  type ContentCatalogKnownIds,
+} from "../content";
+import { isItemEquipable } from "../items/itemRules";
 import { isCommandAllowedForAgent } from "./commandPermissions";
 import { resolveDifficultyClass } from "./improvisedActions";
 import type { AiAgentId, AiDirectorCommand } from "./types";
@@ -9,30 +28,70 @@ export interface AiCommandValidation {
   message: string;
 }
 
+export interface AiCommandValidationContext {
+  agentId?: AiAgentId;
+  characters: Character[];
+  selectedCharacterId: string;
+  combat: CombatScene;
+  itemTemplates: ItemTemplate[];
+  itemInstances: ItemInstance[];
+  abilityTemplates: AbilityTemplate[];
+  effectTemplates: EffectTemplate[];
+  enemyTemplates: EnemyTemplate[];
+  knownCatalogIds?: ContentCatalogKnownIds;
+}
+
+const creationPriority: Partial<Record<AiDirectorCommand["type"], number>> = {
+  createEffectTemplate: 10,
+  createAbilityTemplate: 20,
+  createItemTemplate: 30,
+  createEnemyTemplate: 40,
+  createItem: 50,
+  grantAbility: 50,
+  addEnemyToScene: 60,
+};
+
+export function orderAiCommandsForExecution(commands: AiDirectorCommand[]): AiDirectorCommand[] {
+  return commands
+    .map((command, index) => ({ command, index }))
+    .sort((left, right) =>
+      (creationPriority[left.command.type] ?? 100) - (creationPriority[right.command.type] ?? 100) ||
+      left.index - right.index)
+    .map(({ command }) => command);
+}
+
+export function getAiCommandExecutionPriority(command: AiDirectorCommand): number {
+  return creationPriority[command.type] ?? 100;
+}
+
+export function isContentCreationCommand(command: AiDirectorCommand): boolean {
+  return creationPriority[command.type] !== undefined;
+}
+
 export function validateAiCommands(
   commands: AiDirectorCommand[],
-  context: {
-    agentId?: AiAgentId;
-    characters: Character[];
-    selectedCharacterId: string;
-    combat: CombatScene;
-    itemTemplates: ItemTemplate[];
-    itemInstances: ItemInstance[];
-  },
+  context: AiCommandValidationContext,
 ): AiCommandValidation[] {
-  return commands.map((command) => validateAiCommand(command, context));
+  const evolvingContext: AiCommandValidationContext = {
+    ...context,
+    itemTemplates: [...context.itemTemplates],
+    itemInstances: [...context.itemInstances],
+    abilityTemplates: [...context.abilityTemplates],
+    effectTemplates: [...context.effectTemplates],
+    enemyTemplates: [...context.enemyTemplates],
+    knownCatalogIds: collectKnownCatalogIdsForCommands(commands, context),
+  };
+
+  return orderAiCommandsForExecution(commands).map((command) => {
+    const validation = validateAiCommand(command, evolvingContext);
+    if (validation.status !== "error") applyValidatedCreationToContext(command, evolvingContext);
+    return validation;
+  });
 }
 
 function validateAiCommand(
   command: AiDirectorCommand,
-  context: {
-    agentId?: AiAgentId;
-    characters: Character[];
-    selectedCharacterId: string;
-    combat: CombatScene;
-    itemTemplates: ItemTemplate[];
-    itemInstances: ItemInstance[];
-  },
+  context: AiCommandValidationContext,
 ): AiCommandValidation {
   if (context.agentId && !isCommandAllowedForAgent(context.agentId, command.type)) {
     return error(command, `Commande "${command.type}" interdite pour cet agent.`);
@@ -113,7 +172,52 @@ function validateAiCommand(
   }
 
   if (command.type === "createItem") {
-    return error(command, "Création d'objet non exécutable directement pour l'instant. À placer dans proposedCommands ou convertir en commande moteur dédiée.");
+    const catalog = createCatalogContext(context);
+    let templateId = command.templateId;
+    let inlineTemplate: ItemTemplate | undefined;
+
+    if (command.template) {
+      const parsedTemplate = parseItemTemplate(command.template, catalog);
+      if (!parsedTemplate.value) return error(command, parsedTemplate.errors.join(" "));
+      const duplicate = context.itemTemplates.some((template) => template.id === parsedTemplate.value?.id);
+      if (duplicate && command.mode !== "replace") {
+        return error(command, `Le template d'objet ${parsedTemplate.value.id} existe déjà; utilise mode=replace pour le remplacer.`);
+      }
+      templateId = parsedTemplate.value.id;
+      inlineTemplate = parsedTemplate.value;
+    }
+
+    if (!command.instance) return error(command, "createItem requiert un champ instance.");
+    const normalizedInstance = normalizeItemInstanceAliases(command.instance, context.selectedCharacterId);
+    const parsedInstance = parseItemInstanceInput(normalizedInstance, templateId);
+    if (!parsedInstance.value) return error(command, parsedInstance.errors.join(" "));
+    const effectiveTemplates = inlineTemplate
+      ? [...context.itemTemplates.filter((template) => template.id !== templateId), inlineTemplate]
+      : context.itemTemplates;
+    if (!effectiveTemplates.some((template) => template.id === parsedInstance.value?.templateId)) {
+      return error(command, `Template d'objet introuvable: ${parsedInstance.value.templateId}`);
+    }
+    if (parsedInstance.value.id && context.itemInstances.some((item) => item.id === parsedInstance.value?.id)) {
+      return error(command, `L'instance ${parsedInstance.value.id} existe déjà.`);
+    }
+    if (
+      parsedInstance.value.location.type !== "world" &&
+      !context.characters.some((character) => character.id === parsedInstance.value?.location.parent)
+    ) {
+      return error(command, `Parent d'inventaire introuvable: ${parsedInstance.value.location.parent ?? "null"}.`);
+    }
+    const effectiveTemplate = effectiveTemplates.find((template) => template.id === parsedInstance.value?.templateId);
+    if (
+      parsedInstance.value.location.type === "equipped" &&
+      effectiveTemplate &&
+      !isItemEquipable([effectiveTemplate.type, ...effectiveTemplate.types])
+    ) {
+      return error(command, `${effectiveTemplate.name} ne peut pas être créé directement comme objet équipé.`);
+    }
+    const effectErrors: string[] = [];
+    validateEffectReferences(parsedInstance.value.effects, catalog, "itemInstance.effects", effectErrors);
+    if (effectErrors.length) return error(command, effectErrors.join(" "));
+    return ready(command, `L'instance de ${parsedInstance.value.templateId} sera créée dans ${parsedInstance.value.location.type}.`);
   }
 
   if (command.type === "destroyItem") {
@@ -125,7 +229,15 @@ function validateAiCommand(
   }
 
   if (command.type === "modifyItem") {
-    return error(command, "Modification fine d'objet non exécutable directement pour l'instant. À placer dans proposedCommands.");
+    const item = context.itemInstances.find((candidate) => candidate.id === command.itemId);
+    if (!item) return error(command, `Objet introuvable: ${command.itemId}`);
+    if (!isSafeItemModificationPath(command.path)) {
+      return error(command, `Chemin de modification interdit: ${command.path}`);
+    }
+    if (command.path === "quantity" && (typeof command.value !== "number" || command.value < 1)) {
+      return error(command, "quantity doit être un nombre supérieur ou égal à 1.");
+    }
+    return ready(command, `${command.itemId}.${command.path} sera modifié.`);
   }
 
   if (command.type === "changeCharacterStat") {
@@ -137,7 +249,20 @@ function validateAiCommand(
   }
 
   if (command.type === "updateCharacterHistory") {
-    return error(command, "Historique joueur non exécutable directement pour l'instant. À placer dans proposedCommands.");
+    const character = context.characters.find((candidate) =>
+      candidate.id === resolveCharacterId(command.characterId, context.selectedCharacterId));
+    return character && command.entry.trim()
+      ? ready(command, `Une entrée sera ajoutée à l'historique de ${character.name}.`)
+      : error(command, `Personnage introuvable ou entrée vide: ${command.characterId}`);
+  }
+
+  if (command.type === "grantAbility") {
+    const character = context.characters.find((candidate) =>
+      candidate.id === resolveCharacterId(command.characterId, context.selectedCharacterId));
+    const template = context.abilityTemplates.find((candidate) => candidate.id === command.templateId);
+    if (!character) return error(command, `Personnage introuvable: ${command.characterId}`);
+    if (!template) return error(command, `Template de capacité introuvable: ${command.templateId}`);
+    return ready(command, `${character.name} recevra la capacité ${template.name}.`);
   }
 
   if (command.type === "abilityCheck" || command.type === "skillCheck") {
@@ -178,18 +303,49 @@ function validateAiCommand(
     return error(command, "Cette résolution structurée nécessite encore une conversion en commande moteur dédiée.");
   }
 
+  if (command.type === "createEffectTemplate") {
+    const parsed = parseEffectTemplate(command.template);
+    if (!parsed.value) return error(command, parsed.errors.join(" "));
+    return validateCatalogDuplicate(command, parsed.value, context.effectTemplates, "effet");
+  }
+
+  if (command.type === "createAbilityTemplate") {
+    const parsed = parseAbilityTemplate(command.template, createCatalogContext(context));
+    if (!parsed.value) return error(command, parsed.errors.join(" "));
+    return validateCatalogDuplicate(command, parsed.value, context.abilityTemplates, "capacité");
+  }
+
+  if (command.type === "createItemTemplate") {
+    const parsed = parseItemTemplate(command.template, createCatalogContext(context));
+    if (!parsed.value) return error(command, parsed.errors.join(" "));
+    return validateCatalogDuplicate(command, parsed.value, context.itemTemplates, "objet");
+  }
+
+  if (command.type === "createEnemyTemplate") {
+    const parsed = parseEnemyTemplate(command.template, createCatalogContext(context));
+    if (!parsed.value) return error(command, parsed.errors.join(" "));
+    return validateCatalogDuplicate(command, parsed.value, context.enemyTemplates, "ennemi");
+  }
+
+  if (command.type === "addEnemyToScene") {
+    if (!command.enemyTemplateId) return error(command, "addEnemyToScene requiert enemyTemplateId.");
+    const template = context.enemyTemplates.find((candidate) => candidate.id === command.enemyTemplateId);
+    if (!template) return error(command, `Template d'ennemi introuvable: ${command.enemyTemplateId}`);
+    const parsed = parseEnemySpawnInput({
+      ...(command.enemy ?? {}),
+      ...(command.position ? { position: command.position } : {}),
+    });
+    if (!parsed.value) return error(command, parsed.errors.join(" "));
+    return ready(command, `${parsed.value.name ?? template.name} sera ajouté à la scène.`);
+  }
+
   if (
     command.type === "createCombatScene" ||
     command.type === "createCombatTerrain" ||
-    command.type === "addEnemyToScene" ||
-    command.type === "createEnemyTemplate" ||
     command.type === "createTacticalElementTemplate" ||
-    command.type === "createTerrainTemplate" ||
-    command.type === "createItemTemplate" ||
-    command.type === "createEffectTemplate" ||
-    command.type === "createAbilityTemplate"
+    command.type === "createTerrainTemplate"
   ) {
-    return error(command, "Commande de création non exécutable directement pour l'instant. À placer dans proposedCommands pour validation.");
+    return error(command, "Ce type de création tactique n'a pas encore de schéma moteur stable.");
   }
 
   if (command.type === "moveCombatant") {
@@ -240,6 +396,156 @@ function validateAiCommand(
   }
 
   return error(command, "Commande inconnue.");
+}
+
+function createCatalogContext(context: AiCommandValidationContext) {
+  return {
+    effectTemplates: context.effectTemplates,
+    abilityTemplates: context.abilityTemplates,
+    itemTemplates: context.itemTemplates,
+    enemyTemplates: context.enemyTemplates,
+    knownIds: context.knownCatalogIds,
+  };
+}
+
+export function collectKnownCatalogIdsForCommands(
+  commands: AiDirectorCommand[],
+  context: Pick<
+    AiCommandValidationContext,
+    "effectTemplates" | "abilityTemplates" | "itemTemplates" | "enemyTemplates"
+  >,
+): ContentCatalogKnownIds {
+  const effectTemplateIds = new Set(context.effectTemplates.map((template) => template.id));
+  const abilityTemplateIds = new Set(context.abilityTemplates.map((template) => template.id));
+  const itemTemplateIds = new Set(context.itemTemplates.map((template) => template.id));
+  const enemyTemplateIds = new Set(context.enemyTemplates.map((template) => template.id));
+
+  commands.forEach((command) => {
+    const id = getPlannedTemplateId(command);
+    if (!id) return;
+    if (command.type === "createEffectTemplate") effectTemplateIds.add(id);
+    if (command.type === "createAbilityTemplate") abilityTemplateIds.add(id);
+    if (command.type === "createItemTemplate" || command.type === "createItem") itemTemplateIds.add(id);
+    if (command.type === "createEnemyTemplate") enemyTemplateIds.add(id);
+  });
+
+  return { effectTemplateIds, abilityTemplateIds, itemTemplateIds, enemyTemplateIds };
+}
+
+function getPlannedTemplateId(command: AiDirectorCommand): string | null {
+  if (command.type === "createItem" && !command.template) return command.templateId ?? null;
+  if (
+    command.type !== "createEffectTemplate" &&
+    command.type !== "createAbilityTemplate" &&
+    command.type !== "createItemTemplate" &&
+    command.type !== "createEnemyTemplate" &&
+    command.type !== "createItem"
+  ) {
+    return null;
+  }
+  return command.template && typeof command.template.id === "string" ? command.template.id : null;
+}
+
+function validateCatalogDuplicate<T extends { id: string }>(
+  command: AiDirectorCommand & { mode?: "create" | "replace" },
+  template: T,
+  catalog: T[],
+  label: string,
+): AiCommandValidation {
+  const exists = catalog.some((candidate) => candidate.id === template.id);
+  if (exists && command.mode !== "replace") {
+    return error(command, `Le template ${label} ${template.id} existe déjà; utilise mode=replace pour le remplacer.`);
+  }
+  return ready(
+    command,
+    exists ? `Le template ${label} ${template.id} sera remplacé.` : `Le template ${label} ${template.id} sera créé.`,
+  );
+}
+
+function normalizeItemInstanceAliases(
+  instance: Record<string, unknown>,
+  selectedCharacterId: string,
+): Record<string, unknown> {
+  const locationSource = instance.location && typeof instance.location === "object" && !Array.isArray(instance.location)
+    ? instance.location as Record<string, unknown>
+    : { type: "inventory", parent: selectedCharacterId };
+  return {
+    ...instance,
+    location: {
+      ...locationSource,
+      parent: locationSource.parent === "selected" ? selectedCharacterId : locationSource.parent,
+    },
+  };
+}
+
+function isSafeItemModificationPath(path: string): boolean {
+  return path === "quantity" ||
+    path === "name" ||
+    path === "description" ||
+    path.startsWith("base.") ||
+    path.startsWith("overrides.") ||
+    path.startsWith("current.") ||
+    path.startsWith("data.");
+}
+
+function replaceById<T extends { id: string }>(catalog: T[], template: T): T[] {
+  return [...catalog.filter((candidate) => candidate.id !== template.id), template];
+}
+
+function applyValidatedCreationToContext(
+  command: AiDirectorCommand,
+  context: AiCommandValidationContext,
+): void {
+  const catalog = createCatalogContext(context);
+
+  if (command.type === "createEffectTemplate") {
+    const parsed = parseEffectTemplate(command.template).value;
+    if (parsed) context.effectTemplates = replaceById(context.effectTemplates, parsed);
+    return;
+  }
+  if (command.type === "createAbilityTemplate") {
+    const parsed = parseAbilityTemplate(command.template, catalog).value;
+    if (parsed) context.abilityTemplates = replaceById(context.abilityTemplates, parsed);
+    return;
+  }
+  if (command.type === "createItemTemplate") {
+    const parsed = parseItemTemplate(command.template, catalog).value;
+    if (parsed) context.itemTemplates = replaceById(context.itemTemplates, parsed);
+    return;
+  }
+  if (command.type === "createEnemyTemplate") {
+    const parsed = parseEnemyTemplate(command.template, catalog).value;
+    if (parsed) context.enemyTemplates = replaceById(context.enemyTemplates, parsed);
+    return;
+  }
+  if (command.type === "createItem") {
+    let templateId = command.templateId;
+    if (command.template) {
+      const parsedTemplate = parseItemTemplate(command.template, catalog).value;
+      if (parsedTemplate) {
+        context.itemTemplates = replaceById(context.itemTemplates, parsedTemplate);
+        templateId = parsedTemplate.id;
+      }
+    }
+    if (command.instance) {
+      const parsedInstance = parseItemInstanceInput(
+        normalizeItemInstanceAliases(command.instance, context.selectedCharacterId),
+        templateId,
+      ).value;
+      if (parsedInstance) {
+        context.itemInstances = [...context.itemInstances, {
+          id: parsedInstance.id ?? `validation-item-${context.itemInstances.length}`,
+          templateId: parsedInstance.templateId,
+          quantity: parsedInstance.quantity,
+          overrides: parsedInstance.overrides,
+          current: parsedInstance.current,
+          data: parsedInstance.data,
+          effects: parsedInstance.effects,
+          location: parsedInstance.location,
+        }];
+      }
+    }
+  }
 }
 
 function resolveCharacterId(characterId: string, selectedCharacterId: string): string {

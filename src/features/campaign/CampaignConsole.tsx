@@ -15,6 +15,7 @@ import { AiDirectorConsole } from "../ai-director/AiDirectorConsole";
 import { AiApiTraceConsole } from "../ai-director/AiApiTraceConsole";
 import { HighlightedGameText } from "../../ui/gameTerms";
 import { WorldWorkshop } from "../world/WorldWorkshop";
+import { ContentWorkshop } from "../content/ContentWorkshop";
 
 const entitySections = [
   { key: "npcs", label: "NPC" },
@@ -44,6 +45,8 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
   const itemInstances = useGameStore((state) => state.itemInstances);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const effectTemplates = useGameStore((state) => state.effectTemplates);
+  const enemyTemplates = useGameStore((state) => state.enemyTemplates);
   const combat = useGameStore((state) => state.combat);
   const updateWorldFact = useGameStore((state) => state.updateWorldFact);
   const addWorldFact = useGameStore((state) => state.addWorldFact);
@@ -234,6 +237,18 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
                     <dd className="font-bold text-[#E4D8BE]">{itemInstances.length}</dd>
                   </div>
                   <div>
+                    <dt className="text-[#E4D8BE]/50">Effets réutilisables</dt>
+                    <dd className="font-bold text-[#E4D8BE]">{effectTemplates.length}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#E4D8BE]/50">Capacités</dt>
+                    <dd className="font-bold text-[#E4D8BE]">{abilityTemplates.length}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#E4D8BE]/50">Profils d'ennemis</dt>
+                    <dd className="font-bold text-[#E4D8BE]">{enemyTemplates.length}</dd>
+                  </div>
+                  <div>
                     <dt className="text-[#E4D8BE]/50">Portraits locaux</dt>
                     <dd className="font-bold text-[#E4D8BE]">
                       {Object.keys(characterPortraits).length}
@@ -296,6 +311,8 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
               </div>
             </div>
           </section>
+
+          <ContentWorkshop />
 
           <AiDirectorConsole />
           <AiApiTraceConsole />

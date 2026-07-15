@@ -4,6 +4,7 @@ import type { AiDirectorCommand, AiResolutionDraftPatch } from "./types";
 
 export interface AutomaticLocalResolution {
   handled: boolean;
+  continueToAgents?: boolean;
   handlerId?: string;
   commands: AiDirectorCommand[];
   draftPatch?: AiResolutionDraftPatch;
@@ -61,7 +62,134 @@ export function resolveAutomaticLocalRequest(
     if (resolution.handled) return { ...resolution, handlerId: handler.id };
   }
 
+  const supportingPatches = [
+    resolveMissingInventoryClaim(playerInput, state),
+    resolveSocialCoherenceConstraint(playerInput, state),
+    resolveWaitingContinuityConstraint(playerInput, state),
+  ].filter((patch): patch is AiResolutionDraftPatch => Boolean(patch));
+
+  if (supportingPatches.length > 0) {
+    return {
+      handled: true,
+      continueToAgents: true,
+      handlerId: "scene.preconditions",
+      commands: [],
+      draftPatch: mergeDraftPatches(supportingPatches),
+    };
+  }
+
   return { handled: false, commands: [] };
+}
+
+const ITEM_RESOURCE_GROUPS = [
+  { label: "couteau", terms: ["couteau", "dague", "lame"] },
+  { label: "épée", terms: ["epee", "sabre", "rapiere", "glaive"] },
+  { label: "arc", terms: ["arc", "arbalete"] },
+  { label: "bouclier", terms: ["bouclier", "ecu"] },
+  { label: "corde", terms: ["corde", "grappin"] },
+  { label: "torche", terms: ["torche", "lanterne"] },
+  { label: "clé", terms: ["cle", "passe-partout"] },
+  { label: "potion", terms: ["potion", "fiole", "elixir"] },
+] as const;
+
+function resolveMissingInventoryClaim(playerInput: string, state: GameState): AiResolutionDraftPatch | undefined {
+  const text = normalize(playerInput);
+  const claimsPossession = /\b(avec|utilise|brandis|sors|degaine|tiens|manie|me sers|bois|mange|porte|enfile|allume)\b/u.test(text);
+  const attemptsAcquisition = /\b(vole|derobe|subtilise|arrache|ramasse|recupere)\b/u.test(text);
+  if (!claimsPossession || attemptsAcquisition) return undefined;
+
+  const templates = new Map(state.itemTemplates.map((template) => [template.id, template]));
+  const ownedItems = state.itemInstances
+    .filter((item) => item.location.parent === state.selectedCharacterId && item.quantity > 0)
+    .map((item) => {
+      const template = templates.get(item.templateId);
+      const name = String(item.overrides.name ?? template?.name ?? item.id);
+      return { name, searchable: normalize([
+        item.overrides.name,
+        template?.name,
+        ...(template?.aliases ?? []),
+        ...(template?.types ?? []),
+        ...(template?.tags ?? []),
+      ].filter(Boolean).join(" ")) };
+    });
+  const missingGroup = ITEM_RESOURCE_GROUPS.find((group) =>
+    group.terms.some((term) => text.includes(term)) &&
+    !ownedItems.some((item) => group.terms.some((term) => item.searchable.includes(term))),
+  );
+  if (!missingGroup) {
+    const names = ownedItems.slice(0, 30).map((item) => item.name);
+    return {
+      facts: [{
+        source: "localEngine",
+        kind: "inventoryAuthority",
+        content: `Inventaire au début de l'action (liste exhaustive) : ${names.length ? names.join(", ") : "vide"}. Aucun objet absent de cette liste ne peut apparaître, être tenu ou être utilisé du seul fait que le joueur le mentionne.`,
+        visibility: "gmOnly",
+      }],
+    };
+  }
+
+  return {
+    facts: [{
+      source: "localEngine",
+      kind: "missingResource",
+      content: `Inventaire vérifié : le personnage ne possède aucun objet correspondant à « ${missingGroup.label} ». Cet objet ne peut pas apparaître ni être utilisé dans la scène.`,
+      visibility: "playerVisible",
+    }],
+    warnings: [`Ressource absente bloquée avant narration : ${missingGroup.label}.`],
+  };
+}
+
+function resolveSocialCoherenceConstraint(playerInput: string, state: GameState): AiResolutionDraftPatch | undefined {
+  const text = normalize(playerInput);
+  const severe = /\b(vole|derobe|subtilise|agresse|frappe|attaque|poignarde|tue|empoisonne|incendie|menace de mort)\b/u.test(text);
+  const disruptive = /\b(crie|hurle|insulte|provoque|fait un scandale|comme un ivrogne|ivre|menace)\b/u.test(text);
+  if (!severe && !disruptive) return undefined;
+
+  const authorityContext = /\b(roi|reine|cour|palais|garde|temple|prison|tribunal|noble|officier)\b/u.test(
+    `${text} ${normalize(state.narrativeScene.locationLabel)}`,
+  );
+  const witnessed = authorityContext || state.narrativeScene.presentEntityIds.length > 0;
+  const level = severe ? "grave" : "perturbatrice";
+
+  return {
+    facts: [{
+      source: "localEngine",
+      kind: "socialCoherenceConstraint",
+      content: `Cohérence sociale obligatoire : l'action est ${level}. Le spécialiste Monde doit établir qui la perçoit et produire une réaction immédiate proportionnée. Si elle est observable, les témoins, propriétaires ou autorités ne peuvent pas rester passifs sans raison explicite.`,
+      visibility: "gmOnly",
+    }],
+    scenePatches: witnessed ? [{
+      socialTensionDelta: severe ? 2 : 1,
+      alertLevel: severe
+        ? Math.max(2, state.narrativeScene.alertLevel) as 2 | 3 | 4
+        : Math.max(1, state.narrativeScene.alertLevel) as 1 | 2 | 3 | 4,
+    }] : [],
+  };
+}
+
+function resolveWaitingContinuityConstraint(playerInput: string, state: GameState): AiResolutionDraftPatch | undefined {
+  const text = normalize(playerInput);
+  if (!/\b(attends?|patiente|reste|ne fais rien|laisse venir|ecoute encore)\b/u.test(text)) return undefined;
+  if (!state.narrativeScene.lastNarratedBeat.trim()) return undefined;
+
+  return {
+    facts: [{
+      source: "localEngine",
+      kind: "continuityConstraint",
+      content: `Le joueur laisse réellement passer du temps. La nouvelle scène doit être la conséquence causale de la dernière étape, jamais sa répétition. Dernière étape : ${state.narrativeScene.lastNarratedBeat.slice(0, 300)}`,
+      visibility: "gmOnly",
+    }],
+  };
+}
+
+function mergeDraftPatches(patches: AiResolutionDraftPatch[]): AiResolutionDraftPatch {
+  return {
+    facts: patches.flatMap((patch) => patch.facts ?? []),
+    narrationInputs: patches.flatMap((patch) => patch.narrationInputs ?? []),
+    scenePatches: patches.flatMap((patch) => patch.scenePatches ?? []),
+    warnings: patches.flatMap((patch) => patch.warnings ?? []),
+    questions: patches.flatMap((patch) => patch.questions ?? []),
+  };
 }
 
 function resolveInventoryQuery(state: GameState, text: string): AutomaticLocalResolution {

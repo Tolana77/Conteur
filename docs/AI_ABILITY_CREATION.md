@@ -193,16 +193,14 @@ Effets existants ou reserves au moteur :
 - `move`
 - `teleport`
 - `createZone`
-- `grantAdvantage`
-- `reroll`
 - `summon`
 - `dispel`
 - `inventoryInteraction`
 - `grantAbility`
 - `preventUnequip`
 
-Une action inconnue doit etre evitee. Si un effet manque, propose de l'ajouter
-au catalogue avant de l'utiliser.
+Une action inconnue est rejetée. Si une combinaison manque, crée d'abord un
+`EffectTemplate` à partir de ces opérations fermées, puis référence son id.
 
 ## Validation attendue
 

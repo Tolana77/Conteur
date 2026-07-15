@@ -29,16 +29,3 @@ export function createAbilityInstance(
     effects: [],
   };
 }
-
-export function createInitialAbilityInstances(
-  characterId: string,
-  templates: AbilityTemplate[],
-): AbilityInstance[] {
-  return [
-    createAbilityInstance("ability-second-wind-01", "abl_second_wind", characterId, templates),
-    createAbilityInstance("ability-shadow-step-01", "abl_shadow_step", characterId, templates),
-    createAbilityInstance("ability-rallying-cry-01", "abl_rallying_cry", characterId, templates),
-    createAbilityInstance("ability-quick-shot-01", "abl_quick_shot", characterId, templates),
-    createAbilityInstance("ability-sixth-sense-01", "abl_sixth_sense", characterId, templates),
-  ];
-}

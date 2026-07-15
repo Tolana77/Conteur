@@ -2,11 +2,20 @@ import { useMemo, useState } from "react";
 import type { AdminCommandResult } from "../admin/adminCommands";
 import { useGameStore } from "../../store/useGameStore";
 import { aiAgentDefinitions } from "./agents";
-import { buildAiDirectorPrompt, createEmptyResolutionDraft } from "./promptBuilder";
+import {
+  buildAiDirectorPrompt,
+  createEmptyResolutionDraft,
+  type AiPromptSnapshot,
+} from "./promptBuilder";
 import { isCommandAllowedForAgent } from "./commandPermissions";
 import { AiGatewayError, runAgentOverHttp } from "./httpAiGateway";
 import { parseAiDirectorResponse } from "./responseParser";
-import { validateAiCommands, type AiCommandValidation } from "./validation";
+import {
+  collectKnownCatalogIdsForCommands,
+  orderAiCommandsForExecution,
+  validateAiCommands,
+  type AiCommandValidation,
+} from "./validation";
 import { executeAiCommand } from "./aiExecution";
 import type {
   AiAgentId,
@@ -40,11 +49,15 @@ export function AiDirectorConsole() {
   const selectedCharacterId = useGameStore((state) => state.selectedCharacterId);
   const messages = useGameStore((state) => state.messages);
   const narrativeMomentum = useGameStore((state) => state.narrativeMomentum);
+  const narrativeScene = useGameStore((state) => state.narrativeScene);
   const combat = useGameStore((state) => state.combat);
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const effectTemplates = useGameStore((state) => state.effectTemplates);
+  const enemyTemplates = useGameStore((state) => state.enemyTemplates);
+  const disabledContentTemplateIds = useGameStore((state) => state.disabledContentTemplateIds);
   const characterDerivedScores = useGameStore((state) => state.characterDerivedScores);
 
   const storageSnapshot = useMemo(() => ({
@@ -53,15 +66,22 @@ export function AiDirectorConsole() {
     selectedCharacterId,
     messages,
     narrativeMomentum,
+    narrativeScene,
     combat,
     itemTemplates,
     itemInstances,
     abilityTemplates,
     abilityInstances,
+    effectTemplates,
+    enemyTemplates,
+    disabledContentTemplateIds,
     characterDerivedScores,
   }), [
     abilityInstances,
     abilityTemplates,
+    effectTemplates,
+    enemyTemplates,
+    disabledContentTemplateIds,
     campaign,
     characterDerivedScores,
     characters,
@@ -70,6 +90,7 @@ export function AiDirectorConsole() {
     itemTemplates,
     messages,
     narrativeMomentum,
+    narrativeScene,
     selectedCharacterId,
   ]);
   const request = useMemo(() => parseManualAgentRequest(selectedAgentId, manualAgentRequest), [manualAgentRequest, selectedAgentId]);
@@ -88,6 +109,9 @@ export function AiDirectorConsole() {
             combat: storageSnapshot.combat,
             itemTemplates: storageSnapshot.itemTemplates,
             itemInstances: storageSnapshot.itemInstances,
+            abilityTemplates: storageSnapshot.abilityTemplates,
+            effectTemplates: storageSnapshot.effectTemplates,
+            enemyTemplates: storageSnapshot.enemyTemplates,
           })
         : [],
     [
@@ -97,6 +121,9 @@ export function AiDirectorConsole() {
       storageSnapshot.combat,
       storageSnapshot.itemInstances,
       storageSnapshot.itemTemplates,
+      storageSnapshot.abilityTemplates,
+      storageSnapshot.effectTemplates,
+      storageSnapshot.enemyTemplates,
       storageSnapshot.selectedCharacterId,
     ],
   );
@@ -196,8 +223,14 @@ export function AiDirectorConsole() {
       return;
     }
 
-    const commands = createCommandsWithNarration(selectedAgentId, parsed.response.narration, parsed.response.commands);
-    const results = commands.map((command) => executeAiCommand(command, storageSnapshot, useGameStore.getState()));
+    const commands = orderAiCommandsForExecution(
+      createCommandsWithNarration(selectedAgentId, parsed.response.narration, parsed.response.commands),
+    );
+    const knownCatalogIds = collectKnownCatalogIdsForCommands(commands, storageSnapshot);
+    const results = commands.map((command) => {
+      const current = useGameStore.getState();
+      return executeAiCommand(command, createLiveSnapshot(current), current, { knownCatalogIds });
+    });
     setExecutionHistory((history) => [...results, ...history].slice(0, 10));
     const executionDraft = createExecutionDraft(results);
     const nextDraft = mergeResolutionDraft(resolutionDraft, executionDraft);
@@ -537,6 +570,7 @@ function mergeResolutionDraft(draft: AiResolutionDraft, patch: AiResolutionDraft
     suggestedAgents: mergeUniqueItems(draft.suggestedAgents, patch.suggestedAgents),
     proposedCommands: mergeUniqueItems(draft.proposedCommands, patch.proposedCommands),
     narrationInputs: mergeUniqueItems(draft.narrationInputs, patch.narrationInputs),
+    scenePatches: mergeUniqueItems(draft.scenePatches, patch.scenePatches),
     safety: mergeUniqueItems(draft.safety, patch.safety),
     warnings: mergeUniqueStrings(draft.warnings, patch.warnings),
     questions: mergeUniqueStrings(draft.questions, patch.questions),
@@ -628,6 +662,7 @@ function createPipelineInput(draft: AiResolutionDraft) {
     warnings: draft.warnings,
     safety: draft.safety,
     questions: draft.questions,
+    scenePatches: draft.scenePatches,
   };
 }
 
@@ -707,4 +742,24 @@ function createCommandsWithNarration(agentId: AiAgentId, narration: string, comm
   return trimmedNarration && !hasNarrationCommand && isCommandAllowedForAgent(agentId, "sendNarration")
     ? [{ type: "sendNarration", content: trimmedNarration }, ...commands]
     : commands;
+}
+
+function createLiveSnapshot(state: ReturnType<typeof useGameStore.getState>): AiPromptSnapshot {
+  return {
+    campaign: state.campaign,
+    characters: state.characters,
+    selectedCharacterId: state.selectedCharacterId,
+    messages: state.messages,
+    narrativeMomentum: state.narrativeMomentum,
+    combat: state.combat,
+    itemTemplates: state.itemTemplates,
+    itemInstances: state.itemInstances,
+    abilityTemplates: state.abilityTemplates,
+    abilityInstances: state.abilityInstances,
+    effectTemplates: state.effectTemplates,
+    enemyTemplates: state.enemyTemplates,
+    disabledContentTemplateIds: state.disabledContentTemplateIds,
+    characterDerivedScores: state.characterDerivedScores,
+    narrativeScene: state.narrativeScene,
+  };
 }

@@ -16,22 +16,20 @@ Pour un changement local de nom, description, poids, valeur ou petit bonus, util
 ou les `effects` de l'instance. Ne pas creer un nouveau template juste pour "+1 degat",
 "potion trouble" ou "armure renforcee".
 
-## Fichiers a modifier
+## Catalogue et commandes
 
-Les donnees d'objets sont volontairement separees pour etre faciles a lire et ecrire par une IA.
+À l'exécution, une IA ne modifie jamais un fichier source. Les catalogues et
+instances sont persistés par Zustand dans `localStorage`.
 
-- Effets reutilisables : `src/features/items/itemEffects.ts`
-- Templates d'objets : `src/features/items/itemTemplates.ts`
-- Instances d'objets : `src/features/items/itemInstances.ts`
+- `createEffectTemplate` enregistre un effet réutilisable ;
+- `createAbilityTemplate` enregistre une capacité ;
+- `createItemTemplate` enregistre un template d'objet ;
+- `createItem` crée une instance concrète ;
+- `modifyItem` surcharge ensuite un champ sûr de l'instance.
 
-Regle de travail :
-
-- ajouter d'abord les effets necessaires dans `itemEffects.ts` ;
-- creer ou modifier les templates dans `itemTemplates.ts` ;
-- placer les exemplaires concrets dans `itemInstances.ts` ;
-- ne pas ajouter de templates ou d'instances directement dans le store Zustand.
-- privilegier les fonctions d'effets (`heal(...)`, `damage(...)`, `randomDamage(...)`, etc.) plutot que des objets ad hoc.
-- donner un `nom` aux effets reutilisables dans `itemEffects.ts` ; l'interface affiche ce nom, pas une phrase explicative construite objet par objet.
+Toujours émettre les dépendances dans la même réponse si elles manquent. Le
+moteur les réordonne automatiquement : effet, capacité, objet, instance.
+Le contrat complet est centralisé dans `docs/AI_CONTENT_CREATION.md`.
 
 ## ItemTemplate
 
@@ -235,7 +233,8 @@ Pour obtenir cet affichage, creer ou reutiliser un effet nomme dans `itemEffects
 Un objet ne doit pas decrire lui-meme une phrase du type "inflige 10 degats" :
 il doit appeler un effet existant comme `Boule de feu`.
 
-Le catalogue complet des effets est dans `src/features/items/itemEffects.ts`.
+Les opérations natives sont dans `src/features/content/contentCatalog.ts` et
+les effets créés en cours de partie vivent dans `effectTemplates`.
 La console admin peut aussi lister ces effets avec :
 
 ```txt

@@ -4,7 +4,8 @@
 
 - Le Narrateur est toujours le dernier appel.
 - Le routage connu est local et ne consomme aucun token.
-- Un message courant appelle au plus un agent métier.
+- Un message courant appelle normalement zéro ou un agent métier. Une chaîne de
+  création peut déléguer à plusieurs spécialistes, avec un plafond strict de cinq.
 - Il n'existe plus d'appel de classification séparé : une action libre inconnue va directement à l'arbitre générique.
 - La validation et l'exécution des commandes restent locales.
 - Le Narrateur ne reçoit jamais l'état complet du jeu.
@@ -22,7 +23,8 @@
 2. Si aucune opération autoritaire ne correspond, `automaticRouting.ts` classe localement le message.
 3. Une action libre formulée à la première personne est envoyée directement à `actionManager` si aucun domaine précis n'est reconnu.
 4. `automaticPrompts.ts` construit une vue propre au domaine, avec au plus trois éléments de scène pertinents.
-5. L'unique agent métier propose faits et, si nécessaire, une commande structurée.
+5. L'agent métier propose faits et, si nécessaire, une commande structurée. Il
+   peut demander un spécialiste de création; le routeur local vérifie la transition.
 6. Une question indispensable crée une décision suspendue; aucune commande préparée n'est alors exécutée.
 7. Le moteur revalide puis exécute localement les commandes et produit des reçus typés.
 8. Un paquet public borné est transmis au Narrateur, toujours en dernier.

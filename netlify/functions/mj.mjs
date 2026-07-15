@@ -117,6 +117,9 @@ function getMaxTokens(agentId) {
     characterManager: 450,
     actionManager: 420,
     combatManager: 550,
+    combatSetupManager: 520,
+    tacticalTemplateManager: 700,
+    assetTemplateManager: 700,
     worldManager: 420,
   };
   const maximum = agentMaximums[agentId] ?? 600;
@@ -131,6 +134,9 @@ function getMaxPromptLength(agentId) {
     characterManager: 9_000,
     actionManager: 7_000,
     combatManager: 12_000,
+    combatSetupManager: 10_000,
+    tacticalTemplateManager: 14_000,
+    assetTemplateManager: 16_000,
     worldManager: 8_000,
   };
   return limits[agentId] ?? 16_000;

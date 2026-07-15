@@ -6,5 +6,4 @@ export {
   isItemUsable,
   preventsUnequip,
 } from "./itemRules";
-export { createInitialItemInstances } from "./itemInstances";
 export { initialItemTemplates } from "./itemTemplates";

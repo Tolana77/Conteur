@@ -26,6 +26,47 @@ export interface NarrativeMomentum {
   updatedAt: number;
 }
 
+export type NarrativeAlertLevel = 0 | 1 | 2 | 3 | 4;
+
+export interface NarrativeSceneEvent {
+  id: string;
+  description: string;
+  stage: string;
+  turnsRemaining: number;
+  urgency: "background" | "rising" | "immediate";
+  relatedEntityIds: string[];
+}
+
+export interface NarrativeSceneState {
+  id: string;
+  revision: number;
+  turn: number;
+  elapsedMinutes: number;
+  locationId: string | null;
+  locationLabel: string;
+  playerPosition: string;
+  presentEntityIds: string[];
+  socialTension: number;
+  alertLevel: NarrativeAlertLevel;
+  activeEvents: NarrativeSceneEvent[];
+  recentConsequences: string[];
+  lastPlayerAction: string;
+  lastNarratedBeat: string;
+}
+
+export interface NarrativeScenePatch {
+  locationId?: string | null;
+  locationLabel?: string;
+  playerPosition?: string;
+  presentEntityIds?: string[];
+  elapsedMinutes?: number;
+  socialTensionDelta?: number;
+  alertLevel?: NarrativeAlertLevel;
+  upsertEvents?: NarrativeSceneEvent[];
+  resolveEventIds?: string[];
+  consequences?: string[];
+}
+
 export interface GameActionReceipt {
   id: string;
   timestamp: number;
@@ -164,6 +205,37 @@ export interface ItemEffectRef {
   variables?: Record<string, number | string | boolean>;
 }
 
+export type EffectOperationId =
+  | "applyCondition"
+  | "createZone"
+  | "damage"
+  | "dispel"
+  | "grantAbility"
+  | "heal"
+  | "inventoryInteraction"
+  | "modifyResource"
+  | "modifyStat"
+  | "move"
+  | "preventUnequip"
+  | "randomDamage"
+  | "reduceDamage"
+  | "removeCondition"
+  | "summon"
+  | "teleport";
+
+export interface EffectTemplateAction {
+  operation: EffectOperationId;
+  variables: Record<string, number | string | boolean>;
+}
+
+export interface EffectTemplate {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  actions: EffectTemplateAction[];
+}
+
 export type ItemModuleValue = number | string | boolean | Array<number | string | boolean>;
 
 export interface ItemTemplate {
@@ -294,6 +366,46 @@ export interface AbilityInstance {
   };
   data: Record<string, number | string | boolean>;
   effects: ItemEffectRef[];
+}
+
+export interface EnemyAttackTemplate {
+  id: string;
+  name: string;
+  attackKind: "melee" | "ranged" | "magic";
+  attackBonus: number;
+  damage: number | string;
+  damageType: string;
+  range: number;
+  cost: "action" | "bonus" | "reaction";
+  tags: string[];
+}
+
+export interface EnemyBehaviorTemplate {
+  role: "artillery" | "controller" | "skirmisher" | "soldier" | "support" | "brute";
+  aggression: number;
+  preferredRange: number;
+  retreatBelowHpPercent?: number;
+  priorities: string[];
+}
+
+export interface EnemyTemplate {
+  id: string;
+  name: string;
+  description: string;
+  level: number;
+  category: string;
+  tags: string[];
+  hp: number | string;
+  defense: number;
+  initiative: number;
+  speed: number;
+  reach: number;
+  attacks: EnemyAttackTemplate[];
+  abilityTemplateIds: string[];
+  behavior: EnemyBehaviorTemplate;
+  resistances: string[];
+  vulnerabilities: string[];
+  immunities: string[];
 }
 
 export interface CombatPosition {
@@ -427,6 +539,13 @@ export interface Combatant {
   reach: number;
   attackRange: number;
   attackDamage: number;
+  enemyTemplateId?: string;
+  attacks?: EnemyAttackTemplate[];
+  abilityTemplateIds?: string[];
+  behavior?: EnemyBehaviorTemplate;
+  resistances?: string[];
+  vulnerabilities?: string[];
+  immunities?: string[];
 }
 
 export interface CombatLogEntry {

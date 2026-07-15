@@ -1,23 +1,52 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { exampleCampaign } from "../features/campaign";
+import {
+  cloneCampaignStartSnapshot,
+  createCampaignStartSnapshot,
+  defaultCampaign,
+  normalizeCampaignStartSnapshot,
+  type CampaignStartSnapshot,
+} from "../features/campaign";
 import { rollDiceFormula } from "../features/dice";
+import {
+  advanceNarrativeScene,
+  applyNarrativeScenePatch,
+  createInitialNarrativeScene,
+  normalizeNarrativeScene,
+  recordNarratedBeat,
+} from "../core/game-engine/narrativeScene";
 import {
   canUseAbility,
   createAbilityInstance,
-  createInitialAbilityInstances,
   initialAbilityTemplates,
   rechargeAbility as rechargeAbilityCharge,
   setAbilityCharges as setAbilityChargeCount,
   useAbilityCharge,
 } from "../features/abilities";
 import {
-  createInitialItemInstances,
   initialItemTemplates,
   isItemEquipable,
   isItemUsable,
   preventsUnequip,
 } from "../features/items";
+import {
+  cloneContentTemplate,
+  createEmptyDisabledContentTemplateIds,
+  getContentTemplateDependencies,
+  initialEffectTemplates,
+  initialEnemyTemplates,
+  isBuiltInContentTemplate,
+  isContentTemplateActive,
+  resolveEffectReferences,
+  type ContentAuditEntry,
+  type ContentDeletionResult,
+  type ContentMutationMeta,
+  type ContentTemplate,
+  type ContentTemplateKind,
+  type DisabledContentTemplateIds,
+  type EnemySpawnInput,
+  type ItemInstanceInput,
+} from "../features/content";
 import {
   getCombatantTargetPosition,
   getSuggestedSide,
@@ -40,23 +69,29 @@ import type {
   ChatActionIntentKind,
   Combatant,
   CombatLogEntry,
+  CombatMapElementEffect,
+  CombatMapElementKind,
   CombatScene,
   CombatPosition,
   DiceRoll,
   DiceVisibility,
+  EffectTemplate,
+  EnemyTemplate,
   Entity,
   GameActionReceipt,
   ItemInstance,
   ItemTemplate,
   Message,
   NarrativeMomentum,
+  NarrativeScenePatch,
+  NarrativeSceneState,
   PendingGameDecision,
   CharacterStats,
 } from "../app/types";
 import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 23;
+export const GAME_STORAGE_VERSION = 27;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -90,8 +125,14 @@ export interface GameState {
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
   abilityInstances: AbilityInstance[];
+  effectTemplates: EffectTemplate[];
+  enemyTemplates: EnemyTemplate[];
+  disabledContentTemplateIds: DisabledContentTemplateIds;
+  contentAuditLog: ContentAuditEntry[];
   combat: CombatScene;
   aiApiTraces: AiApiTrace[];
+  campaignStartSnapshot: CampaignStartSnapshot;
+  narrativeScene: NarrativeSceneState;
   selectCharacter: (characterId: string) => void;
   setCharacterPortrait: (characterId: string, portrait: string) => void;
   dealDamage: (characterId: string, amount: number, damageType?: string) => void;
@@ -109,11 +150,23 @@ export interface GameState {
   giveItem: (characterId: string, templateId: string, quantity?: number) => ItemInstance | null;
   pickupItem: (itemId: string, characterId: string) => boolean;
   removeItem: (itemId: string) => void;
+  modifyItemField: (itemId: string, path: string, value: string | number | boolean) => boolean;
   spendItemQuantity: (itemId: string, quantity: number) => boolean;
   useItem: (itemId: string) => void;
   useAbility: (abilityId: string) => boolean;
   rechargeAbility: (abilityId: string) => void;
   setAbilityCharges: (abilityId: string, charges: number) => void;
+  registerEffectTemplate: (template: EffectTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
+  registerItemTemplate: (template: ItemTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
+  registerAbilityTemplate: (template: AbilityTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
+  registerEnemyTemplate: (template: EnemyTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
+  setContentTemplateActive: (kind: ContentTemplateKind, templateId: string, active: boolean) => boolean;
+  deleteContentTemplate: (kind: ContentTemplateKind, templateId: string) => ContentDeletionResult;
+  clearContentAuditLog: () => void;
+  createItemInstance: (input: ItemInstanceInput) => ItemInstance | null;
+  grantAbilityToCharacter: (characterId: string, templateId: string) => AbilityInstance | null;
+  appendCharacterHistory: (characterId: string, entry: string) => boolean;
+  spawnEnemyFromTemplate: (templateId: string, input: EnemySpawnInput) => string | null;
   rest: (characterId: string, type: "short" | "long") => void;
   startEncounter: (characterId: string) => void;
   startCombat: () => void;
@@ -135,7 +188,11 @@ export interface GameState {
   setShowItemTags: (showItemTags: boolean) => void;
   clearCharacterPortraits: () => void;
   resetGameState: () => void;
-  startCampaign: (campaign: Campaign, openingScene: string) => void;
+  startCampaign: (snapshot: CampaignStartSnapshot) => void;
+  restartCampaign: () => void;
+  advanceNarrativeScene: (playerAction: string) => void;
+  applyNarrativeScenePatch: (patch: NarrativeScenePatch) => void;
+  recordNarratedBeat: (narration: string) => void;
   addGmMessage: (content: string) => void;
   sendPlayerMessage: (content: string) => void;
   setPendingGameDecision: (decision: PendingGameDecision | null) => void;
@@ -155,7 +212,7 @@ const initialMessages: Message[] = [
   {
     id: "message-gm-intro",
     sender: "gm",
-    content: "Bienvenue aux Marches d'Argelune. Que faites-vous ?",
+    content: "Créez un monde depuis l’Atelier, puis commencez votre aventure.",
     timestamp: 1_735_689_601_000,
   },
 ];
@@ -634,18 +691,41 @@ type GameDataState = Pick<
   | "itemInstances"
   | "abilityTemplates"
   | "abilityInstances"
+  | "effectTemplates"
+  | "enemyTemplates"
+  | "disabledContentTemplateIds"
+  | "contentAuditLog"
   | "combat"
   | "aiApiTraces"
+  | "campaignStartSnapshot"
+  | "narrativeScene"
 >;
 
 function createInitialState(): GameDataState {
-  const characterId = exampleCampaign.characters[0]?.id ?? "";
-  const itemInstances = createInitialItemInstances(characterId);
+  const characterId = defaultCampaign.characters[0]?.id ?? "";
+  const itemInstances: ItemInstance[] = [];
+  const abilityInstances: AbilityInstance[] = [];
+  const narrativeScene = createInitialNarrativeScene(defaultCampaign);
+  const campaignStartSnapshot = createCampaignStartSnapshot({
+    campaign: defaultCampaign,
+    characters: defaultCampaign.characters,
+    selectedCharacterId: characterId,
+    openingScene: defaultCampaign.world.openingScene
+      ?? initialMessages[0]?.content
+      ?? "Créez un monde depuis l’Atelier.",
+    itemTemplates: initialItemTemplates,
+    itemInstances,
+    abilityTemplates: initialAbilityTemplates,
+    abilityInstances,
+    effectTemplates: initialEffectTemplates,
+    enemyTemplates: initialEnemyTemplates,
+    narrativeScene,
+  });
 
   return {
     storageVersion: GAME_STORAGE_VERSION,
-    campaign: exampleCampaign,
-    characters: exampleCampaign.characters,
+    campaign: defaultCampaign,
+    characters: defaultCampaign.characters,
     selectedCharacterId: characterId,
     messages: initialMessages,
     narrativeMomentum: createInitialNarrativeMomentum(),
@@ -659,13 +739,59 @@ function createInitialState(): GameDataState {
     itemTemplates: initialItemTemplates,
     itemInstances,
     abilityTemplates: initialAbilityTemplates,
-    abilityInstances: createInitialAbilityInstances(characterId, initialAbilityTemplates),
-    combat: createInitialCombatScene(),
+    abilityInstances,
+    effectTemplates: initialEffectTemplates,
+    enemyTemplates: initialEnemyTemplates,
+    disabledContentTemplateIds: createEmptyDisabledContentTemplateIds(),
+    contentAuditLog: [],
+    combat: createEmptyCombatScene(),
     aiApiTraces: [],
+    campaignStartSnapshot,
+    narrativeScene,
     characterDerivedScores: createCharacterDerivedScores(
-      exampleCampaign.characters,
+      defaultCampaign.characters,
       itemInstances,
       initialItemTemplates,
+      initialEffectTemplates,
+    ),
+  };
+}
+
+function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<GameDataState> {
+  const start = cloneCampaignStartSnapshot(snapshot);
+  const characters = start.characters;
+  const itemTemplates = start.itemTemplates;
+  const itemInstances = start.itemInstances;
+
+  return {
+    storageVersion: GAME_STORAGE_VERSION,
+    campaign: { ...start.campaign, characters },
+    characters,
+    selectedCharacterId: characters.some((character) => character.id === start.selectedCharacterId)
+      ? start.selectedCharacterId
+      : characters[0]?.id ?? "",
+    messages: [createMessage("gm", start.openingScene)],
+    narrativeMomentum: createInitialNarrativeMomentum(),
+    pendingGameDecision: null,
+    pendingActionIntents: [],
+    diceRolls: [],
+    itemTemplates,
+    itemInstances,
+    abilityTemplates: start.abilityTemplates,
+    abilityInstances: start.abilityInstances,
+    effectTemplates: start.effectTemplates,
+    enemyTemplates: start.enemyTemplates,
+    disabledContentTemplateIds: createEmptyDisabledContentTemplateIds(),
+    contentAuditLog: [],
+    combat: createEmptyCombatScene(),
+    aiApiTraces: [],
+    campaignStartSnapshot: start,
+    narrativeScene: normalizeNarrativeScene(start.narrativeScene, start.campaign),
+    characterDerivedScores: createCharacterDerivedScores(
+      characters,
+      itemInstances,
+      itemTemplates,
+      start.effectTemplates,
     ),
   };
 }
@@ -678,6 +804,13 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   }
 
   const candidate = persistedState as Partial<GameState>;
+  if (candidate.campaign?.id === "campaign-marches-argelune") {
+    return {
+      ...initialState,
+      uiSettings: normalizeUiSettings(candidate.uiSettings, initialState.uiSettings),
+      aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
+    };
+  }
   const hasCurrentCharacterModel =
     Array.isArray(candidate.characters) &&
     candidate.characters.every(
@@ -717,8 +850,17 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       abilityInstances: Array.isArray(candidate.abilityInstances)
         ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
         : initialState.abilityInstances,
+      effectTemplates: Array.isArray(candidate.effectTemplates)
+        ? mergeById(candidate.effectTemplates, initialState.effectTemplates)
+        : initialState.effectTemplates,
+      enemyTemplates: Array.isArray(candidate.enemyTemplates)
+        ? mergeById(candidate.enemyTemplates, initialState.enemyTemplates)
+        : initialState.enemyTemplates,
+      disabledContentTemplateIds: normalizeDisabledContentTemplateIds(candidate.disabledContentTemplateIds),
+      contentAuditLog: normalizeContentAuditLog(candidate.contentAuditLog),
       combat: normalizeCombatScene(candidate.combat, initialState.combat),
       aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
+      campaignStartSnapshot: initialState.campaignStartSnapshot,
       characterDerivedScores: createCharacterDerivedScores(
         initialState.characters,
         Array.isArray(candidate.itemInstances)
@@ -727,6 +869,9 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         Array.isArray(candidate.itemTemplates)
           ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
           : initialState.itemTemplates,
+        Array.isArray(candidate.effectTemplates)
+          ? mergeById(candidate.effectTemplates, initialState.effectTemplates)
+          : initialState.effectTemplates,
       ),
     };
   }
@@ -741,14 +886,50 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     ? mergeById(candidate.itemInstances, initialState.itemInstances)
     : initialState.itemInstances;
   const characters = candidate.characters ?? initialState.characters;
+  const selectedCharacterId = selectedCharacterExists
+    ? candidate.selectedCharacterId ?? initialState.selectedCharacterId
+    : candidate.characters?.[0]?.id ?? initialState.selectedCharacterId;
+  const campaign = {
+    ...(candidate.campaign ?? initialState.campaign),
+    characters,
+  };
+  const abilityTemplates = Array.isArray(candidate.abilityTemplates)
+    ? mergeAbilityTemplates(candidate.abilityTemplates, initialState.abilityTemplates)
+    : initialState.abilityTemplates;
+  const abilityInstances = Array.isArray(candidate.abilityInstances)
+    ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
+    : initialState.abilityInstances;
+  const effectTemplates = Array.isArray(candidate.effectTemplates)
+    ? mergeById(candidate.effectTemplates, initialState.effectTemplates)
+    : initialState.effectTemplates;
+  const enemyTemplates = Array.isArray(candidate.enemyTemplates)
+    ? mergeById(candidate.enemyTemplates, initialState.enemyTemplates)
+    : initialState.enemyTemplates;
+  const narrativeScene = normalizeNarrativeScene(candidate.narrativeScene, campaign);
+  const normalizedCampaignStartSnapshot = normalizeCampaignStartSnapshot(candidate.campaignStartSnapshot);
+  const campaignStartSnapshot = normalizedCampaignStartSnapshot
+    ? cloneCampaignStartSnapshot(normalizedCampaignStartSnapshot)
+    : createCampaignStartSnapshot({
+        campaign,
+        characters,
+        selectedCharacterId,
+        openingScene: campaign.world.openingScene
+          ?? candidate.messages?.find((message) => message.sender === "gm")?.content
+          ?? `Début de ${campaign.name}.`,
+        itemTemplates,
+        itemInstances,
+        abilityTemplates,
+        abilityInstances,
+        effectTemplates,
+        enemyTemplates,
+        narrativeScene,
+      });
 
   return {
     ...initialState,
-    campaign: candidate.campaign ?? initialState.campaign,
+    campaign,
     characters,
-    selectedCharacterId: selectedCharacterExists
-      ? candidate.selectedCharacterId ?? initialState.selectedCharacterId
-      : candidate.characters?.[0]?.id ?? initialState.selectedCharacterId,
+    selectedCharacterId,
     messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
     narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
     pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
@@ -763,16 +944,55 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     uiSettings: normalizeUiSettings(candidate.uiSettings, initialState.uiSettings),
     itemTemplates,
     itemInstances,
-    abilityTemplates: Array.isArray(candidate.abilityTemplates)
-      ? mergeAbilityTemplates(candidate.abilityTemplates, initialState.abilityTemplates)
-      : initialState.abilityTemplates,
-    abilityInstances: Array.isArray(candidate.abilityInstances)
-      ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
-      : initialState.abilityInstances,
+    abilityTemplates,
+    abilityInstances,
+    effectTemplates,
+    enemyTemplates,
+    disabledContentTemplateIds: normalizeDisabledContentTemplateIds(candidate.disabledContentTemplateIds),
+    contentAuditLog: normalizeContentAuditLog(candidate.contentAuditLog),
     combat: normalizeCombatScene(candidate.combat, initialState.combat),
     aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
-    characterDerivedScores: createCharacterDerivedScores(characters, itemInstances, itemTemplates),
+    campaignStartSnapshot,
+    narrativeScene,
+    characterDerivedScores: createCharacterDerivedScores(
+      characters,
+      itemInstances,
+      itemTemplates,
+      effectTemplates,
+    ),
   };
+}
+
+function normalizeDisabledContentTemplateIds(value: unknown): DisabledContentTemplateIds {
+  const fallback = createEmptyDisabledContentTemplateIds();
+  if (!value || typeof value !== "object") return fallback;
+  const candidate = value as Partial<Record<ContentTemplateKind, unknown>>;
+  const normalizeIds = (ids: unknown) => Array.isArray(ids)
+    ? [...new Set(ids.filter((id): id is string => typeof id === "string" && Boolean(id.trim())))]
+    : [];
+  return {
+    effect: normalizeIds(candidate.effect),
+    ability: normalizeIds(candidate.ability),
+    item: normalizeIds(candidate.item),
+    enemy: normalizeIds(candidate.enemy),
+  };
+}
+
+function normalizeContentAuditLog(value: unknown): ContentAuditEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is ContentAuditEntry => {
+    if (!entry || typeof entry !== "object") return false;
+    const candidate = entry as Partial<ContentAuditEntry>;
+    return typeof candidate.id === "string" &&
+      typeof candidate.timestamp === "number" &&
+      typeof candidate.templateId === "string" &&
+      typeof candidate.templateName === "string" &&
+      (candidate.kind === "effect" || candidate.kind === "ability" || candidate.kind === "item" || candidate.kind === "enemy") &&
+      (candidate.source === "ai" || candidate.source === "admin" || candidate.source === "system") &&
+      (candidate.action === "create" || candidate.action === "replace" || candidate.action === "duplicate" ||
+        candidate.action === "activate" || candidate.action === "deactivate" || candidate.action === "delete" ||
+        candidate.action === "restore");
+  }).slice(0, 100);
 }
 
 function normalizeAiApiTraces(value: unknown): AiApiTrace[] {
@@ -948,6 +1168,77 @@ function mergeById<T extends { id: string }>(currentItems: T[], defaultItems: T[
   const missingDefaults = defaultItems.filter((item) => !currentIds.has(item.id));
 
   return [...currentItems, ...missingDefaults];
+}
+
+function upsertCatalogEntry<T extends { id: string }>(
+  entries: T[],
+  entry: T,
+  mode: "create" | "replace" = "create",
+): T[] | null {
+  const index = entries.findIndex((candidate) => candidate.id === entry.id);
+
+  if (index >= 0 && mode === "create") return null;
+  if (index < 0) return [...entries, entry];
+
+  return entries.map((candidate, candidateIndex) =>
+    candidateIndex === index ? entry : candidate);
+}
+
+function getContentTemplateFromState(
+  state: Pick<GameDataState, "effectTemplates" | "abilityTemplates" | "itemTemplates" | "enemyTemplates">,
+  kind: ContentTemplateKind,
+  templateId: string,
+): ContentTemplate | undefined {
+  if (kind === "effect") return state.effectTemplates.find((template) => template.id === templateId);
+  if (kind === "ability") return state.abilityTemplates.find((template) => template.id === templateId);
+  if (kind === "item") return state.itemTemplates.find((template) => template.id === templateId);
+  return state.enemyTemplates.find((template) => template.id === templateId);
+}
+
+function createContentAuditEntry(
+  kind: ContentTemplateKind,
+  action: ContentAuditEntry["action"],
+  template: ContentTemplate,
+  options: {
+    source?: ContentAuditEntry["source"];
+    before?: ContentTemplate;
+    after?: ContentTemplate;
+    note?: string;
+  } = {},
+): ContentAuditEntry {
+  return {
+    id: `content-audit-${crypto.randomUUID()}`,
+    timestamp: Date.now(),
+    source: options.source ?? "system",
+    action,
+    kind,
+    templateId: template.id,
+    templateName: template.name,
+    ...(options.before ? { before: cloneContentTemplate(options.before) } : {}),
+    ...(options.after ? { after: cloneContentTemplate(options.after) } : {}),
+    ...(options.note ? { note: options.note } : {}),
+  };
+}
+
+function appendContentAuditEntry(entries: ContentAuditEntry[], entry: ContentAuditEntry): ContentAuditEntry[] {
+  return [entry, ...entries].slice(0, 100);
+}
+
+function createContentDependencyContext(state: GameDataState) {
+  return {
+    effectTemplates: state.effectTemplates,
+    abilityTemplates: state.abilityTemplates,
+    itemTemplates: state.itemTemplates,
+    enemyTemplates: state.enemyTemplates,
+    itemInstances: state.itemInstances,
+    abilityInstances: state.abilityInstances,
+    combat: state.combat,
+    worldEntities: [
+      ...state.campaign.world.entities.npcs,
+      ...state.campaign.world.entities.locations,
+      ...state.campaign.world.entities.items,
+    ],
+  };
 }
 
 function mergeCombatants(currentCombatants: Combatant[], defaultCombatants: Combatant[]): Combatant[] {
@@ -1342,6 +1633,36 @@ function updateItem(
   return itemInstances.map((item) => (item.id === itemId ? updater(item) : item));
 }
 
+function modifyItemInstanceField(
+  item: ItemInstance,
+  path: string,
+  value: string | number | boolean,
+): ItemInstance | null {
+  const normalizedPath = path.trim();
+
+  if (normalizedPath === "quantity") {
+    return typeof value === "number" && Number.isFinite(value) && value >= 1
+      ? { ...item, quantity: Math.round(value) }
+      : null;
+  }
+
+  if (normalizedPath === "name" || normalizedPath === "description" || normalizedPath.startsWith("base.")) {
+    return {
+      ...item,
+      overrides: { ...item.overrides, [normalizedPath]: value },
+    };
+  }
+
+  const [root, ...segments] = normalizedPath.split(".");
+  const attribute = segments.join(".");
+  if (!attribute || (root !== "overrides" && root !== "current" && root !== "data")) return null;
+
+  return {
+    ...item,
+    [root]: { ...item[root], [attribute]: value },
+  };
+}
+
 function updateAbility(
   abilityInstances: AbilityInstance[],
   abilityId: string,
@@ -1385,10 +1706,11 @@ function createValueExpressionContext(
   character: Character,
   itemInstances: ItemInstance[] = [],
   itemTemplates: ItemTemplate[] = [],
+  effectTemplates: EffectTemplate[] = [],
 ): ValueExpressionContext {
   const stats = { ...character.stats };
 
-  getEquippedEffects(itemInstances, itemTemplates, character.id).forEach((effect) => {
+  getEquippedEffects(itemInstances, itemTemplates, character.id, effectTemplates).forEach((effect) => {
     if (effect.effectId !== "modifyStat") {
       return;
     }
@@ -1540,8 +1862,14 @@ function createCharacterDerivedScore(
   character: Character,
   itemInstances: ItemInstance[],
   itemTemplates: ItemTemplate[],
+  effectTemplates: EffectTemplate[] = [],
 ): CharacterDerivedScores {
-  const context = createValueExpressionContext(character, itemInstances, itemTemplates);
+  const context = createValueExpressionContext(
+    character,
+    itemInstances,
+    itemTemplates,
+    effectTemplates,
+  );
   const proficiencyBonus = getProficiencyBonus(context.level);
 
   return {
@@ -1564,23 +1892,25 @@ function createCharacterDerivedScores(
   characters: Character[],
   itemInstances: ItemInstance[],
   itemTemplates: ItemTemplate[],
+  effectTemplates: EffectTemplate[] = [],
 ): Record<string, CharacterDerivedScores> {
   return Object.fromEntries(
     characters.map((character) => [
       character.id,
-      createCharacterDerivedScore(character, itemInstances, itemTemplates),
+      createCharacterDerivedScore(character, itemInstances, itemTemplates, effectTemplates),
     ]),
   );
 }
 
 function withCharacterDerivedScores(
-  state: Pick<GameState, "characters" | "itemInstances" | "itemTemplates">,
+  state: Pick<GameState, "characters" | "itemInstances" | "itemTemplates" | "effectTemplates">,
 ): { characterDerivedScores: Record<string, CharacterDerivedScores> } {
   return {
     characterDerivedScores: createCharacterDerivedScores(
       state.characters,
       state.itemInstances,
       state.itemTemplates,
+      state.effectTemplates,
     ),
   };
 }
@@ -1598,12 +1928,18 @@ function getWeaponAttackModifier(
   itemInstances: ItemInstance[],
   itemTemplates: ItemTemplate[],
   attackKind: WeaponAttackKind,
+  effectTemplates: EffectTemplate[] = [],
 ): number {
   if (!character) {
     return 0;
   }
 
-  const context = createValueExpressionContext(character, itemInstances, itemTemplates);
+  const context = createValueExpressionContext(
+    character,
+    itemInstances,
+    itemTemplates,
+    effectTemplates,
+  );
   const proficiency = getProficiencyBonus(context.level);
 
   if (attackKind === "ranged") {
@@ -1728,9 +2064,14 @@ function createEntityCombatant(
   entity: Entity,
   side: Combatant["side"],
   index: number,
+  enemyTemplate?: EnemyTemplate,
 ): Combatant {
-  const maxHp = side === "enemies" ? 8 : 6;
-  const speed = 9;
+  const rolledHp = enemyTemplate
+    ? rollNumericValue(enemyTemplate.hp, Math.max(1, enemyTemplate.level * 6))
+    : side === "enemies" ? 8 : 6;
+  const maxHp = Math.max(1, Math.round(rolledHp));
+  const speed = enemyTemplate?.speed ?? 9;
+  const primaryAttack = enemyTemplate?.attacks[0];
 
   return {
     id: `combatant-entity-${entity.id}`,
@@ -1740,8 +2081,8 @@ function createEntityCombatant(
     side,
     hp: maxHp,
     maxHp,
-    defense: side === "enemies" ? 12 : 10,
-    initiative: side === "enemies" ? 1 : 0,
+    defense: enemyTemplate?.defense ?? (side === "enemies" ? 12 : 10),
+    initiative: enemyTemplate?.initiative ?? (side === "enemies" ? 1 : 0),
     speed,
     position: {
       x: side === "enemies" ? 23 : 15,
@@ -1749,10 +2090,41 @@ function createEntityCombatant(
     },
     conditions: [],
     resources: getDefaultCombatResources(speed),
-    reach: 1.5,
-    attackRange: side === "enemies" ? 12 : 3,
-    attackDamage: side === "enemies" ? 2 : 1,
+    reach: enemyTemplate?.reach ?? 1.5,
+    attackRange: primaryAttack?.range ?? (side === "enemies" ? 12 : 3),
+    attackDamage: primaryAttack ? estimateFormulaValue(primaryAttack.damage, 2) : side === "enemies" ? 2 : 1,
+    ...(enemyTemplate ? {
+      enemyTemplateId: enemyTemplate.id,
+      attacks: enemyTemplate.attacks,
+      abilityTemplateIds: enemyTemplate.abilityTemplateIds,
+      behavior: enemyTemplate.behavior,
+      resistances: enemyTemplate.resistances,
+      vulnerabilities: enemyTemplate.vulnerabilities,
+      immunities: enemyTemplate.immunities,
+    } : {}),
   };
+}
+
+function rollNumericValue(value: number | string, fallback: number): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+
+  try {
+    return rollDiceFormula(value, { visibility: "hidden" }).result;
+  } catch {
+    return fallback;
+  }
+}
+
+function estimateFormulaValue(value: number | string, fallback: number): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  const parts = value.match(/(\d*)d(\d+)|[+-]?\s*\d+/gi);
+  if (!parts) return fallback;
+  const estimate = parts.reduce((total, part) => {
+    const dice = part.match(/(\d*)d(\d+)/i);
+    if (dice) return total + Number(dice[1] || 1) * (Number(dice[2]) + 1) / 2;
+    return total + Number(part.replace(/\s/g, ""));
+  }, 0);
+  return Number.isFinite(estimate) ? Math.max(1, Math.round(estimate)) : fallback;
 }
 
 function createHazardCombatant(options: {
@@ -2994,11 +3366,24 @@ function applyEnemyTurn(combat: CombatScene, enemyId: string): CombatScene {
     .sort((a, b) => getDistance(enemy.position, a.position) - getDistance(enemy.position, b.position));
   const target = visibleTargets[0] ?? targets[0]!;
   const distance = getDistance(enemy.position, target.position);
+  const availableAttack = enemy.attacks
+    ?.filter((attack) => attack.cost === "action" && attack.range >= distance)
+    .sort((a, b) => a.range - b.range)[0];
+  const attackRange = availableAttack?.range ?? enemy.attackRange;
 
-  if (visibleTargets.length > 0 && distance <= enemy.attackRange && enemy.resources.action > 0) {
-    const hit = Math.random() > 0.35;
+  if (visibleTargets.length > 0 && distance <= attackRange && enemy.resources.action > 0) {
+    const attackRoll = rollNumericValue("1d20", 10) + (availableAttack?.attackBonus ?? 2);
+    const hit = attackRoll >= target.defense;
+    const rolledDamage = availableAttack
+      ? Math.max(1, Math.round(rollNumericValue(availableAttack.damage, enemy.attackDamage)))
+      : enemy.attackDamage;
+    const damage = applyCombatantDamageAffinity(
+      target,
+      rolledDamage,
+      availableAttack?.damageType ?? "force",
+    );
     const damagedCombat = hit
-      ? updateCombatantHp(combat, target.id, (hp) => hp - enemy.attackDamage)
+      ? updateCombatantHp(combat, target.id, (hp) => hp - damage)
       : combat;
 
     return {
@@ -3007,8 +3392,8 @@ function applyEnemyTurn(combat: CombatScene, enemyId: string): CombatScene {
         createCombatLog(
           hit ? "damage" : "action",
           hit
-            ? `${enemy.name} attaque ${target.name} et inflige ${enemy.attackDamage} dégâts.`
-            : `${enemy.name} attaque ${target.name}, mais rate.`,
+            ? `${enemy.name} utilise ${availableAttack?.name ?? "son attaque"} contre ${target.name} et inflige ${damage} dégâts.`
+            : `${enemy.name} utilise ${availableAttack?.name ?? "son attaque"} contre ${target.name}, mais rate (${attackRoll} contre DEF ${target.defense}).`,
         ),
         ...combat.log,
       ].slice(0, 30),
@@ -3047,6 +3432,17 @@ function applyEnemyTurn(combat: CombatScene, enemyId: string): CombatScene {
   };
 }
 
+function applyCombatantDamageAffinity(
+  target: Combatant,
+  amount: number,
+  damageType: string,
+): number {
+  if (target.immunities?.includes(damageType)) return 0;
+  if (target.vulnerabilities?.includes(damageType)) return Math.max(1, amount * 2);
+  if (target.resistances?.includes(damageType)) return Math.max(1, Math.floor(amount / 2));
+  return Math.max(0, amount);
+}
+
 function getScaledEffectValue(
   effect: ItemInstance["effects"][number],
   context: ValueExpressionContext,
@@ -3058,10 +3454,17 @@ function getScaledEffectValue(
   return value + Math.max(0, level - 1) * perLevel;
 }
 
-function getCombinedItemEffects(item: ItemInstance, itemTemplates: ItemTemplate[]): ItemInstance["effects"] {
+function getCombinedItemEffects(
+  item: ItemInstance,
+  itemTemplates: ItemTemplate[],
+  effectTemplates: EffectTemplate[] = [],
+): ItemInstance["effects"] {
   const template = itemTemplates.find((candidate) => candidate.id === item.templateId);
 
-  return [...(template?.effects ?? []), ...item.effects];
+  return resolveEffectReferences(
+    [...(template?.effects ?? []), ...item.effects],
+    effectTemplates,
+  );
 }
 
 function getTemplateTypes(template: ItemTemplate): string[] {
@@ -3200,14 +3603,19 @@ function getEquippedEffects(
   itemInstances: ItemInstance[],
   itemTemplates: ItemTemplate[],
   characterId: string,
+  effectTemplates: EffectTemplate[] = [],
 ): ItemInstance["effects"] {
   return itemInstances
     .filter((item) => item.location.parent === characterId && item.location.type === "equipped")
-    .flatMap((item) => getCombinedItemEffects(item, itemTemplates));
+    .flatMap((item) => getCombinedItemEffects(item, itemTemplates, effectTemplates));
 }
 
-function getGrantedAbilityTemplateIds(item: ItemInstance, itemTemplates: ItemTemplate[]): string[] {
-  return getCombinedItemEffects(item, itemTemplates)
+function getGrantedAbilityTemplateIds(
+  item: ItemInstance,
+  itemTemplates: ItemTemplate[],
+  effectTemplates: EffectTemplate[] = [],
+): string[] {
+  return getCombinedItemEffects(item, itemTemplates, effectTemplates)
     .filter((effect) => effect.effectId === "grantAbility")
     .map((effect) => String(effect.variables?.abilityTemplateId ?? ""))
     .filter(Boolean);
@@ -3222,6 +3630,7 @@ function addGrantedAbilitiesForItem(
   abilityTemplates: AbilityTemplate[],
   itemTemplates: ItemTemplate[],
   item: ItemInstance,
+  effectTemplates: EffectTemplate[] = [],
 ): AbilityInstance[] {
   const ownerId = item.location.parent;
 
@@ -3229,7 +3638,7 @@ function addGrantedAbilitiesForItem(
     return abilityInstances;
   }
 
-  return getGrantedAbilityTemplateIds(item, itemTemplates).reduce((instances, abilityTemplateId) => {
+  return getGrantedAbilityTemplateIds(item, itemTemplates, effectTemplates).reduce((instances, abilityTemplateId) => {
     const id = createGrantedAbilityInstanceId(item.id, abilityTemplateId);
 
     if (
@@ -3253,6 +3662,36 @@ function removeGrantedAbilitiesForItem(
   return abilityInstances.filter((ability) => ability.grantedByItemId !== itemId);
 }
 
+function reconcileGrantedAbilities(
+  abilityInstances: AbilityInstance[],
+  abilityTemplates: AbilityTemplate[],
+  itemTemplates: ItemTemplate[],
+  itemInstances: ItemInstance[],
+  effectTemplates: EffectTemplate[],
+): AbilityInstance[] {
+  const equippedItems = itemInstances.filter(
+    (item) => item.location.type === "equipped" && Boolean(item.location.parent),
+  );
+  const equippedIds = new Set(equippedItems.map((item) => item.id));
+  const expectedKeys = new Set(equippedItems.flatMap((item) =>
+    getGrantedAbilityTemplateIds(item, itemTemplates, effectTemplates)
+      .map((templateId) => `${item.id}:${templateId}`)));
+  const retained = abilityInstances.filter((ability) =>
+    !ability.grantedByItemId ||
+    (equippedIds.has(ability.grantedByItemId) && expectedKeys.has(`${ability.grantedByItemId}:${ability.templateId}`)));
+
+  return equippedItems.reduce(
+    (instances, item) => addGrantedAbilitiesForItem(
+      instances,
+      abilityTemplates,
+      itemTemplates,
+      item,
+      effectTemplates,
+    ),
+    retained,
+  );
+}
+
 function isGrantedAbilityActive(ability: AbilityInstance, itemInstances: ItemInstance[]): boolean {
   if (!ability.grantedByItemId) {
     return true;
@@ -3273,14 +3712,17 @@ function applyDamageReductions(
   itemInstances: ItemInstance[],
   itemTemplates: ItemTemplate[],
   characterId: string,
+  effectTemplates: EffectTemplate[] = [],
 ): number {
   if (amount <= 0) {
     return 0;
   }
 
-  const effects = getEquippedEffects(itemInstances, itemTemplates, characterId);
+  const effects = getEquippedEffects(itemInstances, itemTemplates, characterId, effectTemplates);
   const character = characters.find((candidate) => candidate.id === characterId);
-  const context = character ? createValueExpressionContext(character, itemInstances, itemTemplates) : null;
+  const context = character
+    ? createValueExpressionContext(character, itemInstances, itemTemplates, effectTemplates)
+    : null;
   const reduction = effects.reduce((total, effect) => {
     if (effect.effectId !== "reduceDamage") {
       return total;
@@ -3318,6 +3760,7 @@ function applyDamageToCharacters(
   damageType: string,
   itemInstances: ItemInstance[],
   itemTemplates: ItemTemplate[],
+  effectTemplates: EffectTemplate[] = [],
 ): Character[] {
   const finalDamage = applyDamageReductions(
     characters,
@@ -3326,6 +3769,7 @@ function applyDamageToCharacters(
     itemInstances,
     itemTemplates,
     characterId,
+    effectTemplates,
   );
 
   return updateCharacter(characters, characterId, (character) => ({
@@ -3341,6 +3785,72 @@ function getRandomDamageType(effect: ItemInstance["effects"][number]): string {
     .filter(Boolean);
 
   return damageTypes[Math.floor(Math.random() * damageTypes.length)] ?? "force";
+}
+
+function toCombatMapElementKind(value: string): CombatMapElementKind {
+  const kinds: CombatMapElementKind[] = [
+    "hazard",
+    "terrain",
+    "water",
+    "lava",
+    "cover",
+    "light",
+    "darkness",
+    "trigger",
+    "objective",
+    "resource",
+  ];
+  return kinds.includes(value as CombatMapElementKind) ? value as CombatMapElementKind : "hazard";
+}
+
+function createCircularZoneCells(
+  center: CombatPosition,
+  radius: number,
+  cellSize: number,
+  combat: CombatScene,
+): CombatPosition[] {
+  const cells: CombatPosition[] = [];
+  const minX = Math.floor((center.x - radius) / cellSize) * cellSize;
+  const maxX = Math.ceil((center.x + radius) / cellSize) * cellSize;
+  const minY = Math.floor((center.y - radius) / cellSize) * cellSize;
+  const maxY = Math.ceil((center.y + radius) / cellSize) * cellSize;
+
+  for (let x = minX; x <= maxX; x += cellSize) {
+    for (let y = minY; y <= maxY; y += cellSize) {
+      const cellCenter = { x: x + cellSize / 2, y: y + cellSize / 2 };
+      if (
+        x >= 0 &&
+        y >= 0 &&
+        x < combat.map.width &&
+        y < combat.map.height &&
+        getDistance(center, cellCenter) <= radius
+      ) {
+        cells.push({ x, y });
+      }
+    }
+  }
+  return cells;
+}
+
+function createZoneRuntimeEffects(effect: ItemInstance["effects"][number]): CombatMapElementEffect[] {
+  const runtimeEffects: CombatMapElementEffect[] = [];
+  const damage = effect.variables?.damage;
+  const condition = getEffectString(effect.variables?.condition);
+  const triggerValue = getEffectString(effect.variables?.trigger, "startTurn");
+  const trigger = triggerValue === "enter" || triggerValue === "interact" || triggerValue === "passive"
+    ? triggerValue
+    : "startTurn";
+
+  if (typeof damage === "number" || typeof damage === "string") {
+    runtimeEffects.push({
+      trigger,
+      type: "damage",
+      value: damage,
+      damageType: getEffectString(effect.variables?.damageType, "force"),
+    });
+  }
+  if (condition) runtimeEffects.push({ trigger, type: "condition", condition });
+  return runtimeEffects;
 }
 
 function createNewItemInstance(
@@ -3384,7 +3894,16 @@ function addItemInstance(
 }
 
 function applyUsableEffects(
-  state: Pick<GameDataState, "characters" | "itemInstances" | "itemTemplates" | "combat">,
+  state: Pick<
+    GameDataState,
+    | "characters"
+    | "itemInstances"
+    | "itemTemplates"
+    | "effectTemplates"
+    | "enemyTemplates"
+    | "disabledContentTemplateIds"
+    | "combat"
+  >,
   actorCharacterId: string,
   target: ActionTarget | undefined,
   effects: ItemInstance["effects"],
@@ -3397,8 +3916,9 @@ function applyUsableEffects(
   let combat = state.combat;
   const diceRolls: DiceRoll[] = [];
   const effectTargets = resolvedTargets && resolvedTargets.length > 0 ? resolvedTargets : [target];
+  const executableEffects = resolveEffectReferences(effects, state.effectTemplates);
 
-  effects.forEach((effect) => {
+  executableEffects.forEach((effect) => {
     const actorCharacter = characters.find((character) => character.id === actorCharacterId);
     const firstTarget = effectTargets[0];
     const firstCombatant = getTargetCombatantFromActionTarget(combat, firstTarget, actorCharacterId);
@@ -3413,7 +3933,15 @@ function applyUsableEffects(
     const value = diceRoll
       ? diceRoll.result
       : contextCharacter
-        ? getScaledEffectValue(effect, createValueExpressionContext(contextCharacter, itemInstances, state.itemTemplates))
+        ? getScaledEffectValue(
+            effect,
+            createValueExpressionContext(
+              contextCharacter,
+              itemInstances,
+              state.itemTemplates,
+              state.effectTemplates,
+            ),
+          )
         : 0;
 
     if (diceRoll) {
@@ -3469,6 +3997,7 @@ function applyUsableEffects(
             getEffectString(effect.variables?.damageType, "force"),
             itemInstances,
             state.itemTemplates,
+            state.effectTemplates,
           );
           combat = syncCharacterCombatant(
             combat,
@@ -3509,6 +4038,7 @@ function applyUsableEffects(
             getRandomDamageType(effect),
             itemInstances,
             state.itemTemplates,
+            state.effectTemplates,
           );
           combat = syncCharacterCombatant(
             combat,
@@ -3547,7 +4077,11 @@ function applyUsableEffects(
 
       const addTemplateId = getEffectString(effect.variables?.addTemplateId);
 
-      if (addTemplateId) {
+      if (
+        addTemplateId &&
+        state.itemTemplates.some((template) => template.id === addTemplateId) &&
+        isContentTemplateActive(state.disabledContentTemplateIds, "item", addTemplateId)
+      ) {
         itemInstances = addItemInstance(
           itemInstances,
           actorCharacterId,
@@ -3624,13 +4158,167 @@ function applyUsableEffects(
         ? moveCombatantTo(combat, actorCombatant?.id, explicitPosition)
         : moveCombatantBy(combat, actorCombatant?.id, distance);
     }
+
+    if (effect.effectId === "move") {
+      const distance = Math.max(0, getEffectNumber(effect.variables?.distance));
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+        const explicitPosition = target?.kind === "position" ? target.position : undefined;
+        combat = explicitPosition
+          ? moveCombatantTo(combat, targetCombatant?.id, explicitPosition)
+          : moveCombatantBy(combat, targetCombatant?.id, distance);
+      });
+    }
+
+    if (effect.effectId === "modifyResource") {
+      const resource = getEffectString(effect.variables?.resource);
+      const operation = getEffectString(effect.variables?.op, "add");
+      const amount = getEffectNumber(effect.variables?.value);
+      if (resource !== "action" && resource !== "bonus" && resource !== "reaction" && resource !== "movement") {
+        return;
+      }
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+        if (!targetCombatant) return;
+        combat = {
+          ...combat,
+          combatants: combat.combatants.map((combatant) => {
+            if (combatant.id !== targetCombatant.id) return combatant;
+            const currentValue = combatant.resources[resource];
+            const nextValue = operation === "set"
+              ? amount
+              : operation === "subtract"
+                ? currentValue - amount
+                : currentValue + amount;
+            return {
+              ...combatant,
+              resources: { ...combatant.resources, [resource]: Math.max(0, nextValue) },
+            };
+          }),
+        };
+      });
+    }
+
+    if (effect.effectId === "createZone") {
+      const actorCombatant = getTargetCombatantFromActionTarget(
+        combat,
+        { kind: "self", id: actorCharacterId, label: "Soi-même" },
+        actorCharacterId,
+      );
+      const position = target?.kind === "position" ? target.position : actorCombatant?.position;
+      if (!position) return;
+      const zoneKind = toCombatMapElementKind(getEffectString(effect.variables?.zoneKind, "hazard"));
+      const radius = Math.max(combat.map.cellSize, getEffectNumber(effect.variables?.radius) || combat.map.cellSize);
+      const zoneId = `zone-${crypto.randomUUID()}`;
+      combat = {
+        ...combat,
+        map: {
+          ...combat.map,
+          elements: [...combat.map.elements, {
+            id: zoneId,
+            name: effect.nom ?? getEffectString(effect.variables?.name, "Zone temporaire"),
+            kind: zoneKind,
+            x: position.x - radius,
+            y: position.y - radius,
+            width: radius * 2,
+            height: radius * 2,
+            cells: createCircularZoneCells(position, radius, combat.map.cellSize, combat),
+            description: getEffectString(effect.variables?.description, "Zone créée par un effet."),
+            rule: getEffectString(effect.variables?.rule, "Effet temporaire."),
+            color: getEffectString(effect.variables?.color, "#9C7A2E"),
+            effects: createZoneRuntimeEffects(effect),
+            state: { active: true },
+          }],
+        },
+        log: [createCombatLog("action", `${effect.nom ?? "Une zone"} apparaît sur le terrain.`), ...combat.log].slice(0, 30),
+      };
+    }
+
+    if (effect.effectId === "dispel") {
+      const condition = getEffectString(effect.variables?.condition);
+      const zoneKind = getEffectString(effect.variables?.zoneKind);
+      effectTargets.forEach((effectTarget) => {
+        const targetCombatant = getTargetCombatantFromActionTarget(combat, effectTarget, actorCharacterId);
+        if (!targetCombatant || !condition) return;
+        combat = {
+          ...combat,
+          combatants: combat.combatants.map((combatant) =>
+            combatant.id === targetCombatant.id
+              ? removeCombatantConditions(combatant, [condition])
+              : combatant),
+        };
+      });
+      if (zoneKind) {
+        combat = {
+          ...combat,
+          map: {
+            ...combat.map,
+            elements: combat.map.elements.filter((element) =>
+              element.id !== zoneKind && element.kind !== zoneKind && element.name !== zoneKind),
+          },
+        };
+      }
+    }
+
+    if (effect.effectId === "summon") {
+      const templateId = getEffectString(effect.variables?.enemyTemplateId);
+      const template = state.enemyTemplates.find((candidate) => candidate.id === templateId);
+      if (!template || !isContentTemplateActive(state.disabledContentTemplateIds, "enemy", templateId)) return;
+      const count = clamp(Math.round(getEffectNumber(effect.variables?.count) || 1), 1, 8);
+      const sideValue = getEffectString(effect.variables?.side, "allies");
+      const side: Combatant["side"] =
+        sideValue === "players" || sideValue === "enemies" || sideValue === "neutral"
+          ? sideValue
+          : "allies";
+      const actorCombatant = getTargetCombatantFromActionTarget(
+        combat,
+        { kind: "self", id: actorCharacterId, label: "Soi-même" },
+        actorCharacterId,
+      );
+      const origin = target?.kind === "position" && target.position
+        ? target.position
+        : actorCombatant?.position ?? { x: 0, y: 0 };
+      const summons = Array.from({ length: count }, (_, index) => {
+        const sourceId = `summon-${crypto.randomUUID()}`;
+        const entity: Entity = {
+          id: sourceId,
+          name: count > 1 ? `${template.name} ${index + 1}` : template.name,
+          type: "npc",
+          description: template.description,
+          details: { enemyTemplateId: template.id, tags: template.tags },
+        };
+        return {
+          ...createEntityCombatant(entity, side, combat.combatants.length + index, template),
+          id: `combatant-${sourceId}`,
+          sourceType: "summon" as const,
+          position: clampCombatPosition({
+            x: origin.x + index * combat.map.cellSize,
+            y: origin.y,
+          }, combat),
+        };
+      });
+      combat = {
+        ...combat,
+        combatants: [...combat.combatants, ...summons],
+        log: [createCombatLog("action", `${summons.length} ${template.name} rejoint la scène.`), ...combat.log].slice(0, 30),
+      };
+    }
   });
 
   return { characters, itemInstances, combat, diceRolls };
 }
 
 function applyConsumableEffects(
-  state: Pick<GameDataState, "characters" | "itemInstances" | "itemTemplates" | "combat">,
+  state: Pick<
+    GameDataState,
+    | "characters"
+    | "itemInstances"
+    | "itemTemplates"
+    | "effectTemplates"
+    | "enemyTemplates"
+    | "disabledContentTemplateIds"
+    | "combat"
+  >,
   characterId: string,
   item: ItemInstance,
   template: ItemTemplate,
@@ -3766,6 +4454,9 @@ function executePlayerActionIntents(
           characters,
           itemInstances,
           itemTemplates: state.itemTemplates,
+          effectTemplates: state.effectTemplates,
+          enemyTemplates: state.enemyTemplates,
+          disabledContentTemplateIds: state.disabledContentTemplateIds,
           combat,
         },
         selectedCharacterId,
@@ -3860,7 +4551,13 @@ function executePlayerActionIntents(
       const attackingCharacter = characters.find((character) => character.id === selectedCharacterId);
       const attackModifier =
         getCharacterAttackScore(state.characterDerivedScores, attackingCharacter?.id, weapon.attackKind) ??
-        getWeaponAttackModifier(attackingCharacter, itemInstances, state.itemTemplates, weapon.attackKind);
+        getWeaponAttackModifier(
+          attackingCharacter,
+          itemInstances,
+          state.itemTemplates,
+          weapon.attackKind,
+          state.effectTemplates,
+        );
       const attackRoll = rollDiceFormula(`1d20 ${formatRollModifier(attackModifier)}`, {
         visibility: "public",
         reason: `${weapon.name} · attaque`,
@@ -3873,7 +4570,12 @@ function executePlayerActionIntents(
 
       if (isHit) {
         const context = attackingCharacter
-          ? createValueExpressionContext(attackingCharacter, itemInstances, state.itemTemplates)
+          ? createValueExpressionContext(
+              attackingCharacter,
+              itemInstances,
+              state.itemTemplates,
+              state.effectTemplates,
+            )
           : null;
         const damageFormula =
           formatDamageFormula([
@@ -3901,6 +4603,7 @@ function executePlayerActionIntents(
             itemInstances,
             state.itemTemplates,
             target.sourceId,
+            state.effectTemplates,
           );
           const nextHp = clamp(target.hp - finalDamage, 0, target.maxHp);
 
@@ -3911,6 +4614,7 @@ function executePlayerActionIntents(
           }));
           damagedCombat = updateCombatantHp(combat, target.id, () => nextHp);
         } else {
+          damageAmount = applyCombatantDamageAffinity(target, damageAmount, weapon.damageType);
           damagedCombat = updateCombatantHp(combat, target.id, (hp) => hp - damageAmount);
           const hazardState = applyHazardDestructionEffects({
             combat: damagedCombat,
@@ -3970,6 +4674,9 @@ function executePlayerActionIntents(
           characters,
           itemInstances,
           itemTemplates: state.itemTemplates,
+          effectTemplates: state.effectTemplates,
+          enemyTemplates: state.enemyTemplates,
+          disabledContentTemplateIds: state.disabledContentTemplateIds,
           combat,
         },
         selectedCharacterId,
@@ -4227,6 +4934,7 @@ export const useGameStore = create<GameState>()(
             damageType,
             state.itemInstances,
             state.itemTemplates,
+            state.effectTemplates,
           );
 
           return {
@@ -4316,6 +5024,7 @@ export const useGameStore = create<GameState>()(
               state.abilityTemplates,
               state.itemTemplates,
               equippedItem,
+              state.effectTemplates,
             ),
           };
         });
@@ -4323,7 +5032,9 @@ export const useGameStore = create<GameState>()(
       unequipItem: (itemId) => {
         set((state) => {
           const item = state.itemInstances.find((candidate) => candidate.id === itemId);
-          const effects = item ? getCombinedItemEffects(item, state.itemTemplates) : [];
+          const effects = item
+            ? getCombinedItemEffects(item, state.itemTemplates, state.effectTemplates)
+            : [];
 
           if (!item || !item.location.parent || preventsUnequip(effects)) {
             return state;
@@ -4348,9 +5059,10 @@ export const useGameStore = create<GameState>()(
         get().unequipItem(itemId);
       },
       giveItem: (characterId, templateId, quantity = 1) => {
-        const templateExists = get().itemTemplates.some((template) => template.id === templateId);
+        const state = get();
+        const templateExists = state.itemTemplates.some((template) => template.id === templateId);
 
-        if (!templateExists) {
+        if (!templateExists || !isContentTemplateActive(state.disabledContentTemplateIds, "item", templateId)) {
           return null;
         }
 
@@ -4409,6 +5121,23 @@ export const useGameStore = create<GameState>()(
           };
         });
       },
+      modifyItemField: (itemId, path, value) => {
+        const state = get();
+        const item = state.itemInstances.find((candidate) => candidate.id === itemId);
+        if (!item || !modifyItemInstanceField(item, path, value)) return false;
+
+        set((current) => {
+          const itemInstances = current.itemInstances.map((candidate) => {
+            if (candidate.id !== itemId) return candidate;
+            return modifyItemInstanceField(candidate, path, value) ?? candidate;
+          });
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...current, itemInstances }),
+          };
+        });
+        return true;
+      },
       spendItemQuantity: (itemId, quantity) => {
         const amount = Math.max(1, Math.round(quantity));
         const item = get().itemInstances.find((candidate) => candidate.id === itemId);
@@ -4451,6 +5180,9 @@ export const useGameStore = create<GameState>()(
               characters: state.characters,
               itemInstances: state.itemInstances,
               itemTemplates: state.itemTemplates,
+              effectTemplates: state.effectTemplates,
+              enemyTemplates: state.enemyTemplates,
+              disabledContentTemplateIds: state.disabledContentTemplateIds,
               combat: state.combat,
             },
             characterId,
@@ -4488,6 +5220,9 @@ export const useGameStore = create<GameState>()(
             characters: state.characters,
             itemInstances: state.itemInstances,
             itemTemplates: state.itemTemplates,
+            effectTemplates: state.effectTemplates,
+            enemyTemplates: state.enemyTemplates,
+            disabledContentTemplateIds: state.disabledContentTemplateIds,
             combat: state.combat,
           },
           ability.ownerId,
@@ -4525,6 +5260,390 @@ export const useGameStore = create<GameState>()(
             ),
           ),
         }));
+      },
+      registerEffectTemplate: (template, mode = "create", meta = {}) => {
+        const previous = get().effectTemplates.find((candidate) => candidate.id === template.id);
+        const effectTemplates = upsertCatalogEntry(get().effectTemplates, template, mode);
+        if (!effectTemplates) return false;
+        const auditEntry = createContentAuditEntry(
+          "effect",
+          meta.action ?? (previous ? "replace" : "create"),
+          template,
+          { source: meta.source, before: previous, after: template, note: meta.note },
+        );
+
+        set((state) => ({
+          effectTemplates,
+          contentAuditLog: appendContentAuditEntry(state.contentAuditLog, auditEntry),
+          ...withCharacterDerivedScores({ ...state, effectTemplates }),
+          abilityInstances: reconcileGrantedAbilities(
+            state.abilityInstances,
+            state.abilityTemplates,
+            state.itemTemplates,
+            state.itemInstances,
+            effectTemplates,
+          ),
+        }));
+        return true;
+      },
+      registerItemTemplate: (template, mode = "create", meta = {}) => {
+        const normalizedTemplate = normalizeItemTemplateModules(template);
+        const previous = get().itemTemplates.find((candidate) => candidate.id === normalizedTemplate.id);
+        const itemTemplates = upsertCatalogEntry(get().itemTemplates, normalizedTemplate, mode);
+        if (!itemTemplates) return false;
+        const auditEntry = createContentAuditEntry(
+          "item",
+          meta.action ?? (previous ? "replace" : "create"),
+          normalizedTemplate,
+          { source: meta.source, before: previous, after: normalizedTemplate, note: meta.note },
+        );
+
+        set((state) => ({
+          itemTemplates,
+          contentAuditLog: appendContentAuditEntry(state.contentAuditLog, auditEntry),
+          ...withCharacterDerivedScores({ ...state, itemTemplates }),
+          abilityInstances: reconcileGrantedAbilities(
+            state.abilityInstances,
+            state.abilityTemplates,
+            itemTemplates,
+            state.itemInstances,
+            state.effectTemplates,
+          ),
+        }));
+        return true;
+      },
+      registerAbilityTemplate: (template, mode = "create", meta = {}) => {
+        const previous = get().abilityTemplates.find((candidate) => candidate.id === template.id);
+        const abilityTemplates = upsertCatalogEntry(get().abilityTemplates, template, mode);
+        if (!abilityTemplates) return false;
+        const auditEntry = createContentAuditEntry(
+          "ability",
+          meta.action ?? (previous ? "replace" : "create"),
+          template,
+          { source: meta.source, before: previous, after: template, note: meta.note },
+        );
+
+        set((state) => {
+          const adjustedInstances = state.abilityInstances.map((ability) => {
+            if (ability.templateId !== template.id || !template.charges) return ability;
+            const charges = ability.current.charges ?? template.charges.initial ?? template.charges.max;
+            return {
+              ...ability,
+              current: {
+                ...ability.current,
+                charges: clamp(charges, 0, template.charges.max),
+              },
+            };
+          });
+          return {
+            abilityTemplates,
+            contentAuditLog: appendContentAuditEntry(state.contentAuditLog, auditEntry),
+            abilityInstances: reconcileGrantedAbilities(
+              adjustedInstances,
+              abilityTemplates,
+              state.itemTemplates,
+              state.itemInstances,
+              state.effectTemplates,
+            ),
+          };
+        });
+        return true;
+      },
+      registerEnemyTemplate: (template, mode = "create", meta = {}) => {
+        const previous = get().enemyTemplates.find((candidate) => candidate.id === template.id);
+        const enemyTemplates = upsertCatalogEntry(get().enemyTemplates, template, mode);
+        if (!enemyTemplates) return false;
+        const auditEntry = createContentAuditEntry(
+          "enemy",
+          meta.action ?? (previous ? "replace" : "create"),
+          template,
+          { source: meta.source, before: previous, after: template, note: meta.note },
+        );
+        set((state) => ({
+          enemyTemplates,
+          contentAuditLog: appendContentAuditEntry(state.contentAuditLog, auditEntry),
+        }));
+        return true;
+      },
+      setContentTemplateActive: (kind, templateId, active) => {
+        const state = get();
+        const template = getContentTemplateFromState(state, kind, templateId);
+        if (!template || isContentTemplateActive(state.disabledContentTemplateIds, kind, templateId) === active) {
+          return false;
+        }
+        const disabledIds = active
+          ? state.disabledContentTemplateIds[kind].filter((id) => id !== templateId)
+          : [...state.disabledContentTemplateIds[kind], templateId];
+        const auditEntry = createContentAuditEntry(kind, active ? "activate" : "deactivate", template, {
+          source: "admin",
+          before: template,
+          after: template,
+          note: active
+            ? "Template rendu disponible pour les nouvelles créations."
+            : "Template masqué aux agents et interdit aux nouvelles instances.",
+        });
+        set((current) => ({
+          disabledContentTemplateIds: {
+            ...current.disabledContentTemplateIds,
+            [kind]: disabledIds,
+          },
+          contentAuditLog: appendContentAuditEntry(current.contentAuditLog, auditEntry),
+        }));
+        return true;
+      },
+      deleteContentTemplate: (kind, templateId) => {
+        const state = get();
+        const template = getContentTemplateFromState(state, kind, templateId);
+        if (!template) return { success: false, reasons: ["Template introuvable."] };
+        if (isBuiltInContentTemplate(kind, templateId)) {
+          return { success: false, reasons: ["Un template livré avec l'application ne peut pas être supprimé."] };
+        }
+        const dependencies = getContentTemplateDependencies(
+          kind,
+          templateId,
+          createContentDependencyContext(state),
+        );
+        if (dependencies.length) {
+          return {
+            success: false,
+            reasons: dependencies.map((dependency) => `${dependency.relationship} : ${dependency.label}`),
+          };
+        }
+        const auditEntry = createContentAuditEntry(kind, "delete", template, {
+          source: "admin",
+          before: template,
+          note: "Suppression depuis l'Atelier de contenu.",
+        });
+
+        set((current) => {
+          const disabledContentTemplateIds = {
+            ...current.disabledContentTemplateIds,
+            [kind]: current.disabledContentTemplateIds[kind].filter((id) => id !== templateId),
+          };
+          const common = {
+            disabledContentTemplateIds,
+            contentAuditLog: appendContentAuditEntry(current.contentAuditLog, auditEntry),
+          };
+          if (kind === "effect") {
+            const effectTemplates = current.effectTemplates.filter((candidate) => candidate.id !== templateId);
+            return {
+              ...common,
+              effectTemplates,
+              ...withCharacterDerivedScores({ ...current, effectTemplates }),
+              abilityInstances: reconcileGrantedAbilities(
+                current.abilityInstances,
+                current.abilityTemplates,
+                current.itemTemplates,
+                current.itemInstances,
+                effectTemplates,
+              ),
+            };
+          }
+          if (kind === "item") {
+            const itemTemplates = current.itemTemplates.filter((candidate) => candidate.id !== templateId);
+            return {
+              ...common,
+              itemTemplates,
+              ...withCharacterDerivedScores({ ...current, itemTemplates }),
+              abilityInstances: reconcileGrantedAbilities(
+                current.abilityInstances,
+                current.abilityTemplates,
+                itemTemplates,
+                current.itemInstances,
+                current.effectTemplates,
+              ),
+            };
+          }
+          if (kind === "ability") {
+            const abilityTemplates = current.abilityTemplates.filter((candidate) => candidate.id !== templateId);
+            return {
+              ...common,
+              abilityTemplates,
+              abilityInstances: reconcileGrantedAbilities(
+                current.abilityInstances,
+                abilityTemplates,
+                current.itemTemplates,
+                current.itemInstances,
+                current.effectTemplates,
+              ),
+            };
+          }
+          return {
+            ...common,
+            enemyTemplates: current.enemyTemplates.filter((candidate) => candidate.id !== templateId),
+          };
+        });
+        return { success: true, reasons: [] };
+      },
+      clearContentAuditLog: () => set({ contentAuditLog: [] }),
+      createItemInstance: (input) => {
+        const state = get();
+        const template = state.itemTemplates.find((candidate) => candidate.id === input.templateId);
+        const id = input.id ?? `item-${crypto.randomUUID()}`;
+        const parentCharacter = input.location.parent
+          ? state.characters.find((character) => character.id === input.location.parent)
+          : undefined;
+
+        if (
+          !template ||
+          !isContentTemplateActive(state.disabledContentTemplateIds, "item", input.templateId) ||
+          state.itemInstances.some((item) => item.id === id) ||
+          ((input.location.type === "inventory" || input.location.type === "equipped") && !parentCharacter) ||
+          (input.location.type === "equipped" && !isItemEquipable(getTemplateTypes(template)))
+        ) {
+          return null;
+        }
+
+        const item: ItemInstance = {
+          id,
+          templateId: input.templateId,
+          quantity: Math.max(1, Math.round(input.quantity)),
+          overrides: { ...input.overrides },
+          current: { ...input.current },
+          data: {
+            ...input.data,
+            inventoryOrder: input.data.inventoryOrder ?? state.itemInstances.length,
+          },
+          effects: input.effects.map((effect) => ({
+            ...effect,
+            variables: { ...(effect.variables ?? {}) },
+          })),
+          location: { ...input.location },
+        };
+
+        set((current) => {
+          const itemInstances = [...current.itemInstances, item];
+          return {
+            itemInstances,
+            ...withCharacterDerivedScores({ ...current, itemInstances }),
+            abilityInstances: item.location.type === "equipped"
+              ? addGrantedAbilitiesForItem(
+                  current.abilityInstances,
+                  current.abilityTemplates,
+                  current.itemTemplates,
+                  item,
+                  current.effectTemplates,
+                )
+              : current.abilityInstances,
+          };
+        });
+        return item;
+      },
+      grantAbilityToCharacter: (characterId, templateId) => {
+        const state = get();
+        if (
+          !state.characters.some((character) => character.id === characterId) ||
+          !state.abilityTemplates.some((template) => template.id === templateId) ||
+          !isContentTemplateActive(state.disabledContentTemplateIds, "ability", templateId)
+        ) {
+          return null;
+        }
+
+        const existing = state.abilityInstances.find(
+          (ability) => ability.ownerId === characterId && ability.templateId === templateId && !ability.grantedByItemId,
+        );
+        if (existing) return existing;
+
+        const ability = createAbilityInstance(
+          `ability-${crypto.randomUUID()}`,
+          templateId,
+          characterId,
+          state.abilityTemplates,
+        );
+        set((current) => ({ abilityInstances: [...current.abilityInstances, ability] }));
+        return ability;
+      },
+      appendCharacterHistory: (characterId, entry) => {
+        const trimmedEntry = entry.trim();
+        if (!trimmedEntry || !get().characters.some((character) => character.id === characterId)) {
+          return false;
+        }
+        set((state) => {
+          const characters = updateCharacter(state.characters, characterId, (character) => ({
+            ...character,
+            history: [...(character.history ?? []), trimmedEntry].slice(-100),
+          }));
+          return {
+            characters,
+            campaign: { ...state.campaign, characters },
+          };
+        });
+        return true;
+      },
+      spawnEnemyFromTemplate: (templateId, input) => {
+        const state = get();
+        const template = state.enemyTemplates.find((candidate) => candidate.id === templateId);
+        const entityId = input.id ?? `npc-${crypto.randomUUID()}`;
+        const allEntities = [
+          ...state.campaign.world.entities.npcs,
+          ...state.campaign.world.entities.locations,
+          ...state.campaign.world.entities.items,
+        ];
+        if (
+          !template ||
+          !isContentTemplateActive(state.disabledContentTemplateIds, "enemy", templateId) ||
+          allEntities.some((entity) => entity.id === entityId)
+        ) return null;
+
+        const entity: Entity = {
+          id: entityId,
+          name: input.name ?? template.name,
+          type: "npc",
+          description: template.description,
+          details: {
+            role: template.category,
+            importance: "combatant",
+            tags: template.tags,
+            enemyTemplateId: template.id,
+            ...(input.parent ? { connections: [input.parent] } : {}),
+          },
+        };
+        const combatant = createEntityCombatant(
+          entity,
+          input.side,
+          state.combat.combatants.length,
+          template,
+        );
+        const positionedCombatant = {
+          ...combatant,
+          ...(input.position ? {
+            position: clampCombatPosition(input.position, state.combat),
+          } : {}),
+        };
+
+        set((current) => {
+          const campaign = {
+            ...current.campaign,
+            world: {
+              ...current.campaign.world,
+              entities: {
+                ...current.campaign.world.entities,
+                npcs: [...current.campaign.world.entities.npcs, entity],
+              },
+            },
+          };
+          return {
+            campaign,
+            narrativeScene: {
+              ...current.narrativeScene,
+              revision: current.narrativeScene.revision + 1,
+              presentEntityIds: Array.from(new Set([
+                ...current.narrativeScene.presentEntityIds,
+                entity.id,
+              ])).slice(0, 24),
+            },
+            combat: {
+              ...current.combat,
+              status: current.combat.status === "inactive" ? "setup" : current.combat.status,
+              combatants: [...current.combat.combatants, positionedCombatant],
+              log: [
+                createCombatLog("system", `${entity.name} rejoint la scène.`),
+                ...current.combat.log,
+              ].slice(0, 30),
+            },
+          };
+        });
+        return positionedCombatant.id;
       },
       rest: (characterId, type) => {
         set((state) => {
@@ -4581,7 +5700,12 @@ export const useGameStore = create<GameState>()(
                   (combatant) => combatant.sourceType === "entity" && combatant.sourceId === entity.id,
                 ),
             )
-            .map((entity, index) => createEntityCombatant(entity, "enemies", index));
+            .map((entity, index) => createEntityCombatant(
+              entity,
+              "enemies",
+              index,
+              state.enemyTemplates.find((template) => template.id === entity.details?.enemyTemplateId),
+            ));
           const combatants = [...existingCombatants, ...characterCombatants, ...npcCombatants]
             .map(resetCombatantTurnResources)
             .sort((a, b) => b.initiative - a.initiative);
@@ -4657,7 +5781,12 @@ export const useGameStore = create<GameState>()(
               ...state.combat,
               combatants: [
                 ...state.combat.combatants,
-                createEntityCombatant(entity, side, state.combat.combatants.length),
+                createEntityCombatant(
+                  entity,
+                  side,
+                  state.combat.combatants.length,
+                  state.enemyTemplates.find((template) => template.id === entity.details?.enemyTemplateId),
+                ),
               ],
             },
           };
@@ -5154,26 +6283,24 @@ export const useGameStore = create<GameState>()(
       },
       clearCharacterPortraits: () => set({ characterPortraits: {} }),
       resetGameState: () => set(createInitialState()),
-      startCampaign: (campaign, openingScene) => {
-        set((state) => {
-          const itemInstances = state.itemInstances.filter((item) => item.location.type !== "world");
-          const characters = campaign.characters;
-          return {
-            campaign: { ...campaign, characters },
-            characters,
-            selectedCharacterId: characters.some((character) => character.id === state.selectedCharacterId)
-              ? state.selectedCharacterId
-              : characters[0]?.id ?? "",
-            messages: [createMessage("gm", openingScene)],
-            narrativeMomentum: createInitialNarrativeMomentum(),
-            pendingGameDecision: null,
-            pendingActionIntents: [],
-            diceRolls: [],
-            itemInstances,
-            combat: createEmptyCombatScene(),
-            characterDerivedScores: createCharacterDerivedScores(characters, itemInstances, state.itemTemplates),
-          };
-        });
+      startCampaign: (snapshot) => set(createCampaignRuntimeState(snapshot)),
+      restartCampaign: () => {
+        set((state) => createCampaignRuntimeState(state.campaignStartSnapshot));
+      },
+      advanceNarrativeScene: (playerAction) => {
+        set((state) => ({
+          narrativeScene: advanceNarrativeScene(state.narrativeScene, playerAction),
+        }));
+      },
+      applyNarrativeScenePatch: (patch) => {
+        set((state) => ({
+          narrativeScene: applyNarrativeScenePatch(state.narrativeScene, patch, state.campaign),
+        }));
+      },
+      recordNarratedBeat: (narration) => {
+        set((state) => ({
+          narrativeScene: recordNarratedBeat(state.narrativeScene, narration),
+        }));
       },
       addGmMessage: (content) => {
         const trimmedContent = content.trim();
@@ -5359,8 +6486,14 @@ export const useGameStore = create<GameState>()(
         itemInstances: state.itemInstances,
         abilityTemplates: state.abilityTemplates,
         abilityInstances: state.abilityInstances,
+        effectTemplates: state.effectTemplates,
+        enemyTemplates: state.enemyTemplates,
+        disabledContentTemplateIds: state.disabledContentTemplateIds,
+        contentAuditLog: state.contentAuditLog,
         combat: state.combat,
         aiApiTraces: state.aiApiTraces,
+        campaignStartSnapshot: state.campaignStartSnapshot,
+        narrativeScene: state.narrativeScene,
       }),
     },
   ),
