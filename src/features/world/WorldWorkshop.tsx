@@ -3,6 +3,11 @@ import { useGameStore } from "../../store/useGameStore";
 import { initialAbilityTemplates } from "../abilities";
 import { initialItemTemplates } from "../items";
 import { initialEffectTemplates, initialEnemyTemplates } from "../content";
+import { CharacterCreationStep } from "../character/CharacterCreationStep";
+import type {
+  CharacterCreationContext,
+  CharacterCreationPackage,
+} from "../character/characterCreation";
 import {
   deleteWorldBlueprint,
   listWorldBlueprints,
@@ -31,10 +36,11 @@ export function WorldWorkshop() {
     loadWorldCreationBrief(defaultWorldCreationBrief),
   );
   const [rawResponse, setRawResponse] = useState("");
+  const [characterSetup, setCharacterSetup] = useState<CharacterCreationPackage | null>(null);
   const [library, setLibrary] = useState<SavedWorldBlueprint[]>(() => listWorldBlueprints());
   const [notice, setNotice] = useState<string | null>(null);
   const prompt = useMemo(
-    () => buildWorldCreationPrompt(brief, initialItemTemplates, initialAbilityTemplates),
+    () => buildWorldCreationPrompt(brief),
     [brief],
   );
   const parsed = useMemo(
@@ -42,6 +48,24 @@ export function WorldWorkshop() {
     [rawResponse],
   );
   const backup = loadCampaignBackup();
+  const characterContext = useMemo<CharacterCreationContext | null>(() => {
+    const blueprint = parsed?.blueprint;
+    if (!blueprint) return null;
+    return {
+      campaignName: blueprint.campaign.name,
+      campaignStyle: blueprint.campaign.style,
+      campaignLevel: blueprint.campaign.level,
+      worldName: blueprint.world.name,
+      worldPitch: blueprint.campaign.elevatorPitch,
+      playerRole: brief.playerRole,
+      partyConcept: brief.startingParty,
+      startingEquipment: brief.startingEquipment,
+      itemTemplates: initialItemTemplates,
+      abilityTemplates: initialAbilityTemplates,
+      effectTemplates: initialEffectTemplates,
+      enemyTemplates: initialEnemyTemplates,
+    };
+  }, [brief.playerRole, brief.startingEquipment, brief.startingParty, parsed?.blueprint]);
 
   useEffect(() => {
     saveWorldCreationBrief(brief);
@@ -64,7 +88,10 @@ export function WorldWorkshop() {
   }
 
   function activateBlueprint(blueprint = parsed?.blueprint) {
-    if (!blueprint) return;
+    if (!blueprint || !characterSetup) {
+      setNotice("Validez d'abord un personnage pour cette campagne.");
+      return;
+    }
     const confirmed = window.confirm(
       `Commencer « ${blueprint.campaign.name} » ? La conversation et la scène de combat actuelles seront remplacées.`,
     );
@@ -77,6 +104,7 @@ export function WorldWorkshop() {
       initialAbilityTemplates,
       initialEffectTemplates,
       initialEnemyTemplates,
+      characterSetup,
     );
     startCampaign(nextCampaign);
     setLibrary(listWorldBlueprints());
@@ -92,8 +120,9 @@ export function WorldWorkshop() {
   }
 
   function loadSavedWorld(saved: SavedWorldBlueprint) {
+    setCharacterSetup(null);
     setRawResponse(JSON.stringify(saved.blueprint, null, 2));
-    setNotice(`${saved.name} chargé dans l'atelier.`);
+    setNotice(`${saved.name} chargé. Créez maintenant son personnage.`);
   }
 
   function removeSavedWorld(id: string) {
@@ -164,7 +193,10 @@ export function WorldWorkshop() {
         <div className="border-t border-[#9C7A2E]/15 p-3">
           <textarea
             className={`${fieldClass} h-56 resize-y font-mono text-xs`}
-            onChange={(event) => setRawResponse(event.target.value)}
+            onChange={(event) => {
+              setCharacterSetup(null);
+              setRawResponse(event.target.value);
+            }}
             placeholder="Coller ici le JSON complet..."
             value={rawResponse}
           />
@@ -200,6 +232,20 @@ export function WorldWorkshop() {
         </div>
       </details>
 
+      {parsed?.blueprint && characterContext ? (
+        <details className="mb-3 rounded border border-[#9C7A2E]/20 bg-[#221E29]" open>
+          <summary className="cursor-pointer px-3 py-3 font-semibold text-[#E4D8BE]">4. Création du personnage</summary>
+          <div className="border-t border-[#9C7A2E]/15 p-3">
+            <CharacterCreationStep
+              context={characterContext}
+              initialParty={parsed.blueprint.party}
+              key={`${parsed.blueprint.campaign.name}:${parsed.blueprint.world.name}:${parsed.blueprint.campaign.openingScene}`}
+              onSetupChange={setCharacterSetup}
+            />
+          </div>
+        </details>
+      ) : null}
+
       {parsed?.blueprint ? (
         <section className="mb-3 border-y border-[#9C7A2E]/25 py-4">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -210,12 +256,24 @@ export function WorldWorkshop() {
             </div>
             <div className="flex flex-wrap gap-2">
               <button className="fantasy-button rounded px-3 py-2 text-sm" onClick={saveParsedWorld} type="button">Sauvegarder</button>
-              <button className="rounded border border-[#3F5641] bg-[#3F5641]/35 px-3 py-2 text-sm font-semibold text-[#E4D8BE]" onClick={() => activateBlueprint()} type="button">Commencer</button>
+              <button
+                className="rounded border border-[#3F5641] bg-[#3F5641]/35 px-3 py-2 text-sm font-semibold text-[#E4D8BE] disabled:cursor-not-allowed disabled:opacity-35"
+                disabled={!characterSetup}
+                onClick={() => activateBlueprint()}
+                type="button"
+              >
+                Commencer
+              </button>
             </div>
           </div>
+          <p className="mb-3 text-xs text-[#E4D8BE]/55">
+            {characterSetup
+              ? `Personnage lié uniquement à cette nouvelle campagne : ${characterSetup.characters[0].name}.`
+              : "Validez l'étape 4 avant de commencer la campagne."}
+          </p>
           <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4 lg:grid-cols-8">
-            <Count label="Personnages" value={parsed.blueprint.party.characters.length} />
-            <Count label="Objets de départ" value={parsed.blueprint.party.startingItems.length} />
+            <Count label="Personnages" value={characterSetup?.characters.length ?? 0} />
+            <Count label="Objets de départ" value={characterSetup?.startingItems.length ?? 0} />
             <Count label="Factions" value={parsed.blueprint.world.factions.length} />
             <Count label="Lieux" value={parsed.blueprint.world.locations.length} />
             <Count label="PNJ" value={parsed.blueprint.world.npcs.length} />
@@ -236,7 +294,7 @@ export function WorldWorkshop() {
                   <span className="block truncate font-semibold text-[#E4D8BE]">{saved.name}</span>
                   <span className="text-xs text-[#E4D8BE]/45">{new Date(saved.savedAt).toLocaleDateString("fr-FR")}</span>
                 </button>
-                <button className="fantasy-button rounded px-2 py-1 text-xs" onClick={() => activateBlueprint(saved.blueprint)} type="button">Jouer</button>
+                <button className="fantasy-button rounded px-2 py-1 text-xs" onClick={() => loadSavedWorld(saved)} type="button">Préparer</button>
                 <button className="rounded px-2 py-1 text-xs text-[#E4D8BE]/55 hover:bg-[#5A2233]/40" onClick={() => removeSavedWorld(saved.id)} type="button">Suppr.</button>
               </article>
             ))}

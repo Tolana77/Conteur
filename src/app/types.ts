@@ -182,6 +182,58 @@ export interface DiceRoll {
   timestamp: number;
 }
 
+export type PlayerCheckDifficulty = "routine" | "plausible" | "difficult" | "extreme" | "legendary";
+export type PlayerCheckDegree = "critical" | "success" | "partial" | "failure";
+
+export interface PlayerCheckOutcomeHints {
+  critical?: string;
+  success?: string;
+  partial?: string;
+  failure?: string;
+}
+
+export interface PlayerCheckResourceCost {
+  itemId: string;
+  quantity: number;
+  timing?: "attempt" | "success";
+}
+
+export interface PlayerCheckResolution {
+  rollIds: string[];
+  formula: string;
+  naturalRoll: number;
+  result: number;
+  degree: PlayerCheckDegree;
+  message: string;
+  resolvedAt: number;
+}
+
+export interface PlayerCheckRequest {
+  id: string;
+  characterId: string;
+  action: string;
+  method?: string;
+  desiredOutcome?: string;
+  stat: keyof CharacterStats;
+  skill?: string;
+  modifierPreview: number;
+  dc: number;
+  difficulty: PlayerCheckDifficulty;
+  stakes?: string;
+  costs: PlayerCheckResourceCost[];
+  outcomes?: PlayerCheckOutcomeHints;
+  visibility: DiceVisibility;
+  createdAt: number;
+  status: "pending" | "resolved" | "cancelled";
+  resolution?: PlayerCheckResolution;
+  error?: string;
+}
+
+export type PlayerCheckRequestInput = Omit<
+  PlayerCheckRequest,
+  "id" | "createdAt" | "status" | "resolution" | "error"
+>;
+
 export interface CharacterDerivedScores {
   modifiers: CharacterStats;
   proficiencyBonus: number;

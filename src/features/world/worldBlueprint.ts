@@ -17,7 +17,7 @@ import {
 } from "../campaign/campaignStart";
 import { createInitialNarrativeScene } from "../../core/game-engine/narrativeScene";
 
-export const WORLD_BLUEPRINT_SCHEMA_VERSION = 2 as const;
+export const WORLD_BLUEPRINT_SCHEMA_VERSION = 3 as const;
 
 export interface WorldCreationBrief {
   concept: string;
@@ -49,6 +49,9 @@ export interface GeneratedWorldEntity {
 export interface GeneratedStartingCharacter {
   id: string;
   name: string;
+  title?: string;
+  description?: string;
+  origin?: string;
   espece: string;
   classe: string;
   niveau: number;
@@ -57,6 +60,7 @@ export interface GeneratedStartingCharacter {
   maxPv: number;
   competences: string[];
   abilityTemplateIds: string[];
+  history?: string[];
 }
 
 export interface GeneratedStartingItem {
@@ -134,6 +138,14 @@ export interface WorldBlueprint {
   };
 }
 
+/** Groupe préparé séparément du monde et lié à la campagne au lancement. */
+export interface CampaignPartySetup {
+  characters: GeneratedStartingCharacter[];
+  startingItems: GeneratedStartingItem[];
+  abilityTemplates?: AbilityTemplate[];
+  effectTemplates?: EffectTemplate[];
+}
+
 export interface WorldBlueprintParseResult {
   blueprint: WorldBlueprint | null;
   errors: string[];
@@ -156,8 +168,6 @@ export const defaultWorldCreationBrief: WorldCreationBrief = {
 
 export function buildWorldCreationPrompt(
   brief: WorldCreationBrief,
-  itemCatalog: ItemTemplate[] = [],
-  abilityCatalog: AbilityTemplate[] = [],
 ): string {
   const counts = brief.complexity === "compact"
     ? { factions: 2, locations: 4, npcs: 5, conflicts: 2, hooks: 3, secrets: 3 }
@@ -176,8 +186,6 @@ export function buildWorldCreationPrompt(
     `Thèmes: ${brief.themes.trim()}`,
     `Échelle: ${brief.scope.trim()}`,
     `Rôle des personnages: ${brief.playerRole.trim()}`,
-    `Groupe de départ: ${brief.startingParty.trim()}`,
-    `Équipement de départ: ${brief.startingEquipment.trim()}`,
     `Éléments souhaités: ${brief.desiredElements.trim() || "aucun"}`,
     `Éléments interdits: ${brief.forbiddenElements.trim() || "aucun"}`,
     "",
@@ -188,20 +196,13 @@ export function buildWorldCreationPrompt(
     "- Chaque PNJ veut quelque chose maintenant, craint une conséquence et entretient au moins une connexion utile.",
     "- Les accroches proposent une décision ou une urgence, jamais une simple mission linéaire.",
     "- La scène d'ouverture commence au milieu d'une situation active et se termine sur un choix clair.",
-    "- Crée tout l'état de départ: personnages, caractéristiques, PV, compétences, capacités et inventaires.",
-    "- Chaque objet de départ possède ownerId. equipped ne vaut true que pour une arme, armure ou accessoire équipable.",
-    "- Réutilise en priorité un templateId du catalogue ci-dessous. Utilise une chaîne vide uniquement si aucun template ne convient.",
+    "- Ne crée aucun personnage ni équipement dans cette réponse : la création du personnage est une étape séparée.",
+    "- Retourne impérativement party.characters=[] et party.startingItems=[].",
     "- Préserve l'agence des joueurs: aucune issue, alliance ou victoire n'est prédéterminée.",
     "- Évite les noms génériques, les prophéties de l'élu et les factions entièrement bonnes ou mauvaises.",
     "- Les ids sont uniques, courts, en kebab-case et les relatedIds/connections/participants utilisent uniquement ces ids.",
     "",
     `VOLUMES: ${counts.factions} factions, ${counts.locations} lieux, ${counts.npcs} PNJ, 2 objets narratifs, ${counts.conflicts} conflits, ${counts.hooks} accroches, ${counts.secrets} secrets, 5 événements de timeline.`,
-    "",
-    "TEMPLATES D'OBJETS DISPONIBLES",
-    formatItemCatalog(itemCatalog),
-    "",
-    "TEMPLATES DE CAPACITÉS DISPONIBLES",
-    formatAbilityCatalog(abilityCatalog),
     "",
     "FORMAT JSON EXACT",
     JSON.stringify(createBlueprintSkeleton(), null, 2),
@@ -241,13 +242,13 @@ export function parseWorldBlueprint(raw: string): WorldBlueprintParseResult {
   const world = asRecord(root?.world, "world", errors);
   if (!root || !campaign || !world) return { blueprint: null, errors, warnings };
   const campaignLevel = boundedNumber(campaign.level, "campaign.level", errors, 1, 20, 1);
-  const isLegacyBlueprint = root.schemaVersion === 1 && !root.party;
-  const party = isLegacyBlueprint
-    ? createFallbackParty(campaignLevel)
+  const sourceVersion = Number(root.schemaVersion);
+  const party = sourceVersion < WORLD_BLUEPRINT_SCHEMA_VERSION
+    ? { characters: [], startingItems: [] }
     : parseStartingParty(root.party, campaignLevel, errors);
 
-  if (isLegacyBlueprint) {
-    warnings.push("Ancien plan de monde migré : un personnage neutre et un inventaire vide ont été ajoutés.");
+  if (sourceVersion < WORLD_BLUEPRINT_SCHEMA_VERSION) {
+    warnings.push("Ancien plan de monde migré : son groupe a été retiré afin de créer un personnage propre à la nouvelle campagne.");
   }
 
   const blueprint: WorldBlueprint = {
@@ -308,8 +309,8 @@ export function parseWorldBlueprint(raw: string): WorldBlueprintParseResult {
     },
   };
 
-  if (root.schemaVersion !== WORLD_BLUEPRINT_SCHEMA_VERSION && root.schemaVersion !== 1) {
-    errors.push(`schemaVersion doit valoir ${WORLD_BLUEPRINT_SCHEMA_VERSION}.`);
+  if (![1, 2, WORLD_BLUEPRINT_SCHEMA_VERSION].includes(Number(root.schemaVersion))) {
+    errors.push(`schemaVersion doit valoir ${WORLD_BLUEPRINT_SCHEMA_VERSION} (les versions 1 et 2 restent migrables).`);
   }
 
   validateBlueprintQuality(blueprint, errors, warnings);
@@ -318,8 +319,11 @@ export function parseWorldBlueprint(raw: string): WorldBlueprintParseResult {
 
 export function createCampaignFromBlueprint(
   blueprint: WorldBlueprint,
-  characters: Character[] = blueprint.party.characters.map(toCharacter),
+  characters?: Character[],
+  campaignId = `campaign-${crypto.randomUUID()}`,
 ): Campaign {
+  const boundCharacters = (characters ?? blueprint.party.characters.map((character) => toCharacter(character, campaignId)))
+    .map((character) => ({ ...character, campaignId }));
   const toEntity = (entity: GeneratedWorldEntity, type: Entity["type"]): Entity => ({
     id: entity.id,
     name: entity.name,
@@ -357,12 +361,12 @@ export function createCampaignFromBlueprint(
   };
 
   return {
-    id: `campaign-${crypto.randomUUID()}`,
+    id: campaignId,
     name: blueprint.campaign.name,
     style: blueprint.campaign.style,
     level: blueprint.campaign.level,
     world,
-    characters,
+    characters: boundCharacters,
     history: [
       blueprint.campaign.centralQuestion,
       `Ouverture : ${blueprint.campaign.openingScene}`,
@@ -377,12 +381,18 @@ export function createCampaignStartFromBlueprint(
   abilityCatalog: AbilityTemplate[],
   effectCatalog: EffectTemplate[] = [],
   enemyCatalog: EnemyTemplate[] = [],
+  partySetup?: CampaignPartySetup,
 ): CampaignStartSnapshot {
-  const characters = blueprint.party.characters.map(toCharacter);
-  const campaign = createCampaignFromBlueprint(blueprint, characters);
+  const campaignId = `campaign-${crypto.randomUUID()}`;
+  const sourceParty = partySetup?.characters.length ? partySetup : blueprint.party;
+  const fallbackParty = sourceParty.characters.length ? sourceParty : createFallbackParty(blueprint.campaign.level);
+  const characters = fallbackParty.characters.map((character) => toCharacter(character, campaignId));
+  const campaign = createCampaignFromBlueprint(blueprint, characters, campaignId);
+  const mergedEffectCatalog = mergeTemplatesById(effectCatalog, partySetup?.effectTemplates ?? []);
+  const mergedAbilityCatalog = mergeTemplatesById(abilityCatalog, partySetup?.abilityTemplates ?? []);
   const catalogById = new Map(itemCatalog.map((template) => [template.id, template]));
   const generatedTemplates: ItemTemplate[] = [];
-  const itemInstances: ItemInstance[] = blueprint.party.startingItems.map((item, index) => {
+  const itemInstances: ItemInstance[] = fallbackParty.startingItems.map((item, index) => {
     const catalogTemplate = item.templateId ? catalogById.get(item.templateId) : undefined;
     const template = catalogTemplate ?? createGeneratedItemTemplate(item);
 
@@ -416,8 +426,8 @@ export function createCampaignStartFromBlueprint(
       },
     };
   });
-  const abilityById = new Map(abilityCatalog.map((template) => [template.id, template]));
-  const abilityInstances: AbilityInstance[] = blueprint.party.characters.flatMap((character) =>
+  const abilityById = new Map(mergedAbilityCatalog.map((template) => [template.id, template]));
+  const abilityInstances: AbilityInstance[] = fallbackParty.characters.flatMap((character) =>
     character.abilityTemplateIds.flatMap((templateId, index) => {
       const template = abilityById.get(templateId);
       if (!template) return [];
@@ -444,9 +454,9 @@ export function createCampaignStartFromBlueprint(
     openingScene: blueprint.campaign.openingScene,
     itemTemplates: [...itemCatalog, ...generatedTemplates],
     itemInstances,
-    abilityTemplates: abilityCatalog,
+    abilityTemplates: mergedAbilityCatalog,
     abilityInstances,
-    effectTemplates: effectCatalog,
+    effectTemplates: mergedEffectCatalog,
     enemyTemplates: enemyCatalog,
     narrativeScene: createInitialNarrativeScene(campaign, blueprint.campaign.openingScene),
   });
@@ -476,38 +486,8 @@ function createBlueprintSkeleton(): WorldBlueprint {
       openingScene: "Scène d'ouverture jouable avec tension et choix",
     },
     party: {
-      characters: [{
-        id: "character-player",
-        name: "Nom du personnage",
-        espece: "Espèce",
-        classe: "Classe ou archétype",
-        niveau: 1,
-        stats: {
-          force: 10,
-          dexterite: 10,
-          constitution: 10,
-          intelligence: 10,
-          sagesse: 10,
-          charisme: 10,
-        },
-        pv: 10,
-        maxPv: 10,
-        competences: ["Compétence narrative ou martiale"],
-        abilityTemplateIds: [],
-      }],
-      startingItems: [{
-        id: "starting-item-1",
-        ownerId: "character-player",
-        templateId: "tpl_rations",
-        name: "Rations",
-        description: "Vivres de voyage.",
-        type: "consumable",
-        types: ["consumable", "food"],
-        tags: ["ration", "provisions"],
-        quantity: 3,
-        weight: 0.5,
-        equipped: false,
-      }],
+      characters: [],
+      startingItems: [],
     },
     world: {
       name: "Nom du monde ou de la région",
@@ -541,6 +521,9 @@ function parseStartingParty(
     return {
       id: requiredId(item.id, `party.characters[${index}].id`, errors),
       name: requiredString(item.name, `party.characters[${index}].name`, errors),
+      ...(optionalString(item.title) ? { title: optionalString(item.title) } : {}),
+      ...(optionalString(item.description) ? { description: optionalString(item.description) } : {}),
+      ...(optionalString(item.origin) ? { origin: optionalString(item.origin) } : {}),
       espece: requiredString(item.espece, `party.characters[${index}].espece`, errors),
       classe: requiredString(item.classe, `party.characters[${index}].classe`, errors),
       niveau: boundedNumber(item.niveau, `party.characters[${index}].niveau`, errors, 1, 20, campaignLevel),
@@ -560,6 +543,9 @@ function parseStartingParty(
         `party.characters[${index}].abilityTemplateIds`,
         errors,
       ),
+      ...(item.history === undefined
+        ? {}
+        : { history: stringArray(item.history, `party.characters[${index}].history`, errors) }),
     };
   });
   const startingItems = objectArray(party.startingItems, "party.startingItems", errors).map((item, index) => {
@@ -607,10 +593,14 @@ function createFallbackParty(level: number): WorldBlueprint["party"] {
   };
 }
 
-function toCharacter(character: GeneratedStartingCharacter): Character {
+function toCharacter(character: GeneratedStartingCharacter, campaignId: string): Character {
   return {
     id: character.id,
+    campaignId,
     name: character.name,
+    ...(character.title ? { title: character.title } : {}),
+    ...(character.description ? { description: character.description } : {}),
+    ...(character.origin ? { origin: character.origin } : {}),
     espece: character.espece,
     classe: character.classe,
     niveau: character.niveau,
@@ -619,6 +609,7 @@ function toCharacter(character: GeneratedStartingCharacter): Character {
     maxPv: character.maxPv,
     inventaire: [],
     competences: [...character.competences],
+    ...(character.history?.length ? { history: [...character.history] } : {}),
   };
 }
 
@@ -636,23 +627,15 @@ function createGeneratedItemTemplate(item: GeneratedStartingItem): ItemTemplate 
   };
 }
 
+function mergeTemplatesById<T extends { id: string }>(base: T[], additions: T[]): T[] {
+  const merged = new Map(base.map((template) => [template.id, template]));
+  additions.forEach((template) => merged.set(template.id, template));
+  return [...merged.values()];
+}
+
 function isEquipableTemplate(template: ItemTemplate): boolean {
   const mechanics = new Set([template.type, ...template.types].map((value) => value.toLowerCase()));
   return mechanics.has("weapon") || mechanics.has("armor") || mechanics.has("accessory");
-}
-
-function formatItemCatalog(itemCatalog: ItemTemplate[]): string {
-  if (!itemCatalog.length) return "Aucun template fourni : utilise templateId: \"\".";
-  return itemCatalog
-    .map((template) => `- ${template.id}: ${template.name} [${[...new Set([template.type, ...template.types])].join(", ")}]`)
-    .join("\n");
-}
-
-function formatAbilityCatalog(abilityCatalog: AbilityTemplate[]): string {
-  if (!abilityCatalog.length) return "Aucun template fourni : utilise abilityTemplateIds: [].";
-  return abilityCatalog
-    .map((template) => `- ${template.id}: ${template.name} (${template.activation.timing})`)
-    .join("\n");
 }
 
 function parseEntities(value: unknown, path: string, errors: string[]): GeneratedWorldEntity[] {
@@ -685,7 +668,6 @@ function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], w
   ];
   const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
   if (duplicates.length) errors.push(`Ids dupliqués: ${[...new Set(duplicates)].join(", ")}.`);
-  if (blueprint.party.characters.length < 1) errors.push("Au moins un personnage de départ est nécessaire.");
   if (blueprint.world.factions.length < 2) errors.push("Au moins deux factions sont nécessaires.");
   if (blueprint.world.locations.length < 3) errors.push("Au moins trois lieux sont nécessaires.");
   if (blueprint.world.npcs.length < 3) errors.push("Au moins trois PNJ sont nécessaires.");

@@ -35,11 +35,11 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
   {
     id: "actionManager",
     name: "Gérer actions",
-    role: "Gère les jets de dés, tests de compétence, tests opposés, dégâts environnementaux et arbitrages gamifiés non strictement liés au combat tactique.",
+    role: "Arbitre les actions incertaines aux conséquences intéressantes, puis prépare les jets de dés que le joueur déclenche lui-même. Les actions ordinaires restent sans jet.",
     whenToUse: [
       "Jet de dé demandé ou nécessaire.",
       "Test de compétence, caractéristique, sauvegarde ou duel opposé.",
-      "Action improvisée: escalader, forcer, convaincre, fabriquer, chercher, tomber, résister à un danger.",
+      "Action improvisée risquée: escalader, forcer, convaincre un interlocuteur réticent, fabriquer sous contrainte, chercher un secret, tomber ou résister à un danger.",
       "Quand il faut estimer si une action est faisable et sous quelles limites.",
     ],
     forbiddenTasks: [

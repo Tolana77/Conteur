@@ -22,7 +22,7 @@ export interface NarrationPacket {
 
 const AGENT_INSTRUCTIONS: Record<AutomaticDomainAgent, string> = {
   characterManager: "Résous uniquement l'impact sur la fiche, l'inventaire, les objets, les capacités, les charges ou les PV. L'inventaire fourni est exhaustif : toute ressource absente est indisponible.",
-  actionManager: "Arbitre une action improvisée. Si elle est triviale, transmets simplement son résultat narratif. Si son issue est incertaine et intéressante, produis UNE commande resolveGameAction complète; le moteur calculera le bonus et lancera le dé.",
+  actionManager: "Arbitre une action improvisée. Une action ordinaire se résout sans jet. Une action incertaine aux conséquences intéressantes produit au maximum UNE commande resolveGameAction; le moteur préparera un jet que le joueur devra déclencher.",
   combatManager: "Résous uniquement tours, actions, cibles, portée, déplacement et conséquences tactiques à partir des ids fournis.",
   combatSetupManager: "Instancie et place les combattants nécessaires à une scène depuis des templates existants ou créés dans le dossier entrant. Ne conçois pas leurs règles.",
   tacticalTemplateManager: "Conçois uniquement des templates réutilisables d'ennemis et d'éléments tactiques. Réutilise les capacités existantes avant d'en demander de nouvelles.",
@@ -72,6 +72,10 @@ export function buildAutomaticDomainPrompt(
     ] : []),
     ...(agentId === "actionManager" || agentId === "worldManager" ? [
       "Liberté d'action: n'écarte jamais une tentative uniquement parce qu'elle n'est pas prévue. Une méthode extravagante mais préparée peut devenir legendary (DD 28, jusqu'à 35), avec coût et conséquences cohérents.",
+      "Aucun jet pour voir l'évidence, obtenir une information ordinaire, trouver un lieu commun ou agir sans risque ni conséquence intéressante.",
+      "Si la méthode change la compétence ou la difficulté et qu'elle manque, pose UNE question dans draftPatch.questions et ne produis aucune commande de test.",
+      "Compétences françaises canoniques seulement: Perception=SAG (remarquer), Investigation=INT (examiner/déduire), Survie=SAG (pistes/nature), Persuasion=CHA (coopération), Escamotage=DEX (subtiliser), Discrétion=DEX (rester invisible). Sprint n'est pas une compétence. La compétence impose sa caractéristique.",
+      "Un test peut porter sur une caractéristique seule. Dans ce cas, fournis stat et omets skill : aucun bonus de maîtrise ne sera ajouté.",
       "Échelle: routine=pas de jet; plausible=DD10; difficult=DD15; extreme=DD22; legendary=DD28. Un DD explicite entre 5 et 35 peut affiner cette échelle.",
       "Utilise outcomes pour préannoncer des conséquences distinctes: critical, success, partial et failure. L'échec doit faire évoluer la situation, pas fermer la partie.",
       "Les outcomes peuvent révéler une piste, créer une opportunité ou décrire une réaction, mais ne doivent jamais ajouter directement un objet, des PV, une capacité ou une autre ressource au moteur.",
@@ -116,6 +120,7 @@ export function buildAutomaticNarrationPrompt(
     "Le cadre peut contenir une accroche narrative. Utilise-la seulement si elle s'insère naturellement comme conséquence, rumeur, rencontre ou opportunité; ne force jamais le joueur à la suivre.",
     "La gravité narrative vaut none, subtle, clear ou consequence. subtle=indice discret; clear=accroche reconnaissable; consequence=un événement de l'intrigue croise logiquement la route du personnage. Même au niveau consequence, conserve au moins deux choix réels et n'annule jamais l'action libre du joueur.",
     "Raconte uniquement les faits et résultats du paquet. Ne crée ni jet, ni dégât, ni changement d'état supplémentaire.",
+    "Si Paquet.results indique qu'un jet est proposé ou attend le joueur, raconte uniquement la mise en situation et invite-le à utiliser le bouton de lancer. Ne décide ni réussite ni échec avant ce lancer.",
     "Paquet.constraints contient des vérités internes obligatoires. Respecte-les sans les citer, sans les paraphraser comme des règles et sans révéler qu'elles viennent du moteur.",
     "Toute modification du monde ou d'un inventaire n'existe que si elle apparaît dans Paquet.results avec status=success ou dans Paquet.actionReceipts.",
     "Dans Paquet.results, status=success confirme que le moteur a exécuté la résolution, pas que l'action du personnage a réussi. Pour un test, respecte impérativement le degré écrit après le DD: réussite critique, réussite, réussite partielle ou échec avec conséquence.",
@@ -127,6 +132,7 @@ export function buildAutomaticNarrationPrompt(
     "Si le paquet contient missingResource, décris naturellement le geste interrompu ou l'absence constatée; l'objet ne doit apparaître sous aucune forme.",
     "Si un fait dit qu'une liste est exhaustive, restitue uniquement ses éléments et n'en invente aucun.",
     "Les questions présentes dans Paquet.questions sont des besoins de clarification internes : reformule-les comme une question naturelle du Conteur, sans vocabulaire technique.",
+    "Avant une question sur une action vague et risquée, montre brièvement un danger ou avertissement immédiatement perceptible. L'intention n'est pas encore accomplie.",
     'Réponds uniquement par {"narration":"..."}.',
     `Joueur: ${JSON.stringify(character ? { name: character.name, classe: character.classe, niveau: character.niveau } : null)}`,
     `Style: ${truncate(state.campaign.style, 160)}`,

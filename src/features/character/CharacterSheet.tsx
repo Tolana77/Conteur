@@ -54,6 +54,9 @@ interface CharacterSheetPage {
 interface SafeCharacter {
   id: string;
   name: string;
+  title?: string;
+  description?: string;
+  origin?: string;
   espece: string;
   classe: string;
   niveau: number;
@@ -269,6 +272,9 @@ function normalizeCharacter(character: Character): SafeCharacter {
   return {
     id: legacyCharacter.id ?? "character-missing",
     name: legacyCharacter.name ?? "Personnage sans nom",
+    ...(legacyCharacter.title ? { title: legacyCharacter.title } : {}),
+    ...(legacyCharacter.description ? { description: legacyCharacter.description } : {}),
+    ...(legacyCharacter.origin ? { origin: legacyCharacter.origin } : {}),
     espece: legacyCharacter.espece ?? legacyCharacter.race ?? "Espece inconnue",
     classe: legacyCharacter.classe ?? legacyCharacter.class ?? "Classe inconnue",
     niveau: legacyCharacter.niveau ?? legacyCharacter.level ?? 1,
@@ -424,6 +430,9 @@ function CharacterIdentityHeader({ character }: { character: SafeCharacter }) {
         <span className="absolute bottom-1.5 left-1.5 h-3 w-3 border-b border-l border-[#9C7A2E]/80" />
         <span className="absolute bottom-1.5 right-1.5 h-3 w-3 border-b border-r border-[#9C7A2E]/80" />
         <h2 className="ink-heading text-3xl font-black leading-tight">{character.name}</h2>
+        {character.title ? (
+          <p className="mt-1 text-xs uppercase text-[#9C7A2E]">{character.title}</p>
+        ) : null}
         <p className="mt-1 text-sm text-[#E4D8BE]/65">
           {character.espece} · {character.classe} · niveau {character.niveau}
         </p>
@@ -2062,10 +2071,12 @@ function HistoryJournalModule({ character }: { character: SafeCharacter }) {
           <p>
             {character.espece} · {character.classe} · niveau {character.niveau}
           </p>
-          <p>
-            Le journal personnel recueillera ici les origines, titres, serments,
-            cicatrices narratives et choix importants du personnage.
-          </p>
+          {character.title ? <p className="text-[#9C7A2E]">{character.title}</p> : null}
+          {character.origin ? <p>{character.origin}</p> : null}
+          {character.description ? <p>{character.description}</p> : null}
+          {!character.origin && !character.description ? (
+            <p>Le journal personnel recueillera ici les origines, serments, cicatrices narratives et choix importants du personnage.</p>
+          ) : null}
         </div>
       </section>
 

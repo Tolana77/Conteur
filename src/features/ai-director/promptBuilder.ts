@@ -188,7 +188,12 @@ export function buildAiDirectorPrompt(
           "# Arbitrage des improvisations",
           [
             "- Toute intention compréhensible peut être tentée, même si elle n'est pas prévue par le scénario.",
-            "- Action triviale sans enjeu: aucun jet. Action incertaine avec conséquence intéressante: UNE commande resolveGameAction.",
+            "- Ne lance jamais de dé pour obtenir une information ordinaire, voir l'évidence, trouver un lieu commun ou accomplir une action sans conséquence intéressante.",
+            "- Si plusieurs méthodes changent la compétence ou le risque, pose UNE question et ne produis aucune commande de test avant la réponse.",
+            "- Action réellement incertaine avec conséquence intéressante: UNE commande resolveGameAction. Elle crée une demande de jet; le joueur lancera lui-même le d20.",
+            "- Compétences françaises canoniques uniquement. Perception=SAG pour remarquer; Investigation=INT pour examiner/déduire; Survie=SAG pour pistes/nature; Persuasion=CHA pour obtenir une coopération; Escamotage=DEX pour subtiliser; Discrétion=DEX pour ne pas être vu. « Sprint » n'est jamais une compétence.",
+            "- La compétence impose sa caractéristique; ne fournis jamais une stat incompatible avec elle.",
+            "- Un test peut utiliser une caractéristique seule : fournis stat et omets skill. Le moteur n'ajoutera alors aucun bonus de maîtrise.",
             "- Échelle: plausible DD10, difficult DD15, extreme DD22, legendary DD28; réserve jusqu'à DD35 aux exploits presque impossibles.",
             "- Une préparation pertinente, un coût ou un risque accepté doit réellement améliorer la faisabilité.",
             "- Déclare critical/success/partial/failure dans outcomes. Chaque échec doit faire évoluer la situation.",
@@ -223,6 +228,7 @@ export function buildAiDirectorPrompt(
             "- Si une précision est indispensable, décris d'abord ce qui est déjà perceptible puis pose UNE question diégétique précise; suggère éventuellement deux ou trois approches naturelles.",
             "- N'écris jamais que le joueur n'a pas donné d'action concrète ou qu'aucune information concrète n'est disponible.",
             "- N'invente aucun succès, objet, jet, avantage mécanique ou changement durable absent des résultats validés.",
+            "- Si un résultat indique qu'un jet est proposé ou en attente du joueur, décris seulement la situation juste avant l'essai et invite naturellement à lancer le dé; n'invente jamais son issue.",
             "- Réponds en français, avec une prose sensorielle et concrète, en un à trois courts paragraphes.",
           ].join("\n"),
         ]
@@ -897,6 +903,8 @@ function createCharacterSummary(character: Character, includeExactHp: boolean) {
   return {
     id: character.id,
     name: character.name,
+    ...(character.title ? { title: truncateContextText(character.title, 80) } : {}),
+    espece: character.espece,
     classe: character.classe,
     niveau: character.niveau,
     pv: includeExactHp ? character.pv : getHealthState(character.pv, character.maxPv),
@@ -909,8 +917,11 @@ function createCharacterIdentity(character: Character) {
   return {
     id: character.id,
     name: character.name,
+    ...(character.title ? { title: truncateContextText(character.title, 80) } : {}),
+    espece: character.espece,
     classe: character.classe,
     niveau: character.niveau,
+    ...(character.origin ? { origine: truncateContextText(character.origin, 140) } : {}),
   };
 }
 
@@ -1028,6 +1039,11 @@ function normalizeSearchText(value: string): string {
     .toLocaleLowerCase("fr-FR")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/gu, "");
+}
+
+function truncateContextText(value: string, maximum: number): string {
+  const compact = value.replace(/\s+/gu, " ").trim();
+  return compact.length <= maximum ? compact : `${compact.slice(0, Math.max(1, maximum - 1)).trimEnd()}…`;
 }
 
 function createAbilityContext(snapshot: AiPromptSnapshot, scope: "combat" | "all") {

@@ -58,7 +58,10 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   const routingState = useGameStore.getState();
   const route = routePlayerInput(effectiveInput, routingState);
   const localResolution = resolveAutomaticLocalRequest(effectiveInput, routingState);
-  const selectedAgents = localResolution.handled && !localResolution.continueToAgents ? [] : [...route.agents];
+  const hasLocalClarification = Boolean(localResolution.draftPatch?.questions?.length);
+  const selectedAgents = localResolution.handled && !localResolution.continueToAgents
+    ? []
+    : route.agents.filter((agent) => !(hasLocalClarification && agent === "actionManager"));
   let draft = createEmptyResolutionDraft();
   const agentsRun: AiAgentId[] = [];
   const gatheredCommands: SourcedCommand[] = localResolution.commands.map((command) => ({

@@ -11,7 +11,11 @@ export interface CharacterStats {
 
 export interface Character {
   id: string;
+  campaignId: string;
   name: string;
+  title?: string;
+  description?: string;
+  origin?: string;
   espece: string;
   classe: string;
   niveau: number;

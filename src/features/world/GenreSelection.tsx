@@ -7,7 +7,7 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
 
   function confirmRestart() {
     const confirmed = window.confirm(
-      `Recommencer « ${campaign.name} » depuis son état initial ? Toute la progression de cette partie sera perdue.`,
+      `Recommencer « ${campaign.name} » depuis son état initial ? Le personnage lié à cette campagne sera restauré avec sa fiche et son équipement de départ ; la progression de la partie sera perdue.`,
     );
     if (confirmed) restartCampaign();
   }

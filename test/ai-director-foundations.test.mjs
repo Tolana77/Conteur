@@ -52,7 +52,7 @@ const migratedStart = normalizeCampaignStartSnapshot({
   abilityTemplates: [],
   abilityInstances: [],
 });
-assert.equal(migratedStart?.version, 3);
+assert.equal(migratedStart?.version, 4);
 assert.equal(migratedStart?.narrativeScene.locationId, "loc-throne");
 
 const sceneWithApproach = applyNarrativeScenePatch(initialScene, {

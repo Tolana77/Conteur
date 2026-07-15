@@ -19,7 +19,7 @@ import {
 } from "../content";
 import { isItemEquipable } from "../items/itemRules";
 import { isCommandAllowedForAgent } from "./commandPermissions";
-import { resolveDifficultyClass } from "./improvisedActions";
+import { resolveCheckSkill, resolveDifficultyClass } from "./improvisedActions";
 import type { AiAgentId, AiDirectorCommand } from "./types";
 
 export interface AiCommandValidation {
@@ -272,8 +272,14 @@ function validateAiCommand(
     if (command.dc !== undefined && (command.dc < 5 || command.dc > 35)) {
       return error(command, "Le DD d'un test doit être compris entre 5 et 35.");
     }
+    const resolvedSkill = command.skill
+      ? resolveCheckSkill(command.skill, command.reason ?? "")
+      : undefined;
+    if (command.skill && !resolvedSkill) {
+      return error(command, `Compétence inconnue ou inadaptée : ${command.skill}. Précisez la méthode ou utilisez une compétence canonique.`);
+    }
 
-    return ready(command, `${character.name} effectuera un test DD ${resolveDifficultyClass(undefined, command.dc)}.`);
+    return ready(command, `${character.name} recevra une demande de test${resolvedSkill ? ` de ${resolvedSkill}` : ""} DD ${resolveDifficultyClass(undefined, command.dc)}.`);
   }
 
   if (command.type === "resolveGameAction") {
@@ -295,8 +301,12 @@ function validateAiCommand(
       }
     }
 
+    const resolvedSkill = resolveCheckSkill(command.skill, command.action, command.method);
+    if (command.skill && !resolvedSkill) {
+      return error(command, `Compétence inconnue ou inadaptée : ${command.skill}. Précisez la méthode ou utilisez une compétence canonique.`);
+    }
     const dc = resolveDifficultyClass(command.difficulty, command.dc);
-    return ready(command, `${character.name} tentera « ${command.action} » contre DD ${dc}.`);
+    return ready(command, `${character.name} recevra une demande de test${resolvedSkill ? ` de ${resolvedSkill}` : ""} pour « ${command.action} » contre DD ${dc}.`);
   }
 
   if (command.type === "contestCheck" || command.type === "calculateHazardDamage") {

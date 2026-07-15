@@ -92,12 +92,15 @@ import type {
   NarrativeScenePatch,
   NarrativeSceneState,
   PendingGameDecision,
+  PlayerCheckRequest,
+  PlayerCheckRequestInput,
+  PlayerCheckResolution,
   CharacterStats,
 } from "../app/types";
 import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 28;
+export const GAME_STORAGE_VERSION = 30;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -126,6 +129,7 @@ export interface GameState {
   pendingGameDecision: PendingGameDecision | null;
   pendingActionIntents: ChatActionIntent[];
   diceRolls: DiceRoll[];
+  playerCheckRequests: PlayerCheckRequest[];
   characterPortraits: Record<string, string>;
   uiSettings: UiSettings;
   characterDerivedScores: Record<string, CharacterDerivedScores>;
@@ -209,6 +213,9 @@ export interface GameState {
   recordCampaignEvent: (entry: string) => void;
   roll: (sides: number) => DiceRoll;
   rollFormula: (formula: string, visibility?: DiceVisibility, reason?: string) => DiceRoll;
+  queuePlayerCheck: (request: PlayerCheckRequestInput) => PlayerCheckRequest | null;
+  completePlayerCheck: (requestId: string, resolution: PlayerCheckResolution) => boolean;
+  failPlayerCheck: (requestId: string, error: string) => void;
   updateWorldFact: (index: number, value: string) => void;
   addWorldFact: (value: string) => void;
   removeWorldFact: (index: number) => void;
@@ -695,6 +702,7 @@ type GameDataState = Pick<
   | "pendingGameDecision"
   | "pendingActionIntents"
   | "diceRolls"
+  | "playerCheckRequests"
   | "characterPortraits"
   | "uiSettings"
   | "characterDerivedScores"
@@ -776,6 +784,7 @@ function createInitialState(): GameDataState {
     pendingGameDecision: null,
     pendingActionIntents: [],
     diceRolls: [],
+    playerCheckRequests: [],
     characterPortraits: {},
     uiSettings: {
       showItemTags: true,
@@ -821,6 +830,7 @@ function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<Ga
     pendingGameDecision: null,
     pendingActionIntents: [],
     diceRolls: [],
+    playerCheckRequests: [],
     itemTemplates,
     itemInstances,
     abilityTemplates: start.abilityTemplates,
@@ -879,6 +889,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         ? candidate.pendingActionIntents
         : [],
       diceRolls: Array.isArray(candidate.diceRolls) ? candidate.diceRolls : [],
+      playerCheckRequests: normalizePlayerCheckRequests(candidate.playerCheckRequests),
       characterPortraits:
         candidate.characterPortraits && typeof candidate.characterPortraits === "object"
           ? candidate.characterPortraits
@@ -922,7 +933,12 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     };
   }
 
-  const selectedCharacterExists = candidate.characters?.some(
+  const campaignSource = candidate.campaign ?? initialState.campaign;
+  const characters = (candidate.characters ?? initialState.characters).map((character) => ({
+    ...character,
+    campaignId: campaignSource.id,
+  }));
+  const selectedCharacterExists = characters.some(
     (character) => character.id === candidate.selectedCharacterId,
   );
   const itemTemplates = Array.isArray(candidate.itemTemplates)
@@ -931,12 +947,11 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   const itemInstances = Array.isArray(candidate.itemInstances)
     ? mergeById(candidate.itemInstances, initialState.itemInstances)
     : initialState.itemInstances;
-  const characters = candidate.characters ?? initialState.characters;
   const selectedCharacterId = selectedCharacterExists
     ? candidate.selectedCharacterId ?? initialState.selectedCharacterId
-    : candidate.characters?.[0]?.id ?? initialState.selectedCharacterId;
+    : characters[0]?.id ?? initialState.selectedCharacterId;
   const campaign = {
-    ...(candidate.campaign ?? initialState.campaign),
+    ...campaignSource,
     characters,
   };
   const abilityTemplates = Array.isArray(candidate.abilityTemplates)
@@ -987,6 +1002,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       ? candidate.pendingActionIntents
       : [],
     diceRolls: Array.isArray(candidate.diceRolls) ? candidate.diceRolls : [],
+    playerCheckRequests: normalizePlayerCheckRequests(candidate.playerCheckRequests),
     characterPortraits:
       candidate.characterPortraits && typeof candidate.characterPortraits === "object"
         ? candidate.characterPortraits
@@ -1033,6 +1049,56 @@ function normalizeGameEvents(value: unknown, campaignId: string): GameEvent[] {
 function normalizeGameRevision(value: unknown, events: GameEvent[]): number {
   const persistedRevision = typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
   return events.reduce((maximum, event) => Math.max(maximum, event.revision), persistedRevision);
+}
+
+function normalizePlayerCheckRequests(value: unknown): PlayerCheckRequest[] {
+  if (!Array.isArray(value)) return [];
+
+  const stats = new Set<keyof CharacterStats>([
+    "force",
+    "dexterite",
+    "constitution",
+    "intelligence",
+    "sagesse",
+    "charisme",
+  ]);
+  const difficulties = new Set(["routine", "plausible", "difficult", "extreme", "legendary"]);
+  const visibilities = new Set<DiceVisibility>(["public", "gmOnly", "hidden", "summary"]);
+
+  return value.flatMap((candidate): PlayerCheckRequest[] => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const request = candidate as Partial<PlayerCheckRequest>;
+    if (
+      typeof request.id !== "string" ||
+      typeof request.characterId !== "string" ||
+      typeof request.action !== "string" ||
+      !stats.has(request.stat as keyof CharacterStats) ||
+      !Number.isFinite(request.modifierPreview) ||
+      !Number.isFinite(request.dc) ||
+      !difficulties.has(String(request.difficulty)) ||
+      !visibilities.has(request.visibility as DiceVisibility) ||
+      !Number.isFinite(request.createdAt) ||
+      !["pending", "resolved", "cancelled"].includes(String(request.status))
+    ) {
+      return [];
+    }
+
+    const costs = Array.isArray(request.costs)
+      ? request.costs.filter((cost) =>
+          Boolean(cost) &&
+          typeof cost.itemId === "string" &&
+          Number.isFinite(cost.quantity) &&
+          cost.quantity > 0)
+      : [];
+
+    return [{
+      ...request,
+      action: request.action.trim(),
+      modifierPreview: Math.round(request.modifierPreview as number),
+      dc: Math.max(5, Math.min(35, Math.round(request.dc as number))),
+      costs,
+    } as PlayerCheckRequest];
+  }).slice(-30);
 }
 
 function normalizeDisabledContentTemplateIds(value: unknown): DisabledContentTemplateIds {
@@ -6339,9 +6405,21 @@ export const useGameStore = create<GameState>()(
       },
       clearCharacterPortraits: () => set({ characterPortraits: {} }),
       resetGameState: () => set(createInitialState()),
-      startCampaign: (snapshot) => set(createCampaignRuntimeState(snapshot)),
+      startCampaign: (snapshot) => set({
+        ...createCampaignRuntimeState(snapshot),
+        characterPortraits: {},
+      }),
       restartCampaign: () => {
-        set((state) => createCampaignRuntimeState(state.campaignStartSnapshot));
+        set((state) => {
+          const runtime = createCampaignRuntimeState(state.campaignStartSnapshot);
+          const characterIds = new Set(state.campaignStartSnapshot.characters.map((character) => character.id));
+          return {
+            ...runtime,
+            characterPortraits: Object.fromEntries(
+              Object.entries(state.characterPortraits).filter(([characterId]) => characterIds.has(characterId)),
+            ),
+          };
+        });
       },
       advanceNarrativeScene: (playerAction) => {
         const state = get();
@@ -6443,6 +6521,48 @@ export const useGameStore = create<GameState>()(
 
         return rollResult;
       },
+      queuePlayerCheck: (input) => {
+        const state = get();
+        if (!state.characters.some((character) => character.id === input.characterId)) return null;
+
+        const signature = `${input.characterId}:${input.stat}:${input.skill ?? ""}:${input.dc}:${input.action.trim().toLocaleLowerCase("fr-FR")}`;
+        const existing = state.playerCheckRequests.find((request) =>
+          request.status === "pending" &&
+          `${request.characterId}:${request.stat}:${request.skill ?? ""}:${request.dc}:${request.action.trim().toLocaleLowerCase("fr-FR")}` === signature);
+        if (existing) return existing;
+
+        const request: PlayerCheckRequest = {
+          ...input,
+          id: `player-check-${crypto.randomUUID()}`,
+          action: input.action.trim(),
+          costs: input.costs.map((cost) => ({ ...cost })),
+          createdAt: Date.now(),
+          status: "pending",
+        };
+        set((current) => ({
+          playerCheckRequests: [...current.playerCheckRequests, request].slice(-30),
+        }));
+        return request;
+      },
+      completePlayerCheck: (requestId, resolution) => {
+        let completed = false;
+        set((state) => ({
+          playerCheckRequests: state.playerCheckRequests.map((request) => {
+            if (request.id !== requestId || request.status !== "pending") return request;
+            completed = true;
+            return { ...request, status: "resolved", resolution, error: undefined };
+          }),
+        }));
+        return completed;
+      },
+      failPlayerCheck: (requestId, errorMessage) => {
+        set((state) => ({
+          playerCheckRequests: state.playerCheckRequests.map((request) =>
+            request.id === requestId && request.status === "pending"
+              ? { ...request, error: errorMessage }
+              : request),
+        }));
+      },
       updateWorldFact: (index, value) => {
         const state = get();
         get().dispatchGameCommand(createStoreGameCommand(state, {
@@ -6498,6 +6618,7 @@ export const useGameStore = create<GameState>()(
         pendingGameDecision: state.pendingGameDecision,
         pendingActionIntents: state.pendingActionIntents,
         diceRolls: state.diceRolls,
+        playerCheckRequests: state.playerCheckRequests,
         characterPortraits: state.characterPortraits,
         uiSettings: state.uiSettings,
         itemTemplates: state.itemTemplates,

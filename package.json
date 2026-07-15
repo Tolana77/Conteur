@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "test:game-engine": "node test/game-command-engine.test.mjs",
     "test:ai-director": "node test/ai-director-foundations.test.mjs",
+    "test:player-checks": "node test/player-checks.test.mjs",
+    "test:character-creation": "node test/character-creation.test.mjs",
     "test:content-creation": "node test/content-creation.test.mjs",
     "test:objects": "node test/objects-effects.test.cjs"
   },

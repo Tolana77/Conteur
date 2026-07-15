@@ -2,7 +2,7 @@ import { executeAdminCommand, type AdminCommandResult } from "../admin/adminComm
 import type { GameState } from "../../store/useGameStore";
 import type { AiPromptSnapshot } from "./promptBuilder";
 import type { AiDirectorCommand } from "./types";
-import { executeImprovisedCheck } from "./improvisedActions";
+import { prepareImprovisedCheck } from "./improvisedActions";
 import {
   parseAbilityTemplate,
   parseEffectTemplate,
@@ -41,6 +41,7 @@ type AiExecutionActions = Pick<
   | "moveCombatant"
   | "nextCombatTurn"
   | "rollFormula"
+  | "queuePlayerCheck"
   | "spendItemQuantity"
   | "recordCampaignEvent"
   | "registerEffectTemplate"
@@ -65,16 +66,23 @@ export function executeAiCommand(
   }
 
   if (command.type === "abilityCheck" || command.type === "skillCheck" || command.type === "resolveGameAction") {
-    return executeImprovisedCheck(command, {
+    const preparation = prepareImprovisedCheck(command, {
       characters: snapshot.characters,
       selectedCharacterId: snapshot.selectedCharacterId,
       derivedScores: snapshot.characterDerivedScores,
-      itemInstances: snapshot.itemInstances,
-      itemTemplates: snapshot.itemTemplates,
-      rollFormula: actions.rollFormula,
-      spendItemQuantity: actions.spendItemQuantity,
-      recordCampaignEvent: actions.recordCampaignEvent,
     });
+
+    if (preparation.status === "error") {
+      return { status: "error", message: preparation.message, command: command.type };
+    }
+    if (preparation.status === "noRoll") {
+      return { status: "success", message: preparation.message, command: command.type };
+    }
+
+    const request = actions.queuePlayerCheck(preparation.request);
+    return request
+      ? { status: "success", message: `${preparation.message} Le résultat reste en attente du joueur.`, command: command.type }
+      : { status: "error", message: "Le jet n'a pas pu être proposé au joueur.", command: command.type };
   }
 
   if (command.type === "modifyItem") {

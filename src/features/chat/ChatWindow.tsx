@@ -3,6 +3,7 @@ import { useGameStore } from "../../store/useGameStore";
 import { IlluminatedInitial } from "../../ui/components/IlluminatedInitial";
 import { HighlightedGameText } from "../../ui/gameTerms";
 import { AnimatedDiceRollCard } from "../dice/DiceRollOverlay";
+import { PlayerCheckCard } from "../dice/PlayerCheckCard";
 import { ChatInput } from "./ChatInput";
 import { MessageBubble } from "./MessageBubble";
 
@@ -11,6 +12,7 @@ const seenChatRollIds = new Set<string>();
 export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (intentId: string) => void }) {
   const messages = useGameStore((state) => state.messages);
   const diceRolls = useGameStore((state) => state.diceRolls);
+  const playerCheckRequests = useGameStore((state) => state.playerCheckRequests);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const initializedRollsRef = useRef(false);
   const animatedRollIdsRef = useRef(new Set<string>());
@@ -31,6 +33,9 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
   const feedItems = [
     ...messages.map((message) => ({ id: message.id, timestamp: message.timestamp, type: "message" as const, message })),
     ...publicRolls.map((roll) => ({ id: roll.id, timestamp: roll.timestamp, type: "roll" as const, roll })),
+    ...playerCheckRequests
+      .filter((request) => request.status !== "cancelled")
+      .map((request) => ({ id: request.id, timestamp: request.createdAt, type: "check" as const, request })),
   ].sort((a, b) => a.timestamp - b.timestamp);
 
   useEffect(() => {
@@ -58,7 +63,7 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
           {feedItems.map((item) => (
             item.type === "message" ? (
               <MessageBubble key={item.id} message={item.message} />
-            ) : (
+            ) : item.type === "roll" ? (
               <article className="flex justify-start" key={item.id}>
                 <AnimatedDiceRollCard
                   className="dice-roll-card--chat"
@@ -66,6 +71,8 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
                   shouldAnimate={animatedRollIdsRef.current.has(item.id)}
                 />
               </article>
+            ) : (
+              <PlayerCheckCard key={item.id} request={item.request} />
             )
           ))}
         </div>

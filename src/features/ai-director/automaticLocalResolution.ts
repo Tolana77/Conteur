@@ -62,9 +62,11 @@ export function resolveAutomaticLocalRequest(
     if (resolution.handled) return { ...resolution, handlerId: handler.id };
   }
 
+  const approachClarification = resolveApproachClarification(playerInput);
   const supportingPatches = [
     resolveMissingInventoryClaim(playerInput, state),
-    resolveSocialCoherenceConstraint(playerInput, state),
+    approachClarification,
+    approachClarification ? undefined : resolveSocialCoherenceConstraint(playerInput, state),
     resolveWaitingContinuityConstraint(playerInput, state),
   ].filter((patch): patch is AiResolutionDraftPatch => Boolean(patch));
 
@@ -79,6 +81,48 @@ export function resolveAutomaticLocalRequest(
   }
 
   return { handled: false, commands: [] };
+}
+
+function resolveApproachClarification(playerInput: string): AiResolutionDraftPatch | undefined {
+  const text = normalize(playerInput);
+  const searchesCommonPlace = /\b(cherche|trouve|localise|repere)\b.{0,45}\b(taverne|auberge|marche|boutique|temple|fontaine|place)\b/u.test(text);
+  const describesSearchMethod = /\b(demande|interroge|questionne|observe|regarde|inspecte|consulte|lis|enseignes|panneaux|me promene|marche|arpente|parcours|suis)\b/u.test(text);
+
+  if (searchesCommonPlace && !describesSearchMethod) {
+    return {
+      narrationInputs: [{
+        source: "localEngine",
+        content: "Donner d'abord les repères immédiatement perceptibles dans la scène, sans inventer de découverte ni lancer de dé.",
+        visibility: "gmOnly",
+        priority: "high",
+      }],
+      questions: ["Comment vous y prenez-vous : demandez-vous votre chemin, observez-vous les enseignes ou parcourez-vous les rues ?"],
+      warnings: ["La méthode de recherche manque et déterminerait la compétence; aucun test ne doit être créé avant la réponse."],
+    };
+  }
+
+  const targetsAuthority = /\b(vole|derobe|subtilise|depouille)\b.{0,70}\b(roi|reine|prince|princesse|souverain|noble|officier)\b/u.test(text);
+  const describesTheftMethod = /\b(discretement|en cachette|me faufile|detourne|distrais|menace|attaque|mens|deguise|pendant que|profitant)\b/u.test(text);
+  const identifiesObject = /\b(epee|couronne|bourse|bijou|anneau|sceau|cle|document|lettre|arme|objet|or|piece)\b/u.test(text);
+
+  if (targetsAuthority && (!describesTheftMethod || !identifiesObject)) {
+    return {
+      facts: [{
+        source: "localEngine",
+        kind: "highRiskIntent",
+        content: "L'intention vise une autorité majeure. Elle n'est pas encore exécutée : rendre immédiatement perceptibles la surveillance, les témoins ou la gravité sociale déjà établis dans la scène avant de demander une précision.",
+        visibility: "gmOnly",
+      }],
+      questions: [
+        identifiesObject
+          ? "L'entreprise paraît dangereuse. Comment comptez-vous approcher votre cible et vous emparer de l'objet ?"
+          : "L'entreprise paraît dangereuse. Que cherchez-vous à dérober exactement, et comment comptez-vous approcher votre cible ?",
+      ],
+      warnings: ["Une intention criminelle vague reste une intention; aucune conséquence mécanique ou sociale n'est appliquée avant sa précision."],
+    };
+  }
+
+  return undefined;
 }
 
 const ITEM_RESOURCE_GROUPS = [

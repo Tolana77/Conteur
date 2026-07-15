@@ -1,4 +1,10 @@
-import type { CombatPosition, NarrativeScenePatch } from "../../app/types";
+import type {
+  CombatPosition,
+  NarrativeScenePatch,
+  PlayerCheckDifficulty,
+  PlayerCheckOutcomeHints,
+  PlayerCheckResourceCost,
+} from "../../app/types";
 
 export type AiAgentId =
   | "requestAnalyzer"
@@ -26,20 +32,9 @@ export interface AiAgentRequest {
   input?: unknown;
 }
 
-export type ImprovisedDifficulty = "routine" | "plausible" | "difficult" | "extreme" | "legendary";
-
-export interface ImprovisedOutcomeHints {
-  critical?: string;
-  success?: string;
-  partial?: string;
-  failure?: string;
-}
-
-export interface ImprovisedResourceCost {
-  itemId: string;
-  quantity: number;
-  timing?: "attempt" | "success";
-}
+export type ImprovisedDifficulty = PlayerCheckDifficulty;
+export type ImprovisedOutcomeHints = PlayerCheckOutcomeHints;
+export type ImprovisedResourceCost = PlayerCheckResourceCost;
 
 export type AiDirectorCommand =
   | { type: "sendNarration"; content: string }

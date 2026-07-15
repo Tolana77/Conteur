@@ -2,6 +2,7 @@ import type { Character } from "../../core/models";
 
 export const defaultCharacter: Character = {
   id: "character-player",
+  campaignId: "campaign-empty",
   name: "Aventurier",
   espece: "À définir",
   classe: "Sans classe",

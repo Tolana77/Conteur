@@ -15,7 +15,7 @@ import {
   normalizeNarrativeScene,
 } from "../../core/game-engine/narrativeScene";
 
-export const CAMPAIGN_START_VERSION = 3 as const;
+export const CAMPAIGN_START_VERSION = 4 as const;
 
 export interface CampaignStartSnapshot {
   version: typeof CAMPAIGN_START_VERSION;
@@ -35,7 +35,10 @@ export interface CampaignStartSnapshot {
 export function createCampaignStartSnapshot(
   snapshot: Omit<CampaignStartSnapshot, "version">,
 ): CampaignStartSnapshot {
-  const characters = cloneSerializable(snapshot.characters);
+  const characters = cloneSerializable(snapshot.characters).map((character) => ({
+    ...character,
+    campaignId: snapshot.campaign.id,
+  }));
   return cloneSerializable({
     ...snapshot,
     version: CAMPAIGN_START_VERSION,
@@ -60,13 +63,17 @@ export function isCampaignStartSnapshot(value: unknown): value is CampaignStartS
 /** Ajoute la mémoire de scène aux instantanés créés avant la version 2. */
 export function normalizeCampaignStartSnapshot(value: unknown): CampaignStartSnapshot | null {
   if (!hasCampaignStartFields(value)) return null;
+  const characters = value.characters.map((character) => ({
+    ...character,
+    campaignId: value.campaign.id,
+  }));
   const narrativeScene = value.narrativeScene && typeof value.narrativeScene === "object"
     ? normalizeNarrativeScene(value.narrativeScene, value.campaign)
     : createInitialNarrativeScene(value.campaign, value.openingScene);
 
   return createCampaignStartSnapshot({
     campaign: value.campaign,
-    characters: value.characters,
+    characters,
     selectedCharacterId: value.selectedCharacterId,
     openingScene: value.openingScene,
     itemTemplates: value.itemTemplates,
