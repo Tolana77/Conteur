@@ -23,6 +23,7 @@ import {
   isContentTemplateActive,
   type DisabledContentTemplateIds,
 } from "../content";
+import { ITEM_CREATION_POLICY_TEXT } from "../items/itemCreationPolicy";
 import type {
   AiAgentId,
   AiAgentRequest,
@@ -207,6 +208,7 @@ export function buildAiDirectorPrompt(
           "# Contrat de création de contenu",
           assetContentSchemaText,
           "Crée les dépendances dans l'ordre effet, capacité, objet, puis instance. Le moteur réordonnera les commandes avant leur validation.",
+          ITEM_CREATION_POLICY_TEXT,
         ]
       : []),
     ...(agentId === "tacticalTemplateManager"
@@ -999,10 +1001,15 @@ function createReusableItemTemplateContext(templates: ItemTemplate[]) {
     id: template.id,
     name: template.name,
     description: template.description,
+    rarity: template.rarity,
+    requiresAttunement: template.requiresAttunement,
     types: template.types,
     tags: template.tags,
     base: template.base,
     effects: template.effects,
+    attacks: template.attacks,
+    attackModifiers: template.attackModifiers,
+    targetingV2: template.targetingV2,
   }));
 }
 

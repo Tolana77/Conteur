@@ -106,7 +106,13 @@ const assistedJson = {
     abilityTemplateIds: ["ability-spark-thread"],
     history: ["Elle recherche toujours la lettre disparue."],
   },
-  startingItems: [{ templateId: "tpl_rations", quantity: 3, equipped: false }],
+  startingItems: [{
+    templateId: "tpl_rations",
+    name: "Galettes du gué d'Ormeval",
+    description: "Des galettes d'avoine marquées du sceau des passeurs.",
+    quantity: 3,
+    equipped: false,
+  }],
   effectTemplates: [{
     id: "effect-spark-thread",
     name: "Fil d'étincelle",
@@ -236,6 +242,9 @@ assert.equal(start.characters.length, 1);
 assert.equal(start.characters[0].campaignId, start.campaign.id);
 assert.equal(start.campaign.characters[0].campaignId, start.campaign.id);
 assert.equal(start.itemInstances[0].location.parent, start.characters[0].id);
+assert.equal(start.itemInstances[0].templateId, "tpl_rations");
+assert.equal(start.itemInstances[0].overrides.name, "Galettes du gué d'Ormeval");
+assert.equal(start.itemInstances[0].overrides.description, "Des galettes d'avoine marquées du sceau des passeurs.");
 assert.equal(start.abilityInstances[0].ownerId, start.characters[0].id);
 assert.ok(start.abilityTemplates.some((template) => template.id === "ability-spark-thread"));
 assert.ok(start.effectTemplates.some((template) => template.id === "effect-spark-thread"));

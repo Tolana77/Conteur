@@ -1,3 +1,8 @@
+import {
+  getAgentPromptLimit,
+  isKnownAiAgentId,
+} from "../../shared/aiGatewayPolicy.js";
+
 const requestWindows = new Map();
 
 export const config = {
@@ -41,10 +46,11 @@ export default async (request) => {
     return json({ error: "INVALID_JSON", message: "Le corps de la requête doit être un JSON valide." }, 400, request);
   }
 
-  if (!isValidPayload(payload)) {
+  const payloadError = getPayloadError(payload);
+  if (payloadError) {
     return json({
       error: "INVALID_REQUEST",
-      message: "agentId et prompt sont obligatoires, et le budget de contexte de cet agent doit être respecté.",
+      message: payloadError,
     }, 400, request);
   }
 
@@ -70,16 +76,17 @@ function getConfigurationError() {
   return null;
 }
 
-function isValidPayload(value) {
-  return Boolean(
-    value
-      && typeof value === "object"
-      && typeof value.agentId === "string"
-      && value.agentId.length > 0
-      && typeof value.prompt === "string"
-      && value.prompt.length > 0
-      && value.prompt.length <= getMaxPromptLength(value.agentId),
-  );
+export function getPayloadError(value) {
+  if (!value || typeof value !== "object") return "Le corps de la requête doit être un objet.";
+  if (typeof value.agentId !== "string" || !value.agentId.trim()) return "agentId est obligatoire.";
+  if (!isKnownAiAgentId(value.agentId)) return `Agent inconnu : ${value.agentId}.`;
+  if (typeof value.prompt !== "string" || !value.prompt.trim()) return "prompt est obligatoire.";
+
+  const limit = getAgentPromptLimit(value.agentId);
+  if (value.prompt.length > limit) {
+    return `Le prompt de ${value.agentId} dépasse son budget (${value.prompt.length}/${limit} caractères).`;
+  }
+  return null;
 }
 
 async function callCompatibleProvider(agentId, prompt) {
@@ -124,22 +131,6 @@ function getMaxTokens(agentId) {
   };
   const maximum = agentMaximums[agentId] ?? 600;
   return Math.min(Number.isFinite(configuredMaximum) ? configuredMaximum : 700, maximum);
-}
-
-function getMaxPromptLength(agentId) {
-  const limits = {
-    narrationManager: 7_000,
-    requestAnalyzer: 6_000,
-    rulesValidator: 10_000,
-    characterManager: 9_000,
-    actionManager: 7_000,
-    combatManager: 12_000,
-    combatSetupManager: 10_000,
-    tacticalTemplateManager: 14_000,
-    assetTemplateManager: 16_000,
-    worldManager: 8_000,
-  };
-  return limits[agentId] ?? 16_000;
 }
 
 class ProviderError extends Error {

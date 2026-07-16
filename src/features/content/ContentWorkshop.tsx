@@ -506,6 +506,7 @@ function createTemplateSkeleton(kind: ContentTemplateKind, id: string): ContentT
       tags: [],
       name: "Nouvel objet",
       description: "Décris l'objet sans inventer d'état mutable dans le template.",
+      rarity: "mundane",
       base: { weight: 0 },
       effects: [],
       modules: { item: {} },

@@ -33,6 +33,7 @@ import {
   initialItemTemplates,
   isItemEquipable,
   isItemUsable,
+  normalizeItemRarity,
   preventsUnequip,
 } from "../features/items";
 import {
@@ -61,6 +62,13 @@ import {
   toLegacyTargetingRule,
 } from "../features/combat/targeting";
 import { getCombatConditionTemplate } from "../features/combat/conditionTemplates";
+import {
+  appendCombatNarrationCue,
+  collectNewNarratableCombatEntries,
+  createCombatNarrationCue,
+  isLegacyTechnicalCombatMessage,
+  normalizeCombatNarrationQueue,
+} from "../features/combat/combatNarration";
 import { resolveEffectValue, type ValueExpressionContext } from "../features/items/valueExpressions";
 import type {
   Campaign,
@@ -75,6 +83,7 @@ import type {
   ChatActionIntentKind,
   Combatant,
   CombatLogEntry,
+  CombatNarrationCue,
   CombatMapElementEffect,
   CombatMapElementKind,
   CombatScene,
@@ -100,7 +109,7 @@ import type {
 import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 30;
+export const GAME_STORAGE_VERSION = 33;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -142,6 +151,7 @@ export interface GameState {
   disabledContentTemplateIds: DisabledContentTemplateIds;
   contentAuditLog: ContentAuditEntry[];
   combat: CombatScene;
+  combatNarrationQueue: CombatNarrationCue[];
   aiApiTraces: AiApiTrace[];
   campaignStartSnapshot: CampaignStartSnapshot;
   narrativeScene: NarrativeSceneState;
@@ -192,6 +202,7 @@ export interface GameState {
   disengageCombatant: (combatantId: string) => void;
   nextCombatTurn: () => void;
   attackCombatant: (attackerId: string, targetId: string, weaponName: string, damage: number) => void;
+  consumeCombatNarrationCues: (cueIds: string[]) => void;
   addAttackIntent: (weaponId: string, label: string, target?: ActionTarget) => boolean;
   addActionIntent: (kind: ChatActionIntentKind, targetId: string, label: string, target?: ActionTarget) => boolean;
   updateActionIntentTarget: (intentId: string, target: ActionTarget) => void;
@@ -205,7 +216,7 @@ export interface GameState {
   restartCampaign: () => void;
   advanceNarrativeScene: (playerAction: string) => void;
   applyNarrativeScenePatch: (patch: NarrativeScenePatch) => void;
-  recordNarratedBeat: (narration: string) => void;
+  recordNarratedBeat: (narration: string, proactiveKey?: string) => void;
   addGmMessage: (content: string) => void;
   sendPlayerMessage: (content: string) => void;
   setPendingGameDecision: (decision: PendingGameDecision | null) => void;
@@ -715,6 +726,7 @@ type GameDataState = Pick<
   | "disabledContentTemplateIds"
   | "contentAuditLog"
   | "combat"
+  | "combatNarrationQueue"
   | "aiApiTraces"
   | "campaignStartSnapshot"
   | "narrativeScene"
@@ -798,6 +810,7 @@ function createInitialState(): GameDataState {
     disabledContentTemplateIds: createEmptyDisabledContentTemplateIds(),
     contentAuditLog: [],
     combat: createEmptyCombatScene(),
+    combatNarrationQueue: [],
     aiApiTraces: [],
     campaignStartSnapshot,
     narrativeScene,
@@ -840,6 +853,7 @@ function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<Ga
     disabledContentTemplateIds: createEmptyDisabledContentTemplateIds(),
     contentAuditLog: [],
     combat: createEmptyCombatScene(),
+    combatNarrationQueue: [],
     aiApiTraces: [],
     campaignStartSnapshot: start,
     narrativeScene: normalizeNarrativeScene(start.narrativeScene, start.campaign),
@@ -882,7 +896,9 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   if (!hasCurrentCharacterModel) {
     return {
       ...initialState,
-      messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
+      messages: Array.isArray(candidate.messages)
+        ? candidate.messages.filter((message) => !isLegacyTechnicalCombatMessage(message))
+        : initialState.messages,
       narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
       pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
       pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
@@ -916,6 +932,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       disabledContentTemplateIds: normalizeDisabledContentTemplateIds(candidate.disabledContentTemplateIds),
       contentAuditLog: normalizeContentAuditLog(candidate.contentAuditLog),
       combat: normalizeCombatScene(candidate.combat, initialState.combat),
+      combatNarrationQueue: normalizeCombatNarrationQueue(candidate.combatNarrationQueue),
       aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
       campaignStartSnapshot: initialState.campaignStartSnapshot,
       characterDerivedScores: createCharacterDerivedScores(
@@ -971,7 +988,13 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   const gameRevision = normalizeGameRevision(candidate.gameRevision, gameEvents);
   const normalizedCampaignStartSnapshot = normalizeCampaignStartSnapshot(candidate.campaignStartSnapshot);
   const campaignStartSnapshot = normalizedCampaignStartSnapshot
-    ? cloneCampaignStartSnapshot(normalizedCampaignStartSnapshot)
+    ? createCampaignStartSnapshot({
+        ...cloneCampaignStartSnapshot(normalizedCampaignStartSnapshot),
+        itemTemplates: mergeItemTemplates(
+          normalizedCampaignStartSnapshot.itemTemplates,
+          initialState.itemTemplates,
+        ),
+      })
     : createCampaignStartSnapshot({
         campaign,
         characters,
@@ -995,7 +1018,9 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     campaign,
     characters,
     selectedCharacterId,
-    messages: Array.isArray(candidate.messages) ? candidate.messages : initialState.messages,
+    messages: Array.isArray(candidate.messages)
+      ? candidate.messages.filter((message) => !isLegacyTechnicalCombatMessage(message))
+      : initialState.messages,
     narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
     pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
     pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
@@ -1017,6 +1042,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     disabledContentTemplateIds: normalizeDisabledContentTemplateIds(candidate.disabledContentTemplateIds),
     contentAuditLog: normalizeContentAuditLog(candidate.contentAuditLog),
     combat: normalizeCombatScene(candidate.combat, initialState.combat),
+    combatNarrationQueue: normalizeCombatNarrationQueue(candidate.combatNarrationQueue),
     aiApiTraces: normalizeAiApiTraces(candidate.aiApiTraces),
     campaignStartSnapshot,
     narrativeScene,
@@ -1409,6 +1435,10 @@ function mergeItemTemplates(
       type: defaultTemplate.type,
       types: defaultTemplate.types,
       tags: defaultTemplate.tags,
+      name: defaultTemplate.name,
+      description: defaultTemplate.description,
+      rarity: defaultTemplate.rarity,
+      requiresAttunement: defaultTemplate.requiresAttunement,
       aliases: defaultTemplate.aliases ?? template.aliases,
       base: defaultTemplate.base,
       effects: defaultTemplate.effects,
@@ -1471,6 +1501,7 @@ function normalizeItemTemplateModules(template: ItemTemplate): ItemTemplate {
 
   return {
     ...template,
+    rarity: normalizeItemRarity(template.rarity),
     types: normalizedTypes,
     tags: normalizedTags,
     modules: {
@@ -2009,11 +2040,17 @@ function createCharacterDerivedScore(
     effectTemplates,
   );
   const proficiencyBonus = getProficiencyBonus(context.level);
+  const defense = getEquippedDefense(
+    character,
+    context.modifiers.dexterite,
+    itemInstances,
+    itemTemplates,
+  );
 
   return {
     modifiers: context.modifiers,
     proficiencyBonus,
-    defense: 10 + context.modifiers.dexterite,
+    defense,
     initiative: context.modifiers.dexterite,
     speed: character.espece.toLowerCase().includes("nain") ? 7.5 : 9,
     mana: Math.max(0, context.modifiers.charisme + character.niveau),
@@ -2024,6 +2061,42 @@ function createCharacterDerivedScore(
     },
     updatedAt: Date.now(),
   };
+}
+
+function getEquippedDefense(
+  character: Character,
+  dexterityModifier: number,
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+): number {
+  const equipped = itemInstances.flatMap((item) => {
+    if (item.location.type !== "equipped" || item.location.parent !== character.id) return [];
+    const template = itemTemplates.find((candidate) => candidate.id === item.templateId);
+    return template ? [{ item, template }] : [];
+  });
+  const armorValues = equipped.flatMap(({ item, template }) => {
+    const defenseBase = getItemBaseNumber(item, template, "defenseBase");
+    if (defenseBase === null) return [];
+    const minDexBonus = getItemBaseNumber(item, template, "minDexBonus") ?? Number.NEGATIVE_INFINITY;
+    const maxDexBonus = getItemBaseNumber(item, template, "maxDexBonus") ?? 99;
+    const appliedDexterity = Math.max(minDexBonus, Math.min(dexterityModifier, maxDexBonus));
+    return [defenseBase + appliedDexterity];
+  });
+  const bestArmor = armorValues.length > 0
+    ? Math.max(...armorValues)
+    : 10 + dexterityModifier;
+  const bestDefenseBonus = Math.max(0, ...equipped.map(({ item, template }) =>
+    getItemBaseNumber(item, template, "defenseBonus") ?? 0));
+  return bestArmor + bestDefenseBonus;
+}
+
+function getItemBaseNumber(
+  item: ItemInstance,
+  template: ItemTemplate,
+  key: string,
+): number | null {
+  const value = item.overrides[`base.${key}`] ?? template.base[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function createCharacterDerivedScores(
@@ -3391,16 +3464,15 @@ function applyVisibilityReactionTriggers({
   itemInstances: ItemInstance[];
   itemTemplates: ItemTemplate[];
   movedCombatantId: string;
-}): { combat: CombatScene; messages: Message[]; pendingActionIntents: ChatActionIntent[] } {
+}): { combat: CombatScene; pendingActionIntents: ChatActionIntent[] } {
   const movedBefore = beforeCombat.combatants.find((combatant) => combatant.id === movedCombatantId);
   const movedAfter = afterCombat.combatants.find((combatant) => combatant.id === movedCombatantId);
 
   if (!movedBefore || !movedAfter || movedAfter.hp <= 0) {
-    return { combat: afterCombat, messages: [], pendingActionIntents: [] };
+    return { combat: afterCombat, pendingActionIntents: [] };
   }
 
   const logs: CombatLogEntry[] = [];
-  const messages: Message[] = [];
   const pendingActionIntents: ChatActionIntent[] = [];
 
   afterCombat.combatants
@@ -3460,12 +3532,6 @@ function applyVisibilityReactionTriggers({
       };
 
       pendingActionIntents.push(intent);
-      messages.push({
-        id: `message-gm-reaction-${crypto.randomUUID()}`,
-        sender: "gm",
-        content: `${currentTarget.name} apparaît dans le champ de vision de ${watcher.name}. Souhaitez-vous utiliser votre réaction pour utiliser la capacité ${template.name} ?`,
-        timestamp: Date.now(),
-      });
       logs.push(createCombatLog(
         "action",
         `${watcher.name} peut utiliser ${template.name} en réaction contre ${currentTarget.name}.`,
@@ -3479,7 +3545,6 @@ function applyVisibilityReactionTriggers({
           log: [...logs, ...afterCombat.log].slice(0, 30),
         }
       : afterCombat,
-    messages,
     pendingActionIntents,
   };
 }
@@ -5831,6 +5896,7 @@ export const useGameStore = create<GameState>()(
           const combatants = [...existingCombatants, ...characterCombatants, ...npcCombatants]
             .map(resetCombatantTurnResources)
             .sort((a, b) => b.initiative - a.initiative);
+          const openingLog = createCombatLog("system", "Le combat commence.");
 
           return {
             combat: {
@@ -5840,21 +5906,36 @@ export const useGameStore = create<GameState>()(
               turnIndex: 0,
               combatants,
               log: [
-                createCombatLog("system", "Le combat commence."),
+                openingLog,
                 ...state.combat.log,
               ].slice(0, 30),
             },
+            combatNarrationQueue: appendCombatNarrationCue(
+              state.combatNarrationQueue,
+              createCombatNarrationCue("transition", 1, [{ type: openingLog.type, text: openingLog.text }]),
+            ),
           };
         });
       },
       endCombat: () => {
-        set((state) => ({
-          combat: {
-            ...state.combat,
-            status: "ended",
-            log: [createCombatLog("system", "Le combat se termine."), ...state.combat.log].slice(0, 30),
-          },
-        }));
+        set((state) => {
+          const closingLog = createCombatLog("system", "Le combat se termine.");
+          return {
+            combat: {
+              ...state.combat,
+              status: "ended",
+              log: [closingLog, ...state.combat.log].slice(0, 30),
+            },
+            combatNarrationQueue: appendCombatNarrationCue(
+              state.combatNarrationQueue,
+              createCombatNarrationCue(
+                "transition",
+                state.combat.round,
+                [{ type: closingLog.type, text: closingLog.text }],
+              ),
+            ),
+          };
+        });
       },
       addCharacterToCombat: (characterId) => {
         set((state) => {
@@ -6081,18 +6162,14 @@ export const useGameStore = create<GameState>()(
             characters,
             campaign: { ...state.campaign, characters },
             combat,
-            messages: [
-              ...state.messages,
-              {
-                id: `message-gm-combat-${crypto.randomUUID()}`,
-                sender: "gm",
-                content: `${combatant.name} se déplace de ${distance.toFixed(1)} m${
-                  Math.abs(movementCost - distance) > 0.05 ? ` (${movementCost.toFixed(1)} m consommés)` : ""
-                }.`,
-                timestamp: Date.now(),
-              },
-              ...reactionState.messages,
-            ],
+            combatNarrationQueue: appendCombatNarrationCue(
+              state.combatNarrationQueue,
+              createCombatNarrationCue(
+                "movement",
+                combat.round,
+                collectNewNarratableCombatEntries(beforeCombat, combat),
+              ),
+            ),
             pendingActionIntents: [
               ...reactionState.pendingActionIntents,
               ...state.pendingActionIntents,
@@ -6115,26 +6192,30 @@ export const useGameStore = create<GameState>()(
             return state;
           }
 
+          const actionLog = createCombatLog("action", `${combatant.name} se désengage et surveille ses retraits.`);
+          const combat: CombatScene = {
+            ...state.combat,
+            combatants: state.combat.combatants.map((candidate) =>
+              candidate.id === combatantId
+                ? {
+                    ...candidate,
+                    resources: {
+                      ...candidate.resources,
+                      action: Math.max(0, candidate.resources.action - 1),
+                      disengaged: true,
+                    },
+                  }
+                : candidate,
+            ),
+            log: [actionLog, ...state.combat.log].slice(0, 30),
+          };
+
           return {
-            combat: {
-              ...state.combat,
-              combatants: state.combat.combatants.map((candidate) =>
-                candidate.id === combatantId
-                  ? {
-                      ...candidate,
-                      resources: {
-                        ...candidate.resources,
-                        action: Math.max(0, candidate.resources.action - 1),
-                        disengaged: true,
-                      },
-                    }
-                  : candidate,
-              ),
-              log: [
-                createCombatLog("action", `${combatant.name} se désengage et surveille ses retraits.`),
-                ...state.combat.log,
-              ].slice(0, 30),
-            },
+            combat,
+            combatNarrationQueue: appendCombatNarrationCue(
+              state.combatNarrationQueue,
+              createCombatNarrationCue("action", combat.round, [{ type: actionLog.type, text: actionLog.text }]),
+            ),
           };
         });
       },
@@ -6144,10 +6225,10 @@ export const useGameStore = create<GameState>()(
             return state;
           }
 
+          const beforeCombat = state.combat;
           let combat = state.combat;
           let characters = state.characters;
           const diceRolls: DiceRoll[] = [];
-          const combatMessages: Message[] = [];
           const reactionIntents: ChatActionIntent[] = [];
           let guard = 0;
 
@@ -6173,13 +6254,6 @@ export const useGameStore = create<GameState>()(
                 ...combat.log,
               ].slice(0, 30),
             };
-            combatMessages.push({
-              id: `message-gm-turn-${crypto.randomUUID()}`,
-              sender: "gm",
-              content: `Tour de ${activeCombatant?.name ?? "combattant inconnu"}${nextIndex === 0 ? `, tour ${nextRound}` : ""}.`,
-              timestamp: Date.now(),
-            });
-
             if (activeCombatant) {
               const terrainState = applyCombatMapElementEffects({
                 combat,
@@ -6205,7 +6279,6 @@ export const useGameStore = create<GameState>()(
                 movedCombatantId: activeCombatant.id,
               });
               combat = reactionState.combat;
-              combatMessages.push(...reactionState.messages);
               reactionIntents.push(...reactionState.pendingActionIntents);
             }
 
@@ -6220,7 +6293,14 @@ export const useGameStore = create<GameState>()(
             characters,
             campaign: { ...state.campaign, characters },
             combat,
-            messages: [...state.messages, ...combatMessages],
+            combatNarrationQueue: appendCombatNarrationCue(
+              state.combatNarrationQueue,
+              createCombatNarrationCue(
+                "enemyTurn",
+                combat.round,
+                collectNewNarratableCombatEntries(beforeCombat, combat),
+              ),
+            ),
             pendingActionIntents: [
               ...reactionIntents,
               ...state.pendingActionIntents,
@@ -6256,18 +6336,32 @@ export const useGameStore = create<GameState>()(
             }));
           }
 
+          const damageLog = createCombatLog(
+            "damage",
+            `${attacker.name} attaque ${target.name} avec ${weaponName} et inflige ${damage} dégâts.`,
+          );
+          const combat: CombatScene = {
+            ...spendCombatAction({ ...state.combat, combatants }, attacker.id, "action"),
+            log: [damageLog, ...state.combat.log].slice(0, 30),
+          };
+
           return {
             characters,
             campaign: { ...state.campaign, characters },
-            combat: {
-              ...spendCombatAction({ ...state.combat, combatants }, attacker.id, "action"),
-              log: [
-                createCombatLog("damage", `${attacker.name} attaque ${target.name} avec ${weaponName} et inflige ${damage} dégâts.`),
-                ...state.combat.log,
-              ].slice(0, 30),
-            },
+            combat,
+            combatNarrationQueue: appendCombatNarrationCue(
+              state.combatNarrationQueue,
+              createCombatNarrationCue("action", combat.round, [{ type: damageLog.type, text: damageLog.text }]),
+            ),
           };
         });
+      },
+      consumeCombatNarrationCues: (cueIds) => {
+        if (cueIds.length === 0) return;
+        const consumedIds = new Set(cueIds);
+        set((state) => ({
+          combatNarrationQueue: state.combatNarrationQueue.filter((cue) => !consumedIds.has(cue.id)),
+        }));
       },
       addAttackIntent: (weaponId, label, target) => {
         const state = get();
@@ -6435,11 +6529,11 @@ export const useGameStore = create<GameState>()(
           payload: { patch },
         }));
       },
-      recordNarratedBeat: (narration) => {
+      recordNarratedBeat: (narration, proactiveKey) => {
         const state = get();
         get().dispatchGameCommand(createStoreGameCommand(state, {
           type: "narrative.recordBeat",
-          payload: { narration },
+          payload: { narration, ...(proactiveKey ? { proactiveKey } : {}) },
         }));
       },
       addGmMessage: (content) => {
@@ -6460,14 +6554,6 @@ export const useGameStore = create<GameState>()(
 
         const actionReceipt = createGameActionReceipt(state, resolvedActions);
         const playerMessage = createMessage("player", trimmedContent, resolvedActions.executedIntents, actionReceipt);
-        const combatSummaryMessage = resolvedActions.executedIntents.length > 0
-          ? createMessage(
-              "gm",
-              `Résumé combat : ${resolvedActions.executedIntents
-                .map((intent) => `${intent.label}${intent.target ? ` → ${intent.target.label}` : ""}`)
-                .join(" ; ")}.`,
-            )
-          : null;
 
         set({
           characters: resolvedActions.characters,
@@ -6475,11 +6561,7 @@ export const useGameStore = create<GameState>()(
           itemInstances: resolvedActions.itemInstances,
           abilityInstances: resolvedActions.abilityInstances,
           combat: resolvedActions.combat,
-          messages: [
-            ...state.messages,
-            playerMessage,
-            ...(combatSummaryMessage ? [combatSummaryMessage] : []),
-          ],
+          messages: [...state.messages, playerMessage],
           pendingActionIntents: [],
           diceRolls: [...resolvedActions.diceRolls, ...state.diceRolls].slice(0, 8),
         });
@@ -6630,6 +6712,7 @@ export const useGameStore = create<GameState>()(
         disabledContentTemplateIds: state.disabledContentTemplateIds,
         contentAuditLog: state.contentAuditLog,
         combat: state.combat,
+        combatNarrationQueue: state.combatNarrationQueue,
         aiApiTraces: state.aiApiTraces,
         campaignStartSnapshot: state.campaignStartSnapshot,
         narrativeScene: state.narrativeScene,

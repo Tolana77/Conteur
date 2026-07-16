@@ -1,5 +1,6 @@
 import type { AiAgentId } from "./types";
 import { useGameStore } from "../../store/useGameStore";
+import { fitAgentPromptToBudget } from "../../../shared/aiGatewayPolicy.js";
 
 export class AiGatewayError extends Error {
   constructor(message: string, readonly code: string, readonly status: number) {
@@ -41,12 +42,14 @@ export async function checkAiGatewayHealth(): Promise<AiGatewayHealth> {
 
 export async function runAgentOverHttp(agentId: AiAgentId, prompt: string): Promise<string> {
   const startedAt = Date.now();
+  let preparedPrompt = prompt;
 
   try {
+    preparedPrompt = fitAgentPromptToBudget(agentId, prompt);
     const response = await fetch("/api/mj", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId, prompt }),
+      body: JSON.stringify({ agentId, prompt: preparedPrompt }),
     });
     const rawResponse = await response.text();
     const payload = parseJson(rawResponse);
@@ -57,7 +60,7 @@ export async function runAgentOverHttp(agentId: AiAgentId, prompt: string): Prom
     addTrace({
       agentId,
       startedAt,
-      prompt,
+      prompt: preparedPrompt,
       response: rawResponse,
       status: response.status,
       error: errorMessage,
@@ -81,7 +84,7 @@ export async function runAgentOverHttp(agentId: AiAgentId, prompt: string): Prom
       addTrace({
         agentId,
         startedAt,
-        prompt,
+        prompt: preparedPrompt,
         response: "",
         status: 0,
         error: error instanceof Error ? error.message : "Erreur réseau inconnue.",

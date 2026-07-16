@@ -16,9 +16,17 @@ import type {
   ItemEffectRef,
   ItemInstance,
   ItemModuleValue,
+  ItemRarity,
   ItemTemplate,
 } from "../../app/types";
 import { effectOperationCatalog } from "./contentCatalog";
+import {
+  findMechanicallyEquivalentItemTemplate,
+  hasDirectStatItemEffect,
+  itemRarities,
+  normalizeItemRarity,
+  validateDirectStatItemEffects,
+} from "../items/itemCreationPolicy";
 
 export interface ContentCatalogContext {
   effectTemplates: EffectTemplate[];
@@ -110,6 +118,8 @@ export function parseItemTemplate(
   const aliases = source.aliases === undefined ? undefined : stringArray(source.aliases, "item.aliases", errors);
   const name = requiredString(source.name, "item.name", errors);
   const description = requiredString(source.description, "item.description", errors);
+  const rarity = parseItemRarity(source.rarity, errors);
+  const requiresAttunement = optionalBoolean(source.requiresAttunement, "item.requiresAttunement", errors);
   const base = scalarRecord(source.base, "item.base", errors);
   if (typeof base.weight !== "number" || !Number.isFinite(base.weight) || base.weight < 0) {
     errors.push("item.base.weight doit être un nombre positif ou nul.");
@@ -146,6 +156,8 @@ export function parseItemTemplate(
     ...(aliases ? { aliases } : {}),
     name,
     description,
+    rarity,
+    ...(requiresAttunement ? { requiresAttunement: true } : {}),
     base,
     effects,
     ...(attacks ? { attacks } : {}),
@@ -154,6 +166,11 @@ export function parseItemTemplate(
     ...(targetingV2 ? { targetingV2 } : {}),
     modules,
   };
+  validateDirectStatItemEffects(template, context.effectTemplates).forEach((error) => errors.push(error));
+  const equivalent = findMechanicallyEquivalentItemTemplate(template, context.itemTemplates);
+  if (equivalent) {
+    errors.push(`Ce profil existe déjà dans ${equivalent.id}. Crée une instance de ce template avec des overrides de nom et de description.`);
+  }
   return errors.length ? { value: null, errors } : { value: template, errors };
 }
 
@@ -272,7 +289,19 @@ export function parseItemInstanceInput(value: unknown, fallbackTemplateId?: stri
     effects: effectReferences(source.effects ?? [], "itemInstance.effects", errors),
     location: { type: locationType ?? "world", parent },
   };
+  if (hasDirectStatItemEffect(input.effects)) {
+    errors.push("Un bonus direct de caractéristique doit appartenir à un template rare harmonisé, pas aux effets d'une instance.");
+  }
   return errors.length ? { value: null, errors } : { value: input, errors };
+}
+
+function parseItemRarity(value: unknown, errors: string[]): ItemRarity {
+  if (value === undefined) return "mundane";
+  const rarity = normalizeItemRarity(value);
+  if (!itemRarities.includes(value as ItemRarity)) {
+    errors.push(`item.rarity doit valoir ${itemRarities.join(", ")}.`);
+  }
+  return rarity;
 }
 
 export function parseEnemySpawnInput(value: unknown): ContentValidationResult<EnemySpawnInput> {

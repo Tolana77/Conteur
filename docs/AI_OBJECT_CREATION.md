@@ -12,7 +12,7 @@ Une IA doit toujours creer :
 
 Ne jamais inventer de champ hors schema si un champ existant couvre le besoin.
 Avant de creer un nouveau template, toujours chercher un template existant proche.
-Pour un changement local de nom, description, poids, valeur ou petit bonus, utiliser les `overrides`
+Pour un changement local de nom, description, poids, valeur ou petit effet non statistique, utiliser les `overrides`
 ou les `effects` de l'instance. Ne pas creer un nouveau template juste pour "+1 degat",
 "potion trouble" ou "armure renforcee".
 
@@ -43,6 +43,8 @@ interface ItemTemplate {
   tags: string[];
   name: string;
   description: string;
+  rarity: "mundane" | "common" | "uncommon" | "rare" | "veryRare" | "legendary" | "artifact";
+  requiresAttunement?: boolean;
   base: Record<string, number | string | boolean>;
   effects: Array<{
     effectId: string;
@@ -61,6 +63,8 @@ interface ItemTemplate {
 - `tags` : metadonnees descriptives et logiques, par exemple matiere, etat, forme, magie, degat.
 - `name` : nom affiche.
 - `description` : description courte, lisible en interface.
+- `rarity` : puissance et fréquence mécanique, distinctes de l'importance narrative.
+- `requiresAttunement` : vrai pour les objets dont les pouvoirs exigent un lien durable.
 - `base` : proprietes stables communes. Tout objet doit avoir `base.weight`.
 - `effects` : effets attaches par defaut a chaque instance.
 - `modules` : donnees optionnelles interpretees seulement par les systemes qui les connaissent.
@@ -98,7 +102,7 @@ interface ItemInstance {
 - `overrides` : surcharge locale, par exemple `{ "name": "Potion trouble", "base.weight": 0.3 }`.
 - `current` : etat mutable lie a l'objet.
 - `data` : donnees libres propres a cette instance.
-- `effects` : effets supplementaires propres a cette instance, par exemple un bonus rare ajoute a une armure existante.
+- `effects` : effets supplémentaires propres à cet exemplaire. Ne jamais y ajouter `modifyStat` : un bonus direct de caractéristique appartient à un template rare et harmonisé.
 - `location` : unique source de verite pour savoir ou se trouve l'objet.
 
 ## Localisation

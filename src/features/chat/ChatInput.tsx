@@ -1,10 +1,18 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import type { ActionTarget, ActionTargetKind, ChatActionIntent, CombatPosition, CombatScene } from "../../app/types";
 import { getSuggestedSide } from "../combat/targeting";
 import { runAutomatedDirector } from "../ai-director/automatedDirector";
 import { useGameStore } from "../../store/useGameStore";
 
-export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intentId: string) => void }) {
+export function ChatInput({
+  onBusyChange,
+  onPlayerActivity,
+  onRequestMapTarget,
+}: {
+  onBusyChange?: (busy: boolean) => void;
+  onPlayerActivity?: () => void;
+  onRequestMapTarget?: (intentId: string) => void;
+}) {
   const [content, setContent] = useState("");
   const [isAwaitingNarration, setIsAwaitingNarration] = useState(false);
   const sendPlayerMessage = useGameStore((state) => state.sendPlayerMessage);
@@ -19,6 +27,10 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
   const updateActionIntentTarget = useGameStore((state) => state.updateActionIntentTarget);
   const removeActionIntent = useGameStore((state) => state.removeActionIntent);
 
+  useEffect(() => {
+    onBusyChange?.(isAwaitingNarration || Boolean(content.trim()));
+  }, [content, isAwaitingNarration, onBusyChange]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const playerInput = content.trim();
@@ -27,6 +39,7 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
       return;
     }
 
+    onPlayerActivity?.();
     sendPlayerMessage(content);
     setContent("");
     setIsAwaitingNarration(true);
@@ -42,7 +55,11 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
   }
 
   return (
-    <form className="border-t border-[#9C7A2E]/25 bg-[#221E29] p-3" onSubmit={handleSubmit}>
+    <form
+      className="border-t border-[#9C7A2E]/25 bg-[#221E29] p-3"
+      onPointerDown={onPlayerActivity}
+      onSubmit={handleSubmit}
+    >
       <div className="flex flex-wrap items-center gap-2 rounded border border-[#9C7A2E]/25 bg-[#15121A] px-2 py-2 focus-within:border-[#9C7A2E]">
         {pendingActionIntents.map((intent) => (
           <ActionIntentEditor
@@ -65,7 +82,11 @@ export function ChatInput({ onRequestMapTarget }: { onRequestMapTarget?: (intent
         ))}
         <input
           className="min-w-[120px] flex-1 bg-transparent px-1 py-1 text-sm text-[#E4D8BE] outline-none placeholder:text-[#E4D8BE]/45"
-          onChange={(event) => setContent(event.target.value)}
+          onChange={(event) => {
+            setContent(event.target.value);
+            onPlayerActivity?.();
+          }}
+          onFocus={onPlayerActivity}
           placeholder="Décrire une action..."
           value={content}
         />

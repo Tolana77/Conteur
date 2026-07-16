@@ -391,7 +391,13 @@ function buildEvents(
       state,
       command,
       dependencies,
-      recordNarratedBeat(state.narrativeScene, command.payload.narration),
+      recordNarratedBeat(
+        state.narrativeScene,
+        command.payload.narration,
+        command.payload.proactiveKey
+          ? { key: command.payload.proactiveKey, occurredAt: command.issuedAt }
+          : undefined,
+      ),
     ));
   }
 

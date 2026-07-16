@@ -1,21 +1,28 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
 import { IlluminatedInitial } from "../../ui/components/IlluminatedInitial";
 import { HighlightedGameText } from "../../ui/gameTerms";
 import { AnimatedDiceRollCard } from "../dice/DiceRollOverlay";
 import { PlayerCheckCard } from "../dice/PlayerCheckCard";
+import { isLegacyTechnicalCombatMessage } from "../combat/combatNarration";
 import { ChatInput } from "./ChatInput";
 import { MessageBubble } from "./MessageBubble";
+import { useCombatNarration } from "./useCombatNarration";
+import { useScenePacing } from "./useScenePacing";
 
 const seenChatRollIds = new Set<string>();
 
 export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (intentId: string) => void }) {
-  const messages = useGameStore((state) => state.messages);
+  const storedMessages = useGameStore((state) => state.messages);
   const diceRolls = useGameStore((state) => state.diceRolls);
   const playerCheckRequests = useGameStore((state) => state.playerCheckRequests);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [isComposerBusy, setIsComposerBusy] = useState(false);
+  useCombatNarration(!isComposerBusy);
+  const { markPlayerActivity } = useScenePacing(!isComposerBusy);
   const initializedRollsRef = useRef(false);
   const animatedRollIdsRef = useRef(new Set<string>());
+  const messages = storedMessages.filter((message) => !isLegacyTechnicalCombatMessage(message));
   const publicRolls = diceRolls.filter((roll) => roll.visibility === "public");
 
   if (!initializedRollsRef.current) {
@@ -51,7 +58,12 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
         <p className="rune-label text-xs">Lecture</p>
         <h1 className="ink-heading text-xl font-bold">Interaction avec le Conteur</h1>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4" ref={scrollRef}>
+      <div
+        className="min-h-0 flex-1 overflow-y-auto p-4"
+        onPointerDown={markPlayerActivity}
+        onWheel={markPlayerActivity}
+        ref={scrollRef}
+      >
         <section className="parchment-reading reading-border mx-auto mb-4 max-w-[760px] rounded-sm p-5">
           <p className="text-sm leading-7">
             <IlluminatedInitial genre="fantasy">L</IlluminatedInitial>
@@ -77,7 +89,11 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
           ))}
         </div>
       </div>
-      <ChatInput onRequestMapTarget={onRequestMapTarget} />
+      <ChatInput
+        onBusyChange={setIsComposerBusy}
+        onPlayerActivity={markPlayerActivity}
+        onRequestMapTarget={onRequestMapTarget}
+      />
     </section>
   );
 }

@@ -10,6 +10,7 @@ import {
 } from "../content";
 import type { AutomaticDomainAgent } from "./automaticRouting";
 import type { AiResolutionDraft } from "./types";
+import { ITEM_CREATION_POLICY_TEXT } from "../items/itemCreationPolicy";
 
 export interface NarrationPacket {
   facts: string[];
@@ -47,6 +48,7 @@ export function buildAutomaticDomainPrompt(
       "Un événement avec turnsRemaining=0 doit progresser maintenant. Si le joueur attend, ne répète jamais l'étape précédente : fais arriver, passer, découvrir ou empirer l'événement, puis mets-le à jour ou résous-le.",
       "Réactions crédibles : évalue statut, normes du lieu, témoins, propriétaires et autorités. Une provocation publique déclenche au minimum attention, gêne ou mise en garde; un vol ou une violence observable déclenche une tentative d'intervention, sauf impossibilité explicitement établie.",
       "Toute menace différée annoncée au Narrateur doit aussi être inscrite dans scenePatch.upsertEvents avec un délai. Toute conséquence durable va dans scenePatch.consequences.",
+      "Inscris aussi comme événement toute échéance, pression de PNJ ou occasion concrète qui peut progresser sans le joueur. N'en crée jamais pour une simple ambiance : chaque événement doit avoir une prochaine étape observable.",
       "scenePatch suit ce schéma compact : {locationId?,locationLabel?,playerPosition?,presentEntityIds?,elapsedMinutes?,socialTensionDelta?,alertLevel?,upsertEvents?:[{id,description,stage,turnsRemaining,urgency,relatedEntityIds}],resolveEventIds?:[],consequences?:[]}. presentEntityIds remplace la liste complète et ne contient que des ids connus.",
     ] : []),
     ...(agentId === "characterManager" ? [
@@ -56,7 +58,8 @@ export function buildAutomaticDomainPrompt(
     ...(agentId === "assetTemplateManager" ? [
       "Chaîne fermée: crée d'abord les effets manquants, puis les capacités, puis l'objet, enfin son instance. Les commandes seront réordonnées par le moteur.",
       "Un effet est un assemblage d'opérations fermées, jamais un script. Référence ensuite son id dans effects: [{effectId,variables}].",
-      "Pour une variante simple, utilise un templateId existant et les overrides de l'instance. Ne duplique pas un template pour un nom, une description, un poids ou un petit bonus différent.",
+      "Pour une variante simple, utilise un templateId existant et les overrides de l'instance. Ne duplique pas un template pour un nom, une description, un poids ou un petit effet non statistique différent.",
+      ITEM_CREATION_POLICY_TEXT,
       "Si tu crées une instance dans le sac, location={type:'inventory',parent:'selected'}; au sol, location={type:'world',parent:<locationId|null>}. N'accorde jamais gratuitement une ressource sans fait entrant qui l'autorise.",
       contentCreationIdInstruction,
       `Schémas de contenu: ${assetContentSchemaText}`,
@@ -296,8 +299,13 @@ function createAssetTemplateContext(state: GameState, input: string) {
         type: template.type,
         types: template.types,
         tags: template.tags,
+        rarity: template.rarity,
+        requiresAttunement: template.requiresAttunement,
         base: template.base,
         effects: template.effects,
+        attacks: template.attacks,
+        attackModifiers: template.attackModifiers,
+        targetingV2: template.targetingV2,
       })),
     },
   };

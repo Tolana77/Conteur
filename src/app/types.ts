@@ -52,6 +52,9 @@ export interface NarrativeSceneState {
   recentConsequences: string[];
   lastPlayerAction: string;
   lastNarratedBeat: string;
+  lastProactiveBeatAt: number;
+  lastProactiveTurn: number | null;
+  lastProactiveKey: string;
 }
 
 export interface NarrativeScenePatch {
@@ -290,6 +293,15 @@ export interface EffectTemplate {
 
 export type ItemModuleValue = number | string | boolean | Array<number | string | boolean>;
 
+export type ItemRarity =
+  | "mundane"
+  | "common"
+  | "uncommon"
+  | "rare"
+  | "veryRare"
+  | "legendary"
+  | "artifact";
+
 export interface ItemTemplate {
   id: string;
   type: string;
@@ -298,6 +310,8 @@ export interface ItemTemplate {
   aliases?: string[];
   name: string;
   description: string;
+  rarity: ItemRarity;
+  requiresAttunement?: boolean;
   base: Record<string, number | string | boolean>;
   effects: ItemEffectRef[];
   attacks?: ItemAttackProfile[];
@@ -607,6 +621,14 @@ export interface CombatLogEntry {
   actorId?: string;
   targetIds?: string[];
   timestamp: number;
+}
+
+export interface CombatNarrationCue {
+  id: string;
+  kind: "transition" | "movement" | "action" | "enemyTurn";
+  round: number;
+  entries: Array<Pick<CombatLogEntry, "type" | "text">>;
+  createdAt: number;
 }
 
 export interface CombatScene {

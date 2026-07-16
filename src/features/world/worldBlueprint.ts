@@ -621,6 +621,7 @@ function createGeneratedItemTemplate(item: GeneratedStartingItem): ItemTemplate 
     tags: [...item.tags],
     name: item.name,
     description: item.description,
+    rarity: "mundane",
     base: { weight: item.weight },
     effects: [],
     modules: {},

@@ -74,7 +74,7 @@ export type GameCommandBody =
     }
   | {
       type: "narrative.recordBeat";
-      payload: { narration: string };
+      payload: { narration: string; proactiveKey?: string };
     }
   | {
       type: "chat.addGmMessage";
@@ -181,6 +181,9 @@ function validatePayload(type: string, payload: Record<string, unknown>, errors:
   }
   if (type === "narrative.recordBeat") {
     if (typeof payload.narration !== "string") errors.push("payload.narration doit être un texte.");
+    if (payload.proactiveKey !== undefined && typeof payload.proactiveKey !== "string") {
+      errors.push("payload.proactiveKey doit être un texte.");
+    }
     return;
   }
   if (type === "chat.addGmMessage") {

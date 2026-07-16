@@ -4,7 +4,7 @@ export const targetingContentSchema =
 export const assetContentSchemaText = [
   "Effect={id,name,description,tags,actions:[{operation,variables}]}",
   `Ability={id,name,description,types,tags,combatRole?,activation:{timing:action|bonus|reaction|free|passive},resourceCost?,${targetingContentSchema},charges?:{max,initial?,recharge:[shortRest|longRest|encounter|manual|never],rechargeAmount?},effects:[{effectId,variables}],modules:{ability:{}}}`,
-  `Item={id,type,types,tags,aliases?,name,description,base:{weight,...},effects:[{effectId,variables}],attacks?:[{id,name,label,range,damage,damageType,attackKind,cost,${targetingContentSchema}?}],${targetingContentSchema}?,modules:{item:{}}}`,
+  `Item={id,type,types,tags,aliases?,name,description,rarity:mundane|common|uncommon|rare|veryRare|legendary|artifact,requiresAttunement?,base:{weight,...},effects:[{effectId,variables}],attacks?:[{id,name,label,range,damage,damageType,attackKind,cost,${targetingContentSchema}?}],${targetingContentSchema}?,modules:{item:{}}}`,
   "Instance={id?,templateId?,quantity,overrides,current,data,effects,location:{type:inventory|equipped|world,parent:id|null}}",
 ].join(" | ");
 

@@ -76,8 +76,22 @@ recharge. Les effets peuvent référencer un effet créé juste avant.
 
 ## Objet et instance
 
-Chercher d'abord un template existant. Une variante de nom, description, poids
-ou petit bonus utilise `overrides` ou `effects` sur l'instance.
+Chercher d'abord un template existant. Une variante de nom, description, poids,
+matériau, origine ou propriétaire utilise `overrides` sur l'instance. Un effet
+exceptionnel propre à un seul exemplaire peut vivre dans `instance.effects`.
+Créer un nouveau template seulement si le profil d'attaque, la défense, le
+ciblage ou un ensemble d'effets destiné à être réutilisé change réellement.
+
+Repères d'équilibrage inspirés de D&D 5e :
+
+- objet ordinaire : aucun bonus direct de caractéristique ;
+- dague `1d4`, arme simple `1d6`, arme martiale `1d8`, arme lourde `1d10` à `2d6` ;
+- un bonus direct de caractéristique est rare ou supérieur, magique, harmonisé,
+  et reste compris entre `-2` et `+2` dans le moteur actuel ;
+- préférer une nouvelle option, une résistance, une capacité à charges ou un
+  avantage circonstanciel à une augmentation brute de caractéristique.
+- ne jamais simuler un bonus d'attaque ou de dégâts en modifiant une
+  caractéristique du personnage.
 
 ```json
 {
@@ -89,6 +103,8 @@ ou petit bonus utilise `overrides` ou `effects` sur l'instance.
     "tags": ["magique", "bois"],
     "name": "Baguette de givre",
     "description": "Une baguette froide au toucher.",
+    "rarity": "uncommon",
+    "requiresAttunement": true,
     "base": { "weight": 0.4 },
     "effects": [{ "effectId": "grantAbility", "variables": { "abilityTemplateId": "ability-frost-bolt" } }],
     "modules": { "item": {} }
@@ -102,7 +118,10 @@ ou petit bonus utilise `overrides` ou `effects` sur l'instance.
   "templateId": "item-frost-wand",
   "instance": {
     "quantity": 1,
-    "overrides": { "name": "Baguette givrée d'Ysée" },
+    "overrides": {
+      "name": "Baguette givrée d'Ysée",
+      "description": "Le bois blanc porte le sceau brisé de la maison d'Ysée."
+    },
     "current": {},
     "data": {},
     "effects": [],

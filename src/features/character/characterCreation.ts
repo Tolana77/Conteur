@@ -17,6 +17,10 @@ import type {
   GeneratedStartingCharacter,
   GeneratedStartingItem,
 } from "../world/worldBlueprint";
+import {
+  hasDirectStatItemEffect,
+  ITEM_CREATION_POLICY_TEXT,
+} from "../items/itemCreationPolicy";
 
 export const CHARACTER_CREATION_SCHEMA_VERSION = 1 as const;
 export const CHARACTER_POINT_BUY_BUDGET = 27;
@@ -179,6 +183,8 @@ export function buildCharacterCreationPrompt(
     "- Réutilise les capacités existantes avant d'en créer. Une nouvelle capacité doit être ciblée, limitée et compatible avec les effets fermés du moteur.",
     "- Une capacité active puissante possède peu de charges et se recharge au repos court ou long. Aucun dégât gratuit avec activation free.",
     "- Les objets de départ utilisent uniquement un templateId du catalogue. Choisis un équipement modeste et cohérent.",
+    "- Pour chaque objet important, adapte name et description à l'univers, à l'origine ou à la faction du personnage. Ne change jamais sa mécanique pour une variation cosmétique.",
+    ITEM_CREATION_POLICY_TEXT,
     "- Les ids créés sont en kebab-case. Préfixes: character-, ability-, effect-, starting-.",
     "",
     "COMPÉTENCES AUTORISÉES",
@@ -391,7 +397,12 @@ export function getMaximumStartingHp(level: number, constitution: number): numbe
 export function isStartingEquipmentTemplate(template: ItemTemplate): boolean {
   const mechanics = new Set([template.type, ...template.types].map(normalize));
   const tags = new Set(template.tags.map(normalize));
-  return ![
+  return template.rarity !== "rare" &&
+    template.rarity !== "veryRare" &&
+    template.rarity !== "legendary" &&
+    template.rarity !== "artifact" &&
+    !template.requiresAttunement &&
+    !hasDirectStatItemEffect(template.effects) && ![
     "curse",
     "cursed",
     "chaos",
@@ -450,7 +461,10 @@ function parseStartingItemInputs(
     }
     const quantity = integer(source.quantity, `startingItems[${index}].quantity`, errors, 1, 20, 1);
     const equipped = boolean(source.equipped, `startingItems[${index}].equipped`, errors);
-    return [createStartingItem(template, ownerId, index, quantity, equipped)];
+    return [createStartingItem(template, ownerId, index, quantity, equipped, {
+      name: optionalString(source.name),
+      description: optionalString(source.description),
+    })];
   });
 }
 
@@ -460,13 +474,14 @@ function createStartingItem(
   index: number,
   quantity: number,
   equipped: boolean,
+  presentation: { name?: string; description?: string } = {},
 ): GeneratedStartingItem {
   return {
     id: `starting-${index + 1}-${template.id.replace(/^tpl[_-]?/u, "").replace(/_/gu, "-")}`,
     ownerId,
     templateId: template.id,
-    name: template.name,
-    description: template.description,
+    name: presentation.name ?? template.name,
+    description: presentation.description ?? template.description,
     type: template.type,
     types: [...template.types],
     tags: [...template.tags],
@@ -493,6 +508,9 @@ function validateStartingItems(
     if (item.ownerId !== characterId) errors.push(`${item.id} appartient à un autre personnage.`);
     const template = catalog.find((candidate) => candidate.id === item.templateId);
     if (!template) errors.push(`${item.id} utilise un template inconnu.`);
+    if (template && !isStartingEquipmentTemplate(template)) {
+      errors.push(`${template.name} est trop rare, maudit ou puissant pour être un objet de départ.`);
+    }
     if (item.equipped && template && !isEquipableCharacterTemplate(template)) {
       errors.push(`${template.name} ne peut pas être équipé.`);
     }
@@ -696,7 +714,13 @@ function createCharacterResponseSkeleton(level: number) {
       abilityTemplateIds: [],
       history: ["Une phrase factuelle sur son passé"],
     },
-    startingItems: [{ templateId: "tpl_rations", quantity: 3, equipped: false }],
+    startingItems: [{
+      templateId: "tpl_rations",
+      name: "Rations des Marches",
+      description: "Vivres préparés selon les usages de la région de départ.",
+      quantity: 3,
+      equipped: false,
+    }],
     effectTemplates: [],
     abilityTemplates: [],
   };
@@ -718,7 +742,16 @@ function formatEffectCatalog(catalog: EffectTemplate[]): string {
 function formatItemCatalog(catalog: ItemTemplate[]): string {
   const suitable = catalog.filter(isStartingEquipmentTemplate);
   if (!suitable.length) return "Aucun objet disponible.";
-  return suitable.map((item) => `- ${item.id}: ${item.name} [${[item.type, ...item.types].join(", ")}]`).join("\n");
+  return suitable.map((item) => {
+    const attacks = item.attacks?.map((attack) => `${attack.name} ${attack.damage}/${attack.range}m`).join(", ");
+    const defense = typeof item.base.defenseBase === "number"
+      ? `DEF ${item.base.defenseBase}${Number(item.base.maxDexBonus) > 0 ? " + DEX" : ""}`
+      : typeof item.base.defenseBonus === "number"
+        ? `DEF +${item.base.defenseBonus}`
+        : "";
+    const mechanics = [attacks, defense].filter(Boolean).join("; ");
+    return `- ${item.id}: ${item.name} — ${item.description} [${item.rarity}; ${[item.type, ...item.types].join(", ")}${mechanics ? `; ${mechanics}` : ""}]`;
+  }).join("\n");
 }
 
 function normalizeCharacterId(value: string): string {

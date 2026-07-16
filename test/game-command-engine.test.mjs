@@ -136,6 +136,28 @@ assert.deepEqual(worldResult.state.campaign.world.facts, [
   "Une cloche sonne au nord.",
 ]);
 
+const proactiveBeatCommand = runtime.createCommand(
+  initialSnapshot,
+  {
+    type: "narrative.recordBeat",
+    payload: {
+      narration: "Le verrou de la porte cède dans un claquement sec.",
+      proactiveKey: "scene-test:0:event:door",
+    },
+  },
+  { id: "gm-test", role: "gm" },
+);
+assert.equal(parseGameCommand(proactiveBeatCommand).success, true);
+const proactiveBeatResult = runtime.execute(initialSnapshot, proactiveBeatCommand);
+assert.equal(proactiveBeatResult.ok, true);
+assert.equal(proactiveBeatResult.state.narrativeScene.lastProactiveTurn, 0);
+assert.equal(proactiveBeatResult.state.narrativeScene.lastProactiveKey, "scene-test:0:event:door");
+assert.equal(proactiveBeatResult.state.narrativeScene.lastProactiveBeatAt, 1_800_000_000_000);
+assert.equal(parseGameCommand({
+  ...proactiveBeatCommand,
+  payload: { narration: "Texte", proactiveKey: 42 },
+}).success, false);
+
 const { useGameStore } = await vite.ssrLoadModule("/src/store/useGameStore.ts");
 const storeBefore = useGameStore.getState();
 const storeCharacter = storeBefore.characters[0];

@@ -33,6 +33,9 @@ export function createInitialNarrativeScene(
     recentConsequences: [],
     lastPlayerAction: "",
     lastNarratedBeat: openingScene,
+    lastProactiveBeatAt: 0,
+    lastProactiveTurn: null,
+    lastProactiveKey: "",
   };
 }
 
@@ -59,6 +62,11 @@ export function normalizeNarrativeScene(
     recentConsequences: uniqueStrings(value.recentConsequences).slice(-8),
     lastPlayerAction: typeof value.lastPlayerAction === "string" ? value.lastPlayerAction : "",
     lastNarratedBeat: typeof value.lastNarratedBeat === "string" ? value.lastNarratedBeat : "",
+    lastProactiveBeatAt: nonNegativeNumber(value.lastProactiveBeatAt, 0),
+    lastProactiveTurn: typeof value.lastProactiveTurn === "number"
+      ? nonNegativeInteger(value.lastProactiveTurn, 0)
+      : null,
+    lastProactiveKey: typeof value.lastProactiveKey === "string" ? value.lastProactiveKey : "",
   };
 }
 
@@ -123,11 +131,20 @@ export function applyNarrativeScenePatch(
   };
 }
 
-export function recordNarratedBeat(scene: NarrativeSceneState, narration: string): NarrativeSceneState {
+export function recordNarratedBeat(
+  scene: NarrativeSceneState,
+  narration: string,
+  proactive?: { key: string; occurredAt: number },
+): NarrativeSceneState {
   return {
     ...scene,
     revision: scene.revision + 1,
     lastNarratedBeat: narration.trim().slice(0, 700),
+    ...(proactive ? {
+      lastProactiveBeatAt: Math.max(0, proactive.occurredAt),
+      lastProactiveTurn: scene.turn,
+      lastProactiveKey: proactive.key.trim().slice(0, 180),
+    } : {}),
   };
 }
 

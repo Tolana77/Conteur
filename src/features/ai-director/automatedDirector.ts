@@ -45,6 +45,7 @@ interface SourcedCommand {
  */
 export async function runAutomatedDirector(playerInput: string): Promise<AutomatedDirectorResult> {
   const initialState = useGameStore.getState();
+  const pendingCombatCuesAtTurnStart = initialState.combatNarrationQueue;
   const pendingDecision = initialState.pendingGameDecision;
   const effectiveInput = pendingDecision
     ? `${truncate(pendingDecision.originalInput, 600)}\nPrécision du joueur : ${truncate(playerInput, 400)}`
@@ -70,6 +71,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   }));
 
   draft = mergeResolutionDraft(draft, localResolution.draftPatch);
+  draft = mergeResolutionDraft(draft, createPendingCombatNarrationPatch(pendingCombatCuesAtTurnStart));
   applyScenePatches(localResolution.draftPatch?.scenePatches);
 
   if (route.needsSafetyReview) {
@@ -133,7 +135,17 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   }
 
   const clarification = draft.questions.at(-1);
+  const queuedCombatCueIdsBeforeExecution = new Set(
+    useGameStore.getState().combatNarrationQueue.map((cue) => cue.id),
+  );
   const executionResults = clarification ? [] : executeValidatedCommands(gatheredCommands);
+  const combatCueIdsCreatedByExecution = useGameStore.getState().combatNarrationQueue
+    .filter((cue) => !queuedCombatCueIdsBeforeExecution.has(cue.id))
+    .map((cue) => cue.id);
+  const combatCueIdsCoveredByThisTurn = [
+    ...pendingCombatCuesAtTurnStart.map((cue) => cue.id),
+    ...combatCueIdsCreatedByExecution,
+  ];
 
   // Un événement arrivé à échéance est une contrainte moteur, pas une simple
   // suggestion de prompt : le Narrateur doit produire une étape nouvelle.
@@ -162,6 +174,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   agentsRun.push("narrationManager");
   useGameStore.getState().addGmMessage(narration);
   useGameStore.getState().recordNarratedBeat(narration);
+  useGameStore.getState().consumeCombatNarrationCues(combatCueIdsCoveredByThisTurn);
 
   return {
     narration,
@@ -206,19 +219,34 @@ function createDueEventNarrationPatch(state: GameState): AiResolutionDraftPatch 
   };
 }
 
+function createPendingCombatNarrationPatch(
+  cues: GameState["combatNarrationQueue"],
+): AiResolutionDraftPatch | undefined {
+  const events = cues
+    .flatMap((cue) => cue.entries)
+    .slice(-12)
+    .map((entry) => entry.text.trim())
+    .filter(Boolean);
+  if (events.length === 0) return undefined;
+
+  return {
+    facts: [{
+      source: "localEngine",
+      kind: "resolvedCombatSequence",
+      content: `Conséquences de combat déjà résolues à intégrer dans la narration présente : ${events.join(" | ")}`,
+      visibility: "playerVisible",
+    }],
+  };
+}
+
 function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrationPacket>): string {
+  const latestReceipt = packet.actionReceipts.at(-1);
+  if (latestReceipt) {
+    return createNarratedActionReceiptFallback(latestReceipt, packet.questions.at(-1));
+  }
+
   const resultMessages = packet.results.map((result) => result.message);
-  const receiptMessages = packet.actionReceipts.map((receipt) => {
-    const actions = receipt.actions.map((action) =>
-      `${action.sourceLabel}${action.target ? ` sur ${action.target.label}` : ""}`,
-    );
-    const changes = receipt.changes.map((change) =>
-      `${change.kind} ${change.label}: ${change.before}→${change.after}${change.delta !== undefined ? ` (${change.delta >= 0 ? "+" : ""}${change.delta})` : ""}`,
-    );
-    const rolls = receipt.rolls.map((roll) => `${roll.reason ?? roll.formula}: ${roll.formula} = ${roll.result}`);
-    return [...actions, ...changes, ...rolls].join(" ; ");
-  });
-  const confirmed = [...resultMessages, ...receiptMessages, ...packet.facts].filter(Boolean);
+  const confirmed = [...resultMessages, ...packet.facts].filter(Boolean);
   const question = packet.questions.at(-1);
 
   if (confirmed.length > 0) {
@@ -228,6 +256,40 @@ function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrati
   if (question) return `Vous prenez le temps d'observer la situation. ${question}`;
 
   return "Vous prenez le temps d'observer la scène, mais rien ne s'impose encore avec certitude. Que cherchez-vous à comprendre, et comment vous y prenez-vous ?";
+}
+
+function createNarratedActionReceiptFallback(
+  receipt: ReturnType<typeof createNarrationPacket>["actionReceipts"][number],
+  question?: string,
+): string {
+  const actionSentences = receipt.actions.map((action) => {
+    const target = action.target ? ` sur ${action.target.label}` : "";
+    if (action.kind === "attack") return `Vous portez votre attaque avec ${action.sourceLabel}${target}.`;
+    if (action.kind === "useAbility") return `Vous déclenchez ${action.sourceLabel}${target}.`;
+    return `Vous utilisez ${action.sourceLabel}${target}.`;
+  });
+  const hpLosses = receipt.changes.filter((change) => change.kind === "hp" && Number(change.delta) < 0);
+  const hpGains = receipt.changes.filter((change) => change.kind === "hp" && Number(change.delta) > 0);
+  const conditions = receipt.changes.filter((change) => change.kind === "condition");
+  const movements = receipt.changes.filter((change) => change.kind === "position");
+  const consequences = [
+    ...(hpLosses.length > 0
+      ? [`${hpLosses.map((change) => change.label).join(" et ")} ${hpLosses.length > 1 ? "accusent" : "accuse"} le coup.`]
+      : []),
+    ...(hpGains.length > 0
+      ? [`${hpGains.map((change) => change.label).join(" et ")} ${hpGains.length > 1 ? "reprennent" : "reprend"} des forces.`]
+      : []),
+    ...conditions.map((change) => `${change.label} en subit aussitôt l'effet.`),
+    ...movements.map((change) => `${change.label} atteint la destination choisie.`),
+  ];
+
+  if (consequences.length === 0 && receipt.actions.some((action) => action.kind === "attack")) {
+    consequences.push("L'assaut ne produit pourtant aucune blessure visible.");
+  } else if (consequences.length === 0) {
+    consequences.push("L'effet se dissipe sans changement visible de la situation.");
+  }
+
+  return [...actionSentences, ...consequences, ...(question ? [question] : [])].join(" ");
 }
 
 async function runDomainAgent(

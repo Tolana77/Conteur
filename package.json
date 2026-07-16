@@ -9,10 +9,14 @@
     "preview": "vite preview",
     "test:game-engine": "node test/game-command-engine.test.mjs",
     "test:ai-director": "node test/ai-director-foundations.test.mjs",
+    "test:ai-gateway": "node test/ai-gateway-policy.test.mjs",
     "test:player-checks": "node test/player-checks.test.mjs",
     "test:character-creation": "node test/character-creation.test.mjs",
     "test:content-creation": "node test/content-creation.test.mjs",
-    "test:objects": "node test/objects-effects.test.cjs"
+    "test:objects": "node test/objects-effects.test.cjs",
+    "test:item-catalog": "node test/item-template-catalog.test.mjs",
+    "test:scene-pacing": "node test/scene-pacing.test.mjs",
+    "test:combat-narration": "node test/combat-narration.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
