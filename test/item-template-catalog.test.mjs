@@ -9,11 +9,15 @@ const vite = await createServer({
 
 const { initialItemTemplates } = await vite.ssrLoadModule("/src/features/items/itemTemplates.ts");
 const { initialAbilityTemplates } = await vite.ssrLoadModule("/src/features/abilities/abilityTemplates.ts");
+const { initialGameActionTemplates } = await vite.ssrLoadModule("/src/features/actions/actionCatalog.ts");
 const {
   initialEffectTemplates,
   initialEnemyTemplates,
 } = await vite.ssrLoadModule("/src/features/content/contentCatalog.ts");
 const {
+  parseAbilityTemplate,
+  parseEffectTemplate,
+  parseEnemyTemplate,
   parseItemInstanceInput,
   parseItemTemplate,
 } = await vite.ssrLoadModule("/src/features/content/contentValidation.ts");
@@ -22,9 +26,60 @@ const { useGameStore } = await vite.ssrLoadModule("/src/store/useGameStore.ts");
 const catalogContext = {
   itemTemplates: initialItemTemplates,
   abilityTemplates: initialAbilityTemplates,
+  gameActionTemplates: initialGameActionTemplates,
   effectTemplates: initialEffectTemplates,
   enemyTemplates: initialEnemyTemplates,
 };
+
+function assertUniqueIds(label, templates) {
+  assert.equal(
+    new Set(templates.map((template) => template.id)).size,
+    templates.length,
+    `${label}: les identifiants doivent être uniques`,
+  );
+}
+
+assert.ok(initialItemTemplates.length >= 60 && initialItemTemplates.length <= 120);
+assert.ok(initialEffectTemplates.length >= 30 && initialEffectTemplates.length <= 55);
+assert.ok(initialAbilityTemplates.length >= 30 && initialAbilityTemplates.length <= 50);
+assert.ok(initialEnemyTemplates.length >= 30 && initialEnemyTemplates.length <= 50);
+
+assertUniqueIds("objets", initialItemTemplates);
+assertUniqueIds("effets", initialEffectTemplates);
+assertUniqueIds("capacités", initialAbilityTemplates);
+assertUniqueIds("ennemis", initialEnemyTemplates);
+
+initialEffectTemplates.forEach((template) => {
+  const parsed = parseEffectTemplate(template);
+  assert.deepEqual(parsed.errors, [], `${template.id}: ${parsed.errors.join(" ")}`);
+  assert.ok(parsed.value);
+});
+
+initialAbilityTemplates.forEach((template) => {
+  const action = initialGameActionTemplates.find((candidate) => candidate.id === template.actionId);
+  assert.ok(action, `${template.id}: action ${template.actionId} introuvable`);
+  const parsed = parseAbilityTemplate({
+    ...template,
+    name: action.name,
+    description: action.description,
+    types: action.types,
+    tags: action.tags,
+    combatRole: action.combatRole,
+    activation: action.activation,
+    targeting: action.targeting,
+    duration: action.duration,
+    effects: action.effects,
+    scaling: action.scaling,
+  }, catalogContext);
+  assert.deepEqual(parsed.errors, [], `${template.id}: ${parsed.errors.join(" ")}`);
+  assert.ok(parsed.value);
+});
+
+initialEnemyTemplates.forEach((template) => {
+  const parsed = parseEnemyTemplate(template, catalogContext);
+  assert.deepEqual(parsed.errors, [], `${template.id}: ${parsed.errors.join(" ")}`);
+  assert.ok(parsed.value);
+});
 
 initialItemTemplates.forEach((template) => {
   const parsed = parseItemTemplate(template, catalogContext);
@@ -34,9 +89,16 @@ initialItemTemplates.forEach((template) => {
 
 const directStatItems = initialItemTemplates.filter((template) =>
   template.effects.some((effect) => effect.effectId === "modifyStat"));
-assert.deepEqual(directStatItems.map((template) => template.id), ["tpl_nameless_ring"]);
+assert.deepEqual(directStatItems.map((template) => template.id), ["tpl_belt_of_might"]);
 assert.equal(directStatItems[0].rarity, "rare");
 assert.equal(directStatItems[0].requiresAttunement, true);
+
+for (const id of ["tpl_invisibility_potion", "tpl_paper", "tpl_wild_plant", "tpl_rope"]) {
+  assert.ok(initialItemTemplates.some((template) => template.id === id), `${id} manque au catalogue`);
+}
+assert.ok(initialEffectTemplates.some((template) => template.id === "effect-invisibility"));
+assert.ok(initialEnemyTemplates.some((template) => template.id === "enemy-wolf"));
+assert.ok(initialEnemyTemplates.some((template) => template.id === "enemy-skeleton"));
 
 const shortbow = initialItemTemplates.find((template) => template.id === "tpl_shortbow");
 const dagger = initialItemTemplates.find((template) => template.id === "tpl_dagger");
@@ -105,10 +167,10 @@ useGameStore.setState((state) => ({
     : candidate),
   itemInstances: [],
 }));
-const crackedArmor = useGameStore.getState().giveItem(character.id, "tpl_cracked_armor", 1);
-assert.ok(crackedArmor);
-useGameStore.getState().equipItem(crackedArmor.id);
-assert.equal(useGameStore.getState().characterDerivedScores[character.id].defense, 14);
+const scaleMail = useGameStore.getState().giveItem(character.id, "tpl_scale_mail", 1);
+assert.ok(scaleMail);
+useGameStore.getState().equipItem(scaleMail.id);
+assert.equal(useGameStore.getState().characterDerivedScores[character.id].defense, 16);
 
 useGameStore.setState((state) => ({
   characters: state.characters.map((candidate) => candidate.id === character.id
@@ -122,4 +184,4 @@ useGameStore.getState().equipItem(chainMail.id);
 assert.equal(useGameStore.getState().characterDerivedScores[character.id].defense, 16);
 
 await vite.close();
-console.log("Tests catalogue et équilibre des objets OK");
+console.log("Tests des catalogues objets, effets, capacités et ennemis OK");

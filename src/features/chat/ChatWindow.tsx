@@ -18,8 +18,11 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
   const playerCheckRequests = useGameStore((state) => state.playerCheckRequests);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [isComposerBusy, setIsComposerBusy] = useState(false);
-  useCombatNarration(!isComposerBusy);
-  const { markPlayerActivity } = useScenePacing(!isComposerBusy);
+  const [isCheckNarrationBusy, setIsCheckNarrationBusy] = useState(false);
+  const hasPendingPlayerCheck = playerCheckRequests.some((request) => request.status === "pending");
+  const narrationIsSuspended = isComposerBusy || isCheckNarrationBusy || hasPendingPlayerCheck;
+  useCombatNarration(!narrationIsSuspended);
+  const { markPlayerActivity } = useScenePacing(!narrationIsSuspended);
   const initializedRollsRef = useRef(false);
   const animatedRollIdsRef = useRef(new Set<string>());
   const messages = storedMessages.filter((message) => !isLegacyTechnicalCombatMessage(message));
@@ -42,7 +45,16 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
     ...publicRolls.map((roll) => ({ id: roll.id, timestamp: roll.timestamp, type: "roll" as const, roll })),
     ...playerCheckRequests
       .filter((request) => request.status !== "cancelled")
-      .map((request) => ({ id: request.id, timestamp: request.createdAt, type: "check" as const, request })),
+      .map((request) => {
+        const setupMessage = messages.find((message) =>
+          message.kind === "checkSetup" && message.relatedCheckId === request.id);
+        return {
+          id: request.id,
+          timestamp: setupMessage ? setupMessage.timestamp + 0.1 : request.createdAt,
+          type: "check" as const,
+          request,
+        };
+      }),
   ].sort((a, b) => a.timestamp - b.timestamp);
 
   useEffect(() => {
@@ -67,7 +79,10 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
         <section className="parchment-reading reading-border mx-auto mb-4 max-w-[760px] rounded-sm p-5">
           <p className="text-sm leading-7">
             <IlluminatedInitial genre="fantasy">L</IlluminatedInitial>
-            <HighlightedGameText text="La scène s'ouvre comme un chapitre enluminé. Le Conteur attend votre décision, les marges du récit déjà prêtes à se couvrir d'encre." />
+            <HighlightedGameText
+              mode="none"
+              text="La scène s'ouvre comme un chapitre enluminé. Le Conteur attend votre décision, les marges du récit déjà prêtes à se couvrir d'encre."
+            />
           </p>
         </section>
 
@@ -84,12 +99,17 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
                 />
               </article>
             ) : (
-              <PlayerCheckCard key={item.id} request={item.request} />
+              <PlayerCheckCard
+                key={item.id}
+                onBusyChange={setIsCheckNarrationBusy}
+                request={item.request}
+              />
             )
           ))}
         </div>
       </div>
       <ChatInput
+        isExternalBusy={isCheckNarrationBusy}
         onBusyChange={setIsComposerBusy}
         onPlayerActivity={markPlayerActivity}
         onRequestMapTarget={onRequestMapTarget}

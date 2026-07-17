@@ -4,14 +4,17 @@ import type {
   Campaign,
   Character,
   CharacterDerivedScores,
+  CharacterSpellbook,
   CombatScene,
   EffectTemplate,
   EnemyTemplate,
+  GameActionTemplate,
   ItemInstance,
   ItemTemplate,
   Message,
   NarrativeMomentum,
   NarrativeSceneState,
+  SpellTemplate,
 } from "../../app/types";
 import { aiAgentDefinitions } from "./agents";
 import { getAgentCommandSchemaText } from "./commandPermissions";
@@ -24,6 +27,7 @@ import {
   type DisabledContentTemplateIds,
 } from "../content";
 import { ITEM_CREATION_POLICY_TEXT } from "../items/itemCreationPolicy";
+import { getGameActionTemplate } from "../actions";
 import type {
   AiAgentId,
   AiAgentRequest,
@@ -36,6 +40,7 @@ type AiContextMode =
   | "minimal"
   | "inventoryBrief"
   | "inventoryUse"
+  | "spellBrief"
   | "itemCreation"
   | "combatTactical"
   | "combatSetup"
@@ -55,7 +60,10 @@ export interface AiPromptSnapshot {
   itemTemplates: ItemTemplate[];
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   abilityInstances: AbilityInstance[];
+  spellTemplates?: SpellTemplate[];
+  spellbooks?: CharacterSpellbook[];
   effectTemplates: EffectTemplate[];
   enemyTemplates: EnemyTemplate[];
   disabledContentTemplateIds: DisabledContentTemplateIds;
@@ -434,6 +442,10 @@ function inferContextMode(agentId: AiAgentId, playerInput?: string, request?: Ai
   }
 
   if (agentId === "characterManager") {
+    if (/\b(sort|sorts|grimoire|incantation|emplacement|magie|magique|pr[eé]par[eé])\b/.test(text)) {
+      return "spellBrief";
+    }
+
     if (/\b(sac|inventaire|objets?|poss[eè]de|possede|porte|contenu)\b/.test(text) && !/\b(utilise|bois|consomme|active|attaque|cible|donne|cr[ée]e|crée|modifier|d[eé]truire|supprime)\b/.test(text)) {
       return "inventoryBrief";
     }
@@ -513,6 +525,7 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
         hasVisibleEnemies: snapshot.combat.combatants.some((combatant) => combatant.side === "enemies" && combatant.hp > 0),
         selectedCharacterHasInventory: snapshot.itemInstances.some((item) => item.location.parent === snapshot.selectedCharacterId),
         selectedCharacterHasAbilities: snapshot.abilityInstances.some((ability) => ability.ownerId === snapshot.selectedCharacterId),
+        selectedCharacterHasSpells: (snapshot.spellbooks ?? []).some((book) => book.characterId === snapshot.selectedCharacterId),
       },
     };
   }
@@ -570,6 +583,12 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
       isContentTemplateActive(snapshot.disabledContentTemplateIds, "enemy", template.id));
     const activeAbilityTemplates = snapshot.abilityTemplates.filter((template) =>
       isContentTemplateActive(snapshot.disabledContentTemplateIds, "ability", template.id));
+    const relevantEnemyTemplates = rankTemplates(
+      activeEnemyTemplates,
+      playerInput,
+      (template) => `${template.name} ${template.description} ${template.category} ${template.tags.join(" ")}`,
+      10,
+    );
     return {
       ...base,
       tacticalTemplateSystem: {
@@ -585,11 +604,16 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
         })),
         currentTerrainKinds: Array.from(new Set(snapshot.combat.map.elements.map((element) => element.kind))),
         currentMapDetailTags: Array.from(new Set((snapshot.combat.map.details ?? []).flatMap((detail) => detail.tags))).slice(0, 20),
-        enemyTemplates: activeEnemyTemplates.slice(0, 40),
+        enemyTemplateIds: activeEnemyTemplates.map((template) => template.id).slice(0, 80),
+        relevantEnemyTemplates,
         reusableCombatAbilities: activeAbilityTemplates
-          .filter((template) => Boolean(template.combatRole))
+          .map((template) => ({
+            template,
+            action: getGameActionTemplate(snapshot.gameActionTemplates, template.actionId),
+          }))
+          .filter(({ action }) => Boolean(action?.combatRole))
           .slice(0, 40)
-          .map((template) => ({ id: template.id, name: template.name, combatRole: template.combatRole })),
+          .map(({ template, action }) => ({ id: template.id, name: action!.name, combatRole: action!.combatRole })),
       },
     };
   }
@@ -610,7 +634,10 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
     const relevantAbilityTemplates = rankTemplates(
       activeAbilityTemplates,
       playerInput,
-      (template) => `${template.name} ${template.description} ${template.types.join(" ")} ${template.tags.join(" ")}`,
+      (template) => {
+        const action = getGameActionTemplate(snapshot.gameActionTemplates, template.actionId);
+        return action ? `${action.name} ${action.description} ${action.types.join(" ")} ${action.tags.join(" ")}` : template.id;
+      },
       8,
     );
     const relevantEffectTemplates = rankTemplates(
@@ -628,13 +655,9 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
         abilityTemplateIds: activeAbilityTemplates.map((template) => template.id).slice(0, 120),
         relevantAbilityTemplates: relevantAbilityTemplates.map((template) => ({
           id: template.id,
-          name: template.name,
-          types: template.types,
-          tags: template.tags,
-          combatRole: template.combatRole,
-          activation: template.activation,
+          action: getGameActionTemplate(snapshot.gameActionTemplates, template.actionId),
           charges: template.charges,
-          effects: template.effects,
+          requirements: template.requirements,
         })),
         effectTemplateIds: activeEffectTemplates.map((template) => template.id).slice(0, 120),
         effectOperations: effectOperationCatalog,
@@ -669,6 +692,50 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
   }
 
   if (agentId === "characterManager") {
+    if (contextMode === "spellBrief") {
+      const book = (snapshot.spellbooks ?? []).find((candidate) =>
+        candidate.characterId === snapshot.selectedCharacterId);
+      const templates = new Map((snapshot.spellTemplates ?? []).map((spell) => [spell.id, spell]));
+      return {
+        ...base,
+        characterSystem: {
+          task: "Consulter les sorts et ressources magiques sans charger le catalogue global ni la logique détaillée inutile.",
+          spellbook: book ? {
+            classId: book.classId,
+            castingAbility: book.castingAbility,
+            preparationMode: book.preparationMode,
+            preparationRequired: book.preparationRequired,
+            slots: book.slots,
+            concentration: book.concentration
+              ? (() => {
+                  const spell = templates.get(book.concentration.spellId);
+                  return spell
+                    ? getGameActionTemplate(snapshot.gameActionTemplates, spell.actionId)?.name ?? spell.id
+                    : book.concentration.spellId;
+                })()
+              : null,
+            spells: book.knownSpellIds.map((id) => {
+              const spell = templates.get(id);
+              const action = spell
+                ? getGameActionTemplate(snapshot.gameActionTemplates, spell.actionId)
+                : undefined;
+              return {
+                id,
+                name: action?.name ?? id,
+                minimumSlotLevel: spell?.minimumSlotLevel ?? null,
+                prepared: book.preparedSpellIds.includes(id),
+                components: spell ? {
+                  verbal: spell.components.verbal,
+                  somatic: spell.components.somatic,
+                  material: spell.components.material?.description ?? null,
+                } : null,
+              };
+            }),
+          } : null,
+        },
+      };
+    }
+
     if (contextMode === "inventoryBrief") {
       return {
         ...base,
@@ -691,12 +758,19 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
     }
 
     if (contextMode === "itemCreation") {
+      const reusableItemTemplates = rankTemplates(
+        snapshot.itemTemplates,
+        playerInput,
+        (template) => `${template.name} ${template.description} ${template.type} ${template.types.join(" ")} ${template.tags.join(" ")}`,
+        12,
+      );
       return {
         ...base,
         characterSystem: {
           task: "Créer, donner ou modifier un objet. Préférer réutiliser un template existant avec overrides.",
           selectedCharacterInventory: createItemContext(snapshot, "inventoryBrief"),
-          reusableItemTemplates: createReusableItemTemplateContext(snapshot.itemTemplates),
+          itemTemplateIds: snapshot.itemTemplates.map((template) => template.id).slice(0, 120),
+          reusableItemTemplates: createReusableItemTemplateContext(reusableItemTemplates),
         },
       };
     }
@@ -982,7 +1056,7 @@ function createItemContext(snapshot: AiPromptSnapshot, scope: "inventoryBrief" |
         ...common,
         usable: template?.types.includes("consumable") || template?.effects.length ? true : undefined,
         effects: template?.effects ?? [],
-        targetingV2: template?.targetingV2,
+        targeting: template?.targeting,
       }];
     }
 
@@ -991,7 +1065,7 @@ function createItemContext(snapshot: AiPromptSnapshot, scope: "inventoryBrief" |
       effects: template?.effects ?? [],
       attacks: template?.attacks ?? [],
       attackModifiers: template?.attackModifiers ?? [],
-      targetingV2: template?.targetingV2,
+      targeting: template?.targeting,
     }];
   });
 }
@@ -1009,7 +1083,7 @@ function createReusableItemTemplateContext(templates: ItemTemplate[]) {
     effects: template.effects,
     attacks: template.attacks,
     attackModifiers: template.attackModifiers,
-    targetingV2: template.targetingV2,
+    targeting: template.targeting,
   }));
 }
 
@@ -1056,18 +1130,21 @@ function truncateContextText(value: string, maximum: number): string {
 function createAbilityContext(snapshot: AiPromptSnapshot, scope: "combat" | "all") {
   return snapshot.abilityInstances.flatMap((ability) => {
     const template = snapshot.abilityTemplates.find((candidate) => candidate.id === ability.templateId);
+    const action = template
+      ? getGameActionTemplate(snapshot.gameActionTemplates, template.actionId)
+      : undefined;
 
-    if (!template) {
+    if (!template || !action) {
       return [];
     }
 
     if (scope === "combat") {
       const isCombatRelevant =
-        template.combatRole === "attack" ||
-        template.combatRole === "movement" ||
-        template.combatRole === "support" ||
-        template.activation.timing === "reaction" ||
-        template.activation.timing === "bonus";
+        action.combatRole === "attack" ||
+        action.combatRole === "movement" ||
+        action.combatRole === "support" ||
+        action.activation.timing === "reaction" ||
+        action.activation.timing === "bonus";
 
       if (!isCombatRelevant) {
         return [];
@@ -1078,13 +1155,13 @@ function createAbilityContext(snapshot: AiPromptSnapshot, scope: "combat" | "all
       id: ability.id,
       templateId: ability.templateId,
       ownerId: ability.ownerId,
-      name: template.name,
-      combatRole: template.combatRole,
-      activation: template.activation,
+      name: action.name,
+      combatRole: action.combatRole,
+      activation: action.activation,
       charges: template.charges,
       current: ability.current,
-      targetingV2: template.targetingV2,
-      effects: template.effects,
+      targeting: action.targeting,
+      effects: action.effects,
     }];
   });
 }

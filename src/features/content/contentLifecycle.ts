@@ -5,6 +5,7 @@ import type {
   EffectTemplate,
   EnemyTemplate,
   Entity,
+  GameActionTemplate,
   ItemEffectRef,
   ItemInstance,
   ItemTemplate,
@@ -61,6 +62,7 @@ export interface ContentDependency {
 export interface ContentDependencyContext {
   effectTemplates: EffectTemplate[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   itemTemplates: ItemTemplate[];
   enemyTemplates: EnemyTemplate[];
   itemInstances: ItemInstance[];
@@ -111,7 +113,12 @@ export function getContentTemplateDependencies(
     dependencies.push(dependency);
   };
   const itemName = (id: string) => context.itemTemplates.find((template) => template.id === id)?.name ?? id;
-  const abilityName = (id: string) => context.abilityTemplates.find((template) => template.id === id)?.name ?? id;
+  const abilityName = (id: string) => {
+    const ability = context.abilityTemplates.find((template) => template.id === id);
+    return ability
+      ? context.gameActionTemplates.find((action) => action.id === ability.actionId)?.name ?? id
+      : id;
+  };
 
   if (kind === "effect") {
     context.itemTemplates.forEach((template) => {
@@ -119,9 +126,9 @@ export function getContentTemplateDependencies(
         add({ id: template.id, kind: "template", label: template.name, relationship: "Effet d'objet" });
       }
     });
-    context.abilityTemplates.forEach((template) => {
+    context.gameActionTemplates.forEach((template) => {
       if (template.effects.some((effect) => effect.effectId === templateId)) {
-        add({ id: template.id, kind: "template", label: template.name, relationship: "Effet de capacité" });
+        add({ id: template.id, kind: "template", label: template.name, relationship: "Effet d'action" });
       }
     });
     context.itemInstances.forEach((instance) => {
@@ -202,7 +209,7 @@ function collectEffectVariableDependencies(
 
   context.itemTemplates.forEach((template) =>
     inspectReferences(template.effects, { id: template.id, kind: "template", label: template.name }));
-  context.abilityTemplates.forEach((template) =>
+  context.gameActionTemplates.forEach((template) =>
     inspectReferences(template.effects, { id: template.id, kind: "template", label: template.name }));
   context.itemInstances.forEach((instance) =>
     inspectReferences(instance.effects, {
@@ -214,13 +221,20 @@ function collectEffectVariableDependencies(
     inspectReferences(instance.effects, {
       id: instance.id,
       kind: "instance",
-      label: context.abilityTemplates.find((template) => template.id === instance.templateId)?.name ?? instance.id,
+      label: abilityNameFromContext(context, instance.templateId) ?? instance.id,
     }));
   context.effectTemplates.forEach((template) => {
     if (template.actions.some((action) => action.operation === operation && action.variables[variable] === expectedId)) {
       add({ id: template.id, kind: "template", label: template.name, relationship: effectRelationship(operation, variable) });
     }
   });
+}
+
+function abilityNameFromContext(context: ContentDependencyContext, templateId: string): string | undefined {
+  const ability = context.abilityTemplates.find((template) => template.id === templateId);
+  return ability
+    ? context.gameActionTemplates.find((action) => action.id === ability.actionId)?.name
+    : undefined;
 }
 
 function effectRelationship(operation: string, variable: string): string {

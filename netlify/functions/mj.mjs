@@ -118,7 +118,7 @@ async function callCompatibleProvider(agentId, prompt) {
 function getMaxTokens(agentId) {
   const configuredMaximum = Number.parseInt(process.env.AI_PROVIDER_MAX_TOKENS ?? "700", 10);
   const agentMaximums = {
-    narrationManager: 320,
+    narrationManager: 400,
     requestAnalyzer: 260,
     rulesValidator: 260,
     characterManager: 450,
@@ -127,7 +127,7 @@ function getMaxTokens(agentId) {
     combatSetupManager: 520,
     tacticalTemplateManager: 700,
     assetTemplateManager: 700,
-    worldManager: 420,
+    worldManager: 500,
   };
   const maximum = agentMaximums[agentId] ?? 600;
   return Math.min(Number.isFinite(configuredMaximum) ? configuredMaximum : 700, maximum);

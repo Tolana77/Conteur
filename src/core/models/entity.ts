@@ -13,6 +13,15 @@ export interface Entity {
     importance?: string;
     connections?: string[];
     tags?: string[];
+    aliases?: string[];
+    ownerId?: string;
+    socialRank?: "outsider" | "commoner" | "notable" | "noble" | "highNoble" | "sovereign";
+    access?: "open" | "guarded" | "restricted";
+    disposition?: string;
+    protocol?: string;
+    attentionRule?: string;
+    delegatesTo?: string[];
+    knownFacts?: string[];
     enemyTemplateId?: string;
   };
 }

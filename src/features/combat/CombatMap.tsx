@@ -2,6 +2,7 @@ import { MouseEvent, PointerEvent as ReactPointerEvent, WheelEvent, useEffect, u
 import type {
   AbilityInstance,
   AbilityTemplate,
+  ActionTargeting,
   Character,
   CharacterDerivedScores,
   Combatant,
@@ -9,13 +10,25 @@ import type {
   CombatMapDetail,
   CombatMapElement,
   CombatPosition,
+  GameActionTemplate,
   ItemAttackModifierProfile,
   ItemInstance,
   ItemTemplate,
 } from "../../app/types";
 import { canUseAbility, getAbilityCharges, getAbilityMaxCharges } from "../abilities";
+import { getGameActionTemplate, resolveGameActionEffects } from "../actions";
 import { getCombatConditionTemplate, isHarmfulCombatCondition } from "./conditionTemplates";
-import { getSuggestedSide } from "./targeting";
+import {
+  getDistance,
+  getSelectableTargetKinds,
+  getSuggestedSide,
+  getTargetingLabel,
+  getTargetingRange,
+  hasLineOfSight,
+  isPointInsideBlockingObstacle,
+  isSuggestedCombatant,
+  resolveActionTargets,
+} from "./targeting";
 import { useGameStore } from "../../store/useGameStore";
 import { HighlightedGameText } from "../../ui/gameTerms";
 
@@ -181,6 +194,7 @@ interface CombatWeapon {
   range: number;
   damage: number;
   damageType: string;
+  targeting: ActionTargeting;
   modifierName?: string;
   modifierQuantity?: number;
 }
@@ -190,6 +204,7 @@ interface CombatAttackAbility {
   id: string;
   name: string;
   range: number;
+  targeting: ActionTargeting;
   damageLabel: string;
   charges: number | null;
   maxCharges: number | null;
@@ -332,21 +347,23 @@ function getCombatantSubtitle(combatant: Combatant, characters: Character[]): st
 
 function resolveAbilityForCharacter(
   templates: AbilityTemplate[],
+  actions: GameActionTemplate[],
   instances: AbilityInstance[],
   characterId: string,
   templateId: string,
 ) {
   const instance = instances.find((candidate) => candidate.ownerId === characterId && candidate.templateId === templateId);
   const template = templates.find((candidate) => candidate.id === templateId);
+  const action = template ? getGameActionTemplate(actions, template.actionId) : undefined;
 
-  if (!instance || !template) {
+  if (!instance || !template || !action) {
     return null;
   }
 
   return {
     id: instance.id,
-    name: template.name,
-    targetingV2: template.targetingV2,
+    name: action.name,
+    targeting: action.targeting,
     charges: instance.current.charges ?? template.charges?.initial ?? template.charges?.max ?? 0,
     maxCharges: template.charges?.max ?? 0,
   };
@@ -474,11 +491,26 @@ function getEquippedWeapons(
               range: item.overrides["base.range"] ?? template.base.range ?? 1.5,
               damage: item.overrides["base.damage"] ?? template.base.damage ?? template.base.attack ?? 1,
               damageType: item.overrides["base.damageType"] ?? template.base.damageType ?? "force",
+              targeting: template.targeting,
             },
           ];
 
       return attacks.flatMap((attack) => {
         const attackKind = getAttackKindFromProfile(attack);
+        const range = getItemNumber(attack.range, 1.5);
+        const inheritedTargeting = attack.targeting ?? template.targeting;
+        const targeting: ActionTargeting = inheritedTargeting
+          ? {
+              ...inheritedTargeting,
+              aim: { ...inheritedTargeting.aim, range },
+            }
+          : {
+              aim: { allowed: ["entity", "position"], required: true, range, lineOfSight: true },
+              area: { shape: "none" },
+              affects: { allowed: ["living", "object"], maxTargets: 1, includeSelf: false },
+              defaultPriority: ["nearestEnemy"],
+              suggestedSides: ["enemy"],
+            };
         const baseWeapon = {
           kind: "weapon" as const,
           id: `${item.id}:${attack.id}`,
@@ -486,9 +518,10 @@ function getEquippedWeapons(
           attackId: attack.id,
           name: attacks.length > 1 ? `${itemName} · ${attack.name}` : itemName,
           itemName,
-          range: getItemNumber(attack.range, 1.5),
+          range,
           damage: getItemNumber(attack.damage, 1),
           damageType: getItemString(attack.damageType, "force"),
+          targeting,
           damageLabel: formatDamageLabel(
             formatDamageFormulaLabel([attack.damage, getDefaultDamageModifierLabel(attackKind, template)]) ?? attack.damage,
             getItemString(attack.damageType, "force"),
@@ -520,6 +553,10 @@ function getEquippedWeapons(
                 id: `${item.id}:${attack.id}|${modifierItem.id}:${modifier.id}`,
                 name: `${baseWeapon.name} · ${modifier.name}`,
                 range,
+                targeting: {
+                  ...baseWeapon.targeting,
+                  aim: { ...baseWeapon.targeting.aim, range },
+                },
                 damage: getItemNumber(displayDamage, baseWeapon.damage),
                 damageType,
                 damageLabel: formatDamageLabel(displayDamage, damageType),
@@ -536,9 +573,11 @@ function getEquippedWeapons(
 
 function getCombatAttackAbilities(
   abilityTemplates: AbilityTemplate[],
+  gameActionTemplates: GameActionTemplate[],
   abilityInstances: AbilityInstance[],
   itemInstances: ItemInstance[],
   characterId: string | undefined,
+  characterLevel = 1,
 ): CombatAttackAbility[] {
   if (!characterId) {
     return [];
@@ -562,25 +601,29 @@ function getCombatAttackAbilities(
     }
 
     const template = abilityTemplates.find((candidate) => candidate.id === ability.templateId);
+    const action = template
+      ? getGameActionTemplate(gameActionTemplates, template.actionId)
+      : undefined;
 
-    if (!template || template.combatRole !== "attack" || template.activation.timing !== "action" || !canUseAbility(ability, template)) {
+    if (!template || !action || action.combatRole !== "attack" || action.activation.timing !== "action" || !canUseAbility(ability, template)) {
       return [];
     }
 
     return [{
       kind: "ability" as const,
       id: ability.id,
-      name: template.name,
-      range: getItemNumber(template.targetingV2?.aim.range ?? template.targeting.range, 1.5),
-      damageLabel: formatAttackAbilityDamage(template),
+      name: action.name,
+      range: getTargetingRange(action.targeting, 1.5),
+      targeting: action.targeting,
+      damageLabel: formatAttackAbilityDamage(action, characterLevel, Number(ability.data.level ?? 1)),
       charges: getAbilityCharges(ability, template),
       maxCharges: getAbilityMaxCharges(template),
     }];
   });
 }
 
-function formatAttackAbilityDamage(template: AbilityTemplate): string {
-  const damage = template.effects.find(
+function formatAttackAbilityDamage(action: GameActionTemplate, characterLevel: number, abilityLevel: number): string {
+  const damage = resolveGameActionEffects(action, { characterLevel, abilityLevel }).find(
     (effect) => effect.effectId === "damage" || effect.effectId === "randomDamage",
   );
 
@@ -594,32 +637,48 @@ function formatAttackAbilityDamage(template: AbilityTemplate): string {
   return `${value || damage.nom || "Dégâts"}${damageType ? ` dégâts ${damageType}` : ""}`;
 }
 
-function getReachableAttackTargets(combat: ReturnType<typeof useGameStore.getState>["combat"], actor: Combatant | undefined, range: number) {
+function getReachableAttackTargets(
+  combat: ReturnType<typeof useGameStore.getState>["combat"],
+  actor: Combatant | undefined,
+  targeting: ActionTargeting,
+) {
   if (!actor) {
     return [];
   }
 
+  const allowed = getSelectableTargetKinds(targeting);
   return combat.combatants
-    .filter((combatant) =>
-      combatant.hp > 0 &&
-      (combatant.side === "enemies" || combatant.sourceType === "hazard"),
-    )
-    .map((combatant) => ({
-      combatant,
-      distance: getDistance(actor.position, combatant.position),
-      visible: hasLineOfSight(combat, actor.position, combatant.position),
-    }))
-    .filter((target) => target.visible && target.distance <= range)
-    .sort((a, b) => {
-      const aPriority = a.combatant.side === "enemies" ? 0 : 1;
-      const bPriority = b.combatant.side === "enemies" ? 0 : 1;
+    .filter((combatant) => combatant.hp > 0 && combatant.id !== actor.id)
+    .map((combatant) => {
+      const kind = combatant.sourceType === "character" ? "character" as const : "entity" as const;
+      const target = { kind, id: combatant.sourceId, label: combatant.name, source: "selected" as const };
+      const resolution = resolveActionTargets({
+        actor,
+        combat,
+        fallbackCharacterId: actor.sourceId,
+        target,
+        targeting,
+      });
 
+      return {
+        combatant,
+        distance: getDistance(actor.position, combatant.position),
+        kind,
+        resolution,
+        side: getSuggestedSide(actor, combatant),
+      };
+    })
+    .filter(
+      (candidate) =>
+        allowed.includes(candidate.kind) &&
+        !candidate.resolution.invalidReason &&
+        isSuggestedCombatant(actor, candidate.combatant, targeting),
+    )
+    .sort((a, b) => {
+      const aPriority = targeting.suggestedSides?.indexOf(a.side) ?? -1;
+      const bPriority = targeting.suggestedSides?.indexOf(b.side) ?? -1;
       return aPriority - bPriority || a.distance - b.distance;
     });
-}
-
-function getDistance(a: CombatPosition, b: CombatPosition): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function clampMapPosition(position: CombatPosition, width: number, height: number): CombatPosition {
@@ -695,64 +754,6 @@ function doesSegmentHitMapElement(
   }
 
   return false;
-}
-
-function isPointInsideBlockingObstacle(
-  combat: ReturnType<typeof useGameStore.getState>["combat"],
-  point: CombatPosition,
-) {
-  const cellSize = getMapCellSize(combat);
-
-  return (
-    combat.map.obstacles.some(
-      (obstacle) =>
-        (obstacle.blocksMovement || obstacle.blocksLineOfSight) &&
-        isPointInsideObstacle(point, obstacle),
-    ) ||
-    combat.map.elements.some(
-      (element) =>
-        element.blocksMovement &&
-        isPointInsideMapElement(point, element, cellSize),
-    )
-  );
-}
-
-function hasLineOfSight(combat: ReturnType<typeof useGameStore.getState>["combat"], from: CombatPosition, to: CombatPosition): boolean {
-  const blockedByObstacle = combat.map.obstacles.some((obstacle) => {
-    if (!obstacle.blocksLineOfSight) {
-      return false;
-    }
-
-    const steps = Math.max(8, Math.ceil(getDistance(from, to) * 2));
-
-    for (let index = 1; index < steps; index += 1) {
-      const ratio = index / steps;
-      const point = {
-        x: from.x + (to.x - from.x) * ratio,
-        y: from.y + (to.y - from.y) * ratio,
-      };
-
-      if (isPointInsideObstacle(point, obstacle)) {
-        return true;
-      }
-    }
-
-    return false;
-  });
-
-  if (blockedByObstacle) {
-    return false;
-  }
-
-  const cellSize = getMapCellSize(combat);
-
-  return !combat.map.elements.some((element) => {
-    const blocksLineOfSight =
-      element.blocksLineOfSight ||
-      element.effects?.some((effect) => effect.type === "lineOfSightBlock");
-
-    return blocksLineOfSight && doesSegmentHitMapElement(from, to, element, cellSize);
-  });
 }
 
 function hasMovementPath(combat: ReturnType<typeof useGameStore.getState>["combat"], from: CombatPosition, to: CombatPosition): boolean {
@@ -946,12 +947,14 @@ function findNearestValidMapPosition({
   origin,
   position,
   range,
+  requiresLineOfSight = false,
   requiresMovementPath = false,
 }: {
   combat: ReturnType<typeof useGameStore.getState>["combat"];
   origin: CombatPosition | undefined;
   position: CombatPosition;
   range: number;
+  requiresLineOfSight?: boolean;
   requiresMovementPath?: boolean;
 }): CombatPosition | null {
   const cellSize = getMapCellSize(combat);
@@ -969,6 +972,7 @@ function findNearestValidMapPosition({
 
   if (
     !isPointInsideBlockingObstacle(combat, clampedPosition) &&
+    (!requiresLineOfSight || !origin || hasLineOfSight(combat, origin, clampedPosition)) &&
     (!requiresMovementPath ||
       !origin ||
       (hasMovementPath(combat, origin, clampedPosition) && calculateMovementCost(combat, origin, clampedPosition) <= range + 0.001))
@@ -992,6 +996,10 @@ function findNearestValidMapPosition({
       }
 
       if (isPointInsideBlockingObstacle(combat, center)) {
+        continue;
+      }
+
+      if (requiresLineOfSight && origin && !hasLineOfSight(combat, origin, center)) {
         continue;
       }
 
@@ -1175,6 +1183,7 @@ export function CombatMap({
   const itemInstances = useGameStore((state) => state.itemInstances);
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
   const addActionIntent = useGameStore((state) => state.addActionIntent);
   const addAttackIntent = useGameStore((state) => state.addAttackIntent);
@@ -1224,15 +1233,22 @@ export function CombatMap({
     : undefined;
   const gridCellSize = getMapCellSize(combat);
   const shadowStep = playerCharacter
-    ? resolveAbilityForCharacter(abilityTemplates, abilityInstances, playerCharacter.id, "abl_shadow_step")
+    ? resolveAbilityForCharacter(abilityTemplates, gameActionTemplates, abilityInstances, playerCharacter.id, "abl_shadow_step")
     : null;
   const weapons = useMemo(
     () => getEquippedWeapons(itemInstances, itemTemplates, playerCharacter?.id),
     [itemInstances, itemTemplates, playerCharacter?.id],
   );
   const attackAbilities = useMemo(
-    () => getCombatAttackAbilities(abilityTemplates, abilityInstances, itemInstances, playerCharacter?.id),
-    [abilityInstances, abilityTemplates, itemInstances, playerCharacter?.id],
+    () => getCombatAttackAbilities(
+      abilityTemplates,
+      gameActionTemplates,
+      abilityInstances,
+      itemInstances,
+      playerCharacter?.id,
+      playerCharacter?.niveau,
+    ),
+    [abilityInstances, abilityTemplates, gameActionTemplates, itemInstances, playerCharacter?.id, playerCharacter?.niveau],
   );
   const attackOptions = useMemo<CombatAttackOption[]>(
     () => [...weapons, ...attackAbilities],
@@ -1266,7 +1282,7 @@ export function CombatMap({
       requestedMapTargetIntent,
     }),
   );
-  const requestedMapTargetRange = Number(requestedMapTargetIntent?.targeting?.range);
+  const requestedMapTargetRange = getTargetingRange(requestedMapTargetIntent?.targeting, 1.5);
   const tooltipPosition = selectedMapElement
     ? getMapElementCenter(selectedMapElement)
     : selectedMapDetail
@@ -1291,7 +1307,7 @@ export function CombatMap({
         ? positionAbilityTargeting.range
       : 0;
   const previewRequiresLineOfSight = requestedMapTargetIntent
-    ? requestedMapTargetIntent.targeting?.lineOfSight !== false
+    ? requestedMapTargetIntent.targeting?.aim.lineOfSight !== false
     : positionAbilityTargeting
       ? positionAbilityTargeting.lineOfSight
       : isAttackTargetingOnMap;
@@ -1402,6 +1418,7 @@ export function CombatMap({
           origin: playerCombatant?.position,
           position,
           range: previewRange,
+          requiresLineOfSight: previewRequiresLineOfSight,
         });
         if (!validPosition) {
           return;
@@ -1426,6 +1443,7 @@ export function CombatMap({
           origin: playerCombatant?.position,
           position,
           range: positionAbilityTargeting.range,
+          requiresLineOfSight: positionAbilityTargeting.lineOfSight,
         });
         if (!validPosition) {
           return;
@@ -1454,6 +1472,7 @@ export function CombatMap({
           origin: playerCombatant?.position,
           position,
           range: selectedAttackOption?.range ?? 1.5,
+          requiresLineOfSight: selectedAttackOption?.targeting.aim.lineOfSight !== false,
         });
         if (!validPosition) {
           return;
@@ -1816,20 +1835,37 @@ export function CombatMap({
                   onClick={(event) => {
                     event.stopPropagation();
                     if (requestedMapTargetIntent) {
-                      if (requestedMapTargetIntent.targeting?.label === "destination") {
+                      if (getTargetingLabel(requestedMapTargetIntent.targeting) === "destination") {
                         return;
                       }
 
                       const targetKind = combatant.sourceType === "character" ? "character" : "entity";
+                      const allowedKinds = getSelectableTargetKinds(requestedMapTargetIntent.targeting);
 
-                      if (!requestedMapTargetIntent.targeting?.allowed.includes(targetKind)) {
+                      if (!allowedKinds.includes(targetKind) || !requestedMapTargetIntent.targeting) {
                         return;
                       }
 
                       if (
                         playerCombatant &&
-                        requestedMapTargetIntent.targeting.suggestedSides &&
-                        !requestedMapTargetIntent.targeting.suggestedSides.includes(getSuggestedSide(playerCombatant, combatant))
+                        !isSuggestedCombatant(playerCombatant, combatant, requestedMapTargetIntent.targeting)
+                      ) {
+                        return;
+                      }
+
+                      if (
+                        playerCombatant &&
+                        resolveActionTargets({
+                          actor: playerCombatant,
+                          combat,
+                          fallbackCharacterId: selectedCharacterId,
+                          targeting: requestedMapTargetIntent.targeting,
+                          target: {
+                            kind: targetKind,
+                            id: combatant.sourceId,
+                            label: combatant.name,
+                          },
+                        }).invalidReason
                       ) {
                         return;
                       }
@@ -1844,20 +1880,26 @@ export function CombatMap({
                       return;
                     }
 
-                    if (isAttackTargetingOnMap && (combatant.side === "enemies" || combatant.sourceType === "hazard")) {
+                    if (isAttackTargetingOnMap && playerCombatant && selectedAttackOption) {
                       setSelectedAttackTargetId(combatant.id);
+                      const target = {
+                        kind: combatant.sourceType === "character" ? "character" as const : "entity" as const,
+                        id: combatant.sourceId,
+                        label: combatant.name,
+                        source: "selected" as const,
+                      };
+                      const resolution = resolveActionTargets({
+                        actor: playerCombatant,
+                        combat,
+                        fallbackCharacterId: selectedCharacterId,
+                        target,
+                        targeting: selectedAttackOption.targeting,
+                      });
                       if (
-                        playerCombatant &&
-                        selectedAttackOption &&
-                        hasLineOfSight(combat, playerCombatant.position, combatant.position) &&
-                        getDistance(playerCombatant.position, combatant.position) <= selectedAttackOption.range
+                        !resolution.invalidReason &&
+                        isSuggestedCombatant(playerCombatant, combatant, selectedAttackOption.targeting)
                       ) {
-                        const prepared = prepareCombatAttack(selectedAttackOption, {
-                          kind: combatant.sourceType === "character" ? "character" : "entity",
-                          id: combatant.sourceId,
-                          label: combatant.name,
-                          source: "selected",
-                        });
+                        const prepared = prepareCombatAttack(selectedAttackOption, target);
 
                         if (prepared) {
                           setIsAttackDialogOpen(false);
@@ -1915,7 +1957,7 @@ export function CombatMap({
           </svg>
           {requestedMapTargetIntent ? (
             <div className="pointer-events-none absolute left-3 top-3 z-20 rounded border border-[#9C7A2E]/45 bg-[#15121A]/85 px-3 py-2 text-xs text-[#E4D8BE] shadow-xl">
-              Cliquez la carte pour choisir une {requestedMapTargetIntent.targeting?.label === "destination" ? "destination" : "cible"}.
+              Cliquez la carte pour choisir une {getTargetingLabel(requestedMapTargetIntent.targeting) === "destination" ? "destination" : "cible"}.
             </div>
           ) : null}
           {(selectedMapElement || selectedMapDetail) && !hasActiveMapAction ? (
@@ -2214,12 +2256,12 @@ function CombatTurnPanel({
               label: shadowStep.name,
               disabled: !isPlayerTurn || playerCombatant.resources.bonus <= 0 || shadowStep.charges <= 0,
               onClick: () => {
-                const range = Number(shadowStep.targetingV2?.aim.range ?? 3);
+                const range = Number(shadowStep.targeting?.aim.range ?? 3);
                 onTargetPositionAbility({
                   id: shadowStep.id,
                   name: shadowStep.name,
                   range: Number.isFinite(range) && range > 0 ? range : 3,
-                  lineOfSight: shadowStep.targetingV2?.aim.lineOfSight !== false,
+                  lineOfSight: shadowStep.targeting?.aim.lineOfSight !== false,
                 });
               },
             },
@@ -2422,7 +2464,7 @@ function AttackDialog({
   selectedAttackId: string | null;
 }) {
   const selectedAttack = attackOptions.find((option) => option.id === selectedAttackId) ?? attackOptions[0] ?? null;
-  const targets = selectedAttack ? getReachableAttackTargets(combat, playerCombatant, selectedAttack.range) : [];
+  const targets = selectedAttack ? getReachableAttackTargets(combat, playerCombatant, selectedAttack.targeting) : [];
   const [manualTargetId, setManualTargetId] = useState<string | null>(targets[0]?.combatant.id ?? null);
   const groupedAttacks = groupAttackOptions(attackOptions);
   const selectedTarget =
@@ -2434,6 +2476,30 @@ function AttackDialog({
   useEffect(() => {
     setManualTargetId(targets[0]?.combatant.id ?? null);
   }, [selectedAttack?.id, targets[0]?.combatant.id]);
+
+  if (isMapTargeting && selectedAttack) {
+    return (
+      <div className="pointer-events-none fixed inset-x-0 bottom-3 z-50 flex justify-center px-3">
+        <div className="pointer-events-auto flex max-w-[min(94vw,560px)] items-center gap-3 border border-[#9C7A2E]/55 bg-[#15121A]/95 px-3 py-2 shadow-xl backdrop-blur-sm">
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-[#E4D8BE]">
+              {selectedAttack.name}
+            </span>
+            <span className="block text-[11px] text-[#9C7A2E]">
+              Choisissez une cible ou une position à {selectedAttack.range} m maximum.
+            </span>
+          </span>
+          <button
+            className="shrink-0 border border-[#9C7A2E]/30 px-3 py-1.5 text-xs text-[#E4D8BE]/75 hover:border-[#9C7A2E] hover:text-[#E4D8BE]"
+            onClick={onClose}
+            type="button"
+          >
+            Annuler
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-3 z-50 flex justify-center px-3 sm:bottom-auto sm:left-auto sm:right-[340px] sm:top-24 sm:block sm:w-[420px] sm:px-0">
@@ -2453,7 +2519,7 @@ function AttackDialog({
                   </div>
                   <div className="grid gap-1">
                     {group.options.map((option) => {
-                      const reachableTargets = getReachableAttackTargets(combat, playerCombatant, option.range);
+                      const reachableTargets = getReachableAttackTargets(combat, playerCombatant, option.targeting);
                       const isSelected = selectedAttack?.id === option.id;
 
                       return (
@@ -2478,7 +2544,7 @@ function AttackDialog({
                               ) : null}
                             </span>
                             <span className="shrink-0 rounded border border-[#9C7A2E]/35 bg-[#221E29] px-1.5 py-0.5 text-[11px] font-medium text-[#E4D8BE]">
-                              <HighlightedGameText text={option.damageLabel} />
+                              <HighlightedGameText mode="mechanical" text={option.damageLabel} />
                             </span>
                             <span className="shrink-0 text-[11px] text-[#9C7A2E]">{option.range} m</span>
                           </span>

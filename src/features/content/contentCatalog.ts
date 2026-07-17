@@ -1,4 +1,4 @@
-import type { EffectOperationId, EffectTemplate, EnemyTemplate } from "../../app/types";
+import type { EffectOperationId } from "../../app/types";
 
 export interface EffectOperationDefinition {
   id: EffectOperationId;
@@ -27,73 +27,5 @@ export const effectOperationCatalog: EffectOperationDefinition[] = [
   { id: "dispel", name: "Dissipation", description: "Retire un état ou une zone correspondant à un identifiant.", requiredVariables: [], optionalVariables: ["condition", "zoneKind"] },
 ];
 
-export const initialEffectTemplates: EffectTemplate[] = [
-  {
-    id: "effect-ember-burst",
-    name: "Décharge de braise",
-    description: "Une décharge de feu réutilisable par les objets et capacités.",
-    tags: ["fire", "damage", "magic"],
-    actions: [{ operation: "damage", variables: { value: "1d6 + INT", damageType: "feu" } }],
-  },
-];
-
-export const initialEnemyTemplates: EnemyTemplate[] = [
-  {
-    id: "enemy-palace-guard",
-    name: "Garde du palais",
-    description: "Soldat discipliné entraîné à contenir les intrusions et protéger les dignitaires.",
-    level: 1,
-    category: "humanoid",
-    tags: ["human", "guard", "law"],
-    hp: 12,
-    defense: 13,
-    initiative: 1,
-    speed: 9,
-    reach: 1.5,
-    attacks: [{
-      id: "guard-spear",
-      name: "Lance de garde",
-      attackKind: "melee",
-      attackBonus: 3,
-      damage: "1d6 + 1",
-      damageType: "perforant",
-      range: 1.5,
-      cost: "action",
-      tags: ["weapon", "spear"],
-    }],
-    abilityTemplateIds: [],
-    behavior: { role: "soldier", aggression: 3, preferredRange: 1.5, retreatBelowHpPercent: 20, priorities: ["protéger l'autorité", "bloquer la fuite", "désarmer"] },
-    resistances: [],
-    vulnerabilities: [],
-    immunities: [],
-  },
-  {
-    id: "enemy-ash-hound",
-    name: "Molosse de cendre",
-    description: "Prédateur bas et rapide dont la gueule exhale une chaleur suffocante.",
-    level: 2,
-    category: "beast",
-    tags: ["beast", "fire", "tracker"],
-    hp: "2d8 + 4",
-    defense: 12,
-    initiative: 2,
-    speed: 12,
-    reach: 1.5,
-    attacks: [{
-      id: "ash-hound-bite",
-      name: "Morsure ardente",
-      attackKind: "melee",
-      attackBonus: 4,
-      damage: "1d6 + 2",
-      damageType: "feu",
-      range: 1.5,
-      cost: "action",
-      tags: ["bite", "fire"],
-    }],
-    abilityTemplateIds: [],
-    behavior: { role: "skirmisher", aggression: 4, preferredRange: 1.5, retreatBelowHpPercent: 15, priorities: ["encercler", "attaquer une cible isolée", "poursuivre"] },
-    resistances: ["feu"],
-    vulnerabilities: ["froid"],
-    immunities: [],
-  },
-];
+export { initialEffectTemplates } from "./effectTemplates";
+export { initialEnemyTemplates } from "./enemyTemplates";

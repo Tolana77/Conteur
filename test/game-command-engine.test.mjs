@@ -158,6 +158,24 @@ assert.equal(parseGameCommand({
   payload: { narration: "Texte", proactiveKey: 42 },
 }).success, false);
 
+const checkSetupCommand = runtime.createCommand(
+  initialSnapshot,
+  {
+    type: "chat.addGmMessage",
+    payload: {
+      content: "Vous tentez de franchir la corniche.",
+      kind: "checkSetup",
+      relatedCheckId: "check-engine-test",
+    },
+  },
+  { id: "gm-test", role: "gm" },
+);
+assert.equal(parseGameCommand(checkSetupCommand).success, true);
+const checkSetupResult = runtime.execute(initialSnapshot, checkSetupCommand);
+assert.equal(checkSetupResult.ok, true);
+assert.equal(checkSetupResult.state.messages[0]?.kind, "checkSetup");
+assert.equal(checkSetupResult.state.messages[0]?.relatedCheckId, "check-engine-test");
+
 const { useGameStore } = await vite.ssrLoadModule("/src/store/useGameStore.ts");
 const storeBefore = useGameStore.getState();
 const storeCharacter = storeBefore.characters[0];

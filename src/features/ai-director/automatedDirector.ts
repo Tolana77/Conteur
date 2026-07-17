@@ -1,5 +1,9 @@
 import { useGameStore, type GameState } from "../../store/useGameStore";
-import type { NarrativeScenePatch } from "../../app/types";
+import type {
+  NarrativeScenePatch,
+  PlayerCheckDegree,
+  PlayerCheckNarrationContext,
+} from "../../app/types";
 import { executeAiCommand } from "./aiExecution";
 import { resolveAutomaticLocalRequest } from "./automaticLocalResolution";
 import {
@@ -26,6 +30,13 @@ import type {
   AiResolutionDraft,
   AiResolutionDraftPatch,
 } from "./types";
+import {
+  buildGroundingReport,
+  createGroundingDraftPatch,
+  validateGroundedNarration,
+  type GroundingReport,
+} from "./grounding";
+import { createPlayerCheckNarrationContext } from "./improvisedActions";
 
 export interface AutomatedDirectorResult {
   narration: string;
@@ -57,7 +68,8 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   initialState.advanceNarrativeScene(effectiveInput);
 
   const routingState = useGameStore.getState();
-  const route = routePlayerInput(effectiveInput, routingState);
+  const grounding = buildGroundingReport(effectiveInput, routingState);
+  const route = routePlayerInput(effectiveInput, routingState, grounding);
   const localResolution = resolveAutomaticLocalRequest(effectiveInput, routingState);
   const hasLocalClarification = Boolean(localResolution.draftPatch?.questions?.length);
   const selectedAgents = localResolution.handled && !localResolution.continueToAgents
@@ -71,6 +83,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   }));
 
   draft = mergeResolutionDraft(draft, localResolution.draftPatch);
+  draft = mergeResolutionDraft(draft, createGroundingDraftPatch(grounding));
   draft = mergeResolutionDraft(draft, createPendingCombatNarrationPatch(pendingCombatCuesAtTurnStart));
   applyScenePatches(localResolution.draftPatch?.scenePatches);
 
@@ -138,7 +151,12 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
   const queuedCombatCueIdsBeforeExecution = new Set(
     useGameStore.getState().combatNarrationQueue.map((cue) => cue.id),
   );
-  const executionResults = clarification ? [] : executeValidatedCommands(gatheredCommands);
+  const pendingCheckIdsBeforeExecution = new Set(
+    useGameStore.getState().playerCheckRequests
+      .filter((request) => request.status === "pending")
+      .map((request) => request.id),
+  );
+  const executionResults = clarification ? [] : executeValidatedCommands(gatheredCommands, grounding);
   const combatCueIdsCreatedByExecution = useGameStore.getState().combatNarrationQueue
     .filter((cue) => !queuedCombatCueIdsBeforeExecution.has(cue.id))
     .map((cue) => cue.id);
@@ -146,6 +164,11 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
     ...pendingCombatCuesAtTurnStart.map((cue) => cue.id),
     ...combatCueIdsCreatedByExecution,
   ];
+  const queuedPlayerCheck = useGameStore.getState().playerCheckRequests.find((request) =>
+    request.status === "pending" && !pendingCheckIdsBeforeExecution.has(request.id));
+  const playerCheckContext = queuedPlayerCheck
+    ? createPlayerCheckNarrationContext(queuedPlayerCheck) ?? undefined
+    : undefined;
 
   // Un événement arrivé à échéance est une contrainte moteur, pas une simple
   // suggestion de prompt : le Narrateur doit produire une étape nouvelle.
@@ -160,21 +183,50 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
     });
   }
 
-  const packet = createNarrationPacket(draft, executionResults, getLatestPlayerActionReceipt());
+  const packet = createNarrationPacket(
+    draft,
+    executionResults,
+    getLatestPlayerActionReceipt(),
+    grounding,
+    playerCheckContext,
+  );
   let narration: string;
   let narrationWarning: string | null = null;
 
   try {
     narration = await runNarrator(effectiveInput, packet);
+    const violations = validateGroundedNarration(narration, effectiveInput, grounding, useGameStore.getState());
+    if (violations.length > 0) {
+      const correctedNarration = await runNarrator(effectiveInput, packet, violations);
+      const remainingViolations = validateGroundedNarration(
+        correctedNarration,
+        effectiveInput,
+        grounding,
+        useGameStore.getState(),
+      );
+      if (remainingViolations.length > 0) {
+        narrationWarning = `Narration rejetée pour incohérence : ${remainingViolations.join(" ")}`;
+        narration = createGroundedFallbackNarration(packet);
+      } else {
+        narration = correctedNarration;
+      }
+    }
   } catch (error) {
     narrationWarning = `Narrateur indisponible : ${errorMessage(error)}`;
     narration = createGroundedFallbackNarration(packet);
   }
 
   agentsRun.push("narrationManager");
-  useGameStore.getState().addGmMessage(narration);
-  useGameStore.getState().recordNarratedBeat(narration);
-  useGameStore.getState().consumeCombatNarrationCues(combatCueIdsCoveredByThisTurn);
+  useGameStore.getState().addGmMessage(narration, playerCheckContext?.stage === "pending"
+    ? { kind: "checkSetup", relatedCheckId: playerCheckContext.requestId }
+    : undefined);
+  if (playerCheckContext?.stage !== "pending") {
+    resolveNarratedDueEvents();
+    useGameStore.getState().recordNarratedBeat(narration);
+  }
+  if (playerCheckContext?.stage !== "pending") {
+    useGameStore.getState().consumeCombatNarrationCues(combatCueIdsCoveredByThisTurn);
+  }
 
   return {
     narration,
@@ -185,6 +237,56 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
       ...(narrationWarning ? [narrationWarning] : []),
     ],
   };
+}
+
+/** Reprend le récit une fois le d20 réellement lancé. Aucun spécialiste n'est
+ * rappelé : le moteur a déjà fixé le degré de réussite et le Narrateur ne fait
+ * que traduire ce résultat en conséquence diégétique. */
+export async function continueAfterPlayerCheck(requestId: string): Promise<AutomatedDirectorResult> {
+  const state = useGameStore.getState();
+  const request = state.playerCheckRequests.find((candidate) => candidate.id === requestId);
+  const playerCheck = request ? createPlayerCheckNarrationContext(request) : null;
+  if (!request || !playerCheck || playerCheck.stage !== "resolved") {
+    throw new Error("Le résultat de ce jet n'est pas disponible.");
+  }
+
+  const packet = createNarrationPacket(
+    createEmptyResolutionDraft(),
+    [],
+    undefined,
+    undefined,
+    playerCheck,
+  );
+  let narration: string;
+  const warnings: string[] = [];
+
+  try {
+    narration = await runNarrator(request.action, packet);
+  } catch (error) {
+    warnings.push(`Narrateur indisponible après le jet : ${errorMessage(error)}`);
+    narration = createPlayerCheckFallbackNarration(playerCheck);
+  }
+
+  const currentState = useGameStore.getState();
+  currentState.addGmMessage(narration, { kind: "checkResult", relatedCheckId: request.id });
+  resolveNarratedDueEvents();
+  currentState.recordNarratedBeat(narration);
+
+  return {
+    narration,
+    agentsRun: ["narrationManager"],
+    warnings,
+  };
+}
+
+function resolveNarratedDueEvents(): void {
+  const state = useGameStore.getState();
+  const dueEvents = state.narrativeScene.activeEvents.filter((event) => event.turnsRemaining === 0);
+  if (dueEvents.length === 0) return;
+  state.applyNarrativeScenePatch({
+    resolveEventIds: dueEvents.map((event) => event.id),
+    consequences: dueEvents.map((event) => `Événement arrivé : ${event.description}`),
+  });
 }
 
 function getLatestPlayerActionReceipt() {
@@ -240,6 +342,12 @@ function createPendingCombatNarrationPatch(
 }
 
 function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrationPacket>): string {
+  if (packet.playerCheck?.stage === "pending") {
+    return createPlayerCheckFallbackNarration(packet.playerCheck);
+  }
+  if (packet.playerCheck?.stage === "resolved") {
+    return createPlayerCheckFallbackNarration(packet.playerCheck);
+  }
   const latestReceipt = packet.actionReceipts.at(-1);
   if (latestReceipt) {
     return createNarratedActionReceiptFallback(latestReceipt, packet.questions.at(-1));
@@ -258,6 +366,29 @@ function createGroundedFallbackNarration(packet: ReturnType<typeof createNarrati
   return "Vous prenez le temps d'observer la scène, mais rien ne s'impose encore avec certitude. Que cherchez-vous à comprendre, et comment vous y prenez-vous ?";
 }
 
+function createPlayerCheckFallbackNarration(playerCheck: PlayerCheckNarrationContext): string {
+  if (playerCheck.stage === "pending") {
+    const action = lowerFirst(playerCheck.action.trim().replace(/[.!?]+$/u, ""));
+    return `Vous tentez de ${action}. ${capitalize(playerCheck.challengeCue)}.`;
+  }
+
+  const resultText: Record<PlayerCheckDegree, string> = {
+    critical: "Votre geste dépasse même ce que vous espériez",
+    success: "Votre tentative porte ses fruits",
+    partial: "Vous progressez, mais pas sans complication",
+    failure: "Votre tentative échoue et la situation évolue contre vous",
+  };
+  return `${resultText[playerCheck.degree]}.${playerCheck.outcome ? ` ${playerCheck.outcome}` : ""}`;
+}
+
+function lowerFirst(value: string): string {
+  return value ? `${value.charAt(0).toLocaleLowerCase("fr-FR")}${value.slice(1)}` : "mener cette tentative";
+}
+
+function capitalize(value: string): string {
+  return value ? `${value.charAt(0).toLocaleUpperCase("fr-FR")}${value.slice(1)}` : value;
+}
+
 function createNarratedActionReceiptFallback(
   receipt: ReturnType<typeof createNarrationPacket>["actionReceipts"][number],
   question?: string,
@@ -266,6 +397,7 @@ function createNarratedActionReceiptFallback(
     const target = action.target ? ` sur ${action.target.label}` : "";
     if (action.kind === "attack") return `Vous portez votre attaque avec ${action.sourceLabel}${target}.`;
     if (action.kind === "useAbility") return `Vous déclenchez ${action.sourceLabel}${target}.`;
+    if (action.kind === "castSpell") return `Vous lancez ${action.sourceLabel}${target}.`;
     return `Vous utilisez ${action.sourceLabel}${target}.`;
   });
   const hpLosses = receipt.changes.filter((change) => change.kind === "hp" && Number(change.delta) < 0);
@@ -314,8 +446,9 @@ async function runSafetyReview(playerInput: string): Promise<AiDirectorResponse>
 async function runNarrator(
   playerInput: string,
   packet: ReturnType<typeof createNarrationPacket>,
+  corrections: string[] = [],
 ): Promise<string> {
-  const prompt = buildAutomaticNarrationPrompt(useGameStore.getState(), playerInput, packet);
+  const prompt = buildAutomaticNarrationPrompt(useGameStore.getState(), playerInput, packet, corrections);
   const raw = await runAgentOverHttp("narrationManager", prompt);
   const parsed = parseAiDirectorResponse(raw);
   const narration = parsed.response?.narration.trim();
@@ -333,7 +466,7 @@ function parseRequiredResponse(raw: string, agentId: AiAgentId): AiDirectorRespo
   return parsed.response;
 }
 
-function executeValidatedCommands(commands: SourcedCommand[]) {
+function executeValidatedCommands(commands: SourcedCommand[], grounding?: GroundingReport) {
   if (!commands.length) return [];
   const orderedCommands = commands
     .map((entry, index) => ({ entry, index }))
@@ -350,6 +483,7 @@ function executeValidatedCommands(commands: SourcedCommand[]) {
     itemTemplates: initialSnapshot.itemTemplates,
     itemInstances: initialSnapshot.itemInstances,
     abilityTemplates: initialSnapshot.abilityTemplates,
+    gameActionTemplates: initialSnapshot.gameActionTemplates,
     effectTemplates: initialSnapshot.effectTemplates,
     enemyTemplates: initialSnapshot.enemyTemplates,
   });
@@ -363,6 +497,15 @@ function executeValidatedCommands(commands: SourcedCommand[]) {
 
   return orderedCommands.map(({ command, source }, index) => {
     const validation = validations[index];
+    const blockedByGrounding = getGroundingCommandBlock(command, source, grounding);
+
+    if (blockedByGrounding) {
+      return {
+        status: "error" as const,
+        message: blockedByGrounding,
+        command: JSON.stringify(command),
+      };
+    }
 
     if (source !== "localEngine" && !isCommandAllowedForAgent(source, command.type)) {
       return {
@@ -394,6 +537,60 @@ function executeValidatedCommands(commands: SourcedCommand[]) {
     const result = executeAiCommand(command, createSnapshot(state), state, { knownCatalogIds });
     return enrichCommandResult(command, state, useGameStore.getState(), result);
   });
+}
+
+function getGroundingCommandBlock(
+  command: AiDirectorCommand,
+  source: SourcedCommand["source"],
+  grounding?: GroundingReport,
+): string | null {
+  if (!grounding?.blockedSubjects.length || source === "localEngine") return null;
+  const materializingCommands = new Set<AiDirectorCommand["type"]>([
+    "createItem",
+    "giveItem",
+    "grantAbility",
+    "updateCharacterHistory",
+  ]);
+  if (!materializingCommands.has(command.type)) return null;
+
+  const state = useGameStore.getState();
+  const commandText = createGroundingCommandText(command, state);
+  const relatedClaims = grounding.claims.filter((claim) =>
+    claim.status === "unverified" && commandText.includes(normalizeGroundingTerm(claim.subject)));
+  const createsClaimedWorldResource = (command.type === "createItem" || command.type === "giveItem") &&
+    grounding.claims.some((claim) => claim.status === "unverified" && claim.domain !== "inventory");
+
+  if (!relatedClaims.length && !createsClaimedWorldResource) return null;
+  const blockedSubjects = relatedClaims.length
+    ? relatedClaims.map((claim) => claim.subject)
+    : grounding.claims.filter((claim) => claim.status === "unverified" && claim.domain !== "inventory").map((claim) => claim.subject);
+  return `Commande ${command.type} refusée : une affirmation du joueur ne peut pas créer rétroactivement ${[...new Set(blockedSubjects)].join(", ")}.`;
+}
+
+function createGroundingCommandText(command: AiDirectorCommand, state: GameState): string {
+  const details: unknown[] = [command];
+  if (command.type === "giveItem") {
+    details.push(state.itemTemplates.find((template) => template.id === command.templateId));
+  }
+  if (command.type === "createItem" && command.templateId) {
+    details.push(state.itemTemplates.find((template) => template.id === command.templateId));
+  }
+  if (command.type === "grantAbility") {
+    const ability = state.abilityTemplates.find((template) => template.id === command.templateId);
+    details.push(ability);
+    if (ability) {
+      details.push(state.gameActionTemplates.find((action) => action.id === ability.actionId));
+    }
+  }
+  return normalizeGroundingTerm(JSON.stringify(details));
+}
+
+function normalizeGroundingTerm(value: string): string {
+  return value
+    .toLocaleLowerCase("fr-FR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .replace(/[’']/gu, " ");
 }
 
 function enrichCommandResult(
@@ -443,7 +640,10 @@ function createSnapshot(state: GameState): AiPromptSnapshot {
     itemTemplates: state.itemTemplates,
     itemInstances: state.itemInstances,
     abilityTemplates: state.abilityTemplates,
+    gameActionTemplates: state.gameActionTemplates,
     abilityInstances: state.abilityInstances,
+    spellTemplates: state.spellTemplates,
+    spellbooks: state.spellbooks,
     effectTemplates: state.effectTemplates,
     enemyTemplates: state.enemyTemplates,
     disabledContentTemplateIds: state.disabledContentTemplateIds,

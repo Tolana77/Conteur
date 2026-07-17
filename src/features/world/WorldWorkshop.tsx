@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
 import { initialAbilityTemplates } from "../abilities";
+import { initialGameActionTemplates } from "../actions";
 import { initialItemTemplates } from "../items";
 import { initialEffectTemplates, initialEnemyTemplates } from "../content";
 import { CharacterCreationStep } from "../character/CharacterCreationStep";
@@ -62,6 +63,7 @@ export function WorldWorkshop() {
       startingEquipment: brief.startingEquipment,
       itemTemplates: initialItemTemplates,
       abilityTemplates: initialAbilityTemplates,
+      gameActionTemplates: initialGameActionTemplates,
       effectTemplates: initialEffectTemplates,
       enemyTemplates: initialEnemyTemplates,
     };

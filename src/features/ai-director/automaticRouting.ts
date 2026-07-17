@@ -1,5 +1,6 @@
 import type { GameState } from "../../store/useGameStore";
 import type { AiAgentId } from "./types";
+import type { GroundingReport } from "./grounding";
 
 export type AutomaticDomainAgent = Extract<
   AiAgentId,
@@ -29,7 +30,11 @@ const DOMAIN_EXECUTION_ORDER: AutomaticDomainAgent[] = [
 ];
 
 /** Routeur local : aucun token n'est dépensé pour choisir les agents. */
-export function routePlayerInput(playerInput: string, state: GameState): AutomaticRoute {
+export function routePlayerInput(
+  playerInput: string,
+  state: GameState,
+  grounding?: GroundingReport,
+): AutomaticRoute {
   const text = normalize(playerInput);
   const scores = new Map<AutomaticDomainAgent, number>();
   const add = (agent: AutomaticDomainAgent, score: number) => scores.set(agent, (scores.get(agent) ?? 0) + score);
@@ -52,10 +57,10 @@ export function routePlayerInput(playerInput: string, state: GameState): Automat
   const structuredActions = latestPlayerMessage?.actions ?? [];
   const executedKinds = new Set(latestPlayerMessage?.actionReceipt?.actions.map((action) => action.kind) ?? []);
   const hasExecutedCombatAction = executedKinds.has("attack");
-  const hasExecutedCharacterAction = executedKinds.has("useItem") || executedKinds.has("useAbility");
+  const hasExecutedCharacterAction = executedKinds.has("useItem") || executedKinds.has("useAbility") || executedKinds.has("castSpell");
 
   if (!hasExecutedCombatAction && structuredActions.some((action) => action.kind === "attack")) add("combatManager", 12);
-  if (!hasExecutedCharacterAction && structuredActions.some((action) => action.kind === "useItem" || action.kind === "useAbility")) add("characterManager", 12);
+  if (!hasExecutedCharacterAction && structuredActions.some((action) => action.kind === "useItem" || action.kind === "useAbility" || action.kind === "castSpell")) add("characterManager", 12);
   if (!hasExecutedCombatAction && state.combat.status === "active" && structuredActions.some((action) => action.target?.position)) add("combatManager", 9);
 
   if (combatIntent && !hasExecutedCombatAction) {
@@ -107,6 +112,12 @@ export function routePlayerInput(playerInput: string, state: GameState): Automat
   }
   if (state.narrativeScene.activeEvents.some((event) => event.turnsRemaining === 0)) {
     add("worldManager", 12);
+  }
+  if (grounding?.requiresWorldManager) {
+    add("worldManager", 14);
+  }
+  if (grounding?.requiresCharacterManager) {
+    add("characterManager", 14);
   }
 
   // Une action d'objet pendant le combat peut réellement croiser deux domaines.

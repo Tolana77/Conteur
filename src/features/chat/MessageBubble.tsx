@@ -7,23 +7,26 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isPlayer = message.sender === "player";
+  const isCheckSetup = message.kind === "checkSetup";
 
   return (
     <article className={`flex ${isPlayer ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[82%] rounded px-3 py-2 shadow-sm ${
+        className={`${isCheckSetup ? "max-w-[74%]" : "max-w-[82%]"} rounded px-3 py-2 ${
           isPlayer
             ? "border border-[#3F5641]/60 bg-[#3F5641]/50 text-[#E4D8BE]"
-            : "manuscript-panel text-stone-900"
+            : isCheckSetup
+              ? "border-l-2 border-[#9C7A2E]/75 bg-[#221E29] text-[#E4D8BE]"
+              : "manuscript-panel text-stone-900 shadow-sm"
         }`}
       >
-        <div className="mb-1 flex items-center justify-between gap-3 text-xs font-semibold uppercase text-[#9C7A2E]">
-          <span>{isPlayer ? "Joueur" : "MJ"}</span>
+        <div className={`${isCheckSetup ? "mb-0.5 text-[0.62rem]" : "mb-1 text-xs"} flex items-center justify-between gap-3 font-semibold uppercase text-[#9C7A2E]`}>
+          <span>{isPlayer ? "Joueur" : isCheckSetup ? "Le Conteur" : "MJ"}</span>
           <time>{new Date(message.timestamp).toLocaleTimeString("fr-FR")}</time>
         </div>
         {message.content ? (
-          <p className="text-sm leading-relaxed text-[#E4D8BE]">
-            {isPlayer ? message.content : <HighlightedGameText text={message.content} />}
+          <p className={`${isCheckSetup ? "text-[0.82rem] italic leading-relaxed" : "text-sm leading-relaxed"} text-[#E4D8BE]`}>
+            {isPlayer ? message.content : <HighlightedGameText mode="narrative" text={message.content} />}
           </p>
         ) : null}
         {isPlayer && message.actions && message.actions.length > 0 ? (
@@ -38,7 +41,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 </span>
                 {action.target ? (
                   <span className="rounded border border-[#9C7A2E]/25 bg-[#15121A]/35 px-2 py-1 text-xs text-[#E4D8BE]/75">
-                    Cible : {action.target.label}
+                    {action.targeting?.aim.label === "destination" ? "Destination" : "Cible"} : {action.target.label}
                   </span>
                 ) : null}
               </span>

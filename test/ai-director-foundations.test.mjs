@@ -14,6 +14,11 @@ const {
 const { resolveAutomaticLocalRequest } = await vite.ssrLoadModule("/src/features/ai-director/automaticLocalResolution.ts");
 const { createNarrationPacket } = await vite.ssrLoadModule("/src/features/ai-director/automaticPrompts.ts");
 const { routePlayerInput } = await vite.ssrLoadModule("/src/features/ai-director/automaticRouting.ts");
+const {
+  buildGroundingReport,
+  createGroundingDraftPatch,
+  validateGroundedNarration,
+} = await vite.ssrLoadModule("/src/features/ai-director/grounding.ts");
 const { normalizeCampaignStartSnapshot } = await vite.ssrLoadModule("/src/features/campaign/campaignStart.ts");
 
 const campaign = {
@@ -49,10 +54,12 @@ const migratedStart = normalizeCampaignStartSnapshot({
   openingScene: campaign.world.openingScene,
   itemTemplates: [],
   itemInstances: [],
+  messages: [],
+  combat: { status: "inactive" },
   abilityTemplates: [],
   abilityInstances: [],
 });
-assert.equal(migratedStart?.version, 4);
+assert.equal(migratedStart?.version, 6);
 assert.equal(migratedStart?.narrativeScene.locationId, "loc-throne");
 
 const sceneWithApproach = applyNarrativeScenePatch(initialScene, {
@@ -68,6 +75,180 @@ const sceneWithApproach = applyNarrativeScenePatch(initialScene, {
 const advancedScene = advanceNarrativeScene(sceneWithApproach, "J'attends.");
 assert.equal(advancedScene.activeEvents[0]?.turnsRemaining, 0);
 assert.equal(advancedScene.activeEvents[0]?.urgency, "immediate");
+
+const queen = {
+  id: "npc-queen",
+  name: "Reine Aléandra",
+  type: "npc",
+  description: "La souveraine du royaume.",
+  details: {
+    role: "Reine du royaume",
+    socialRank: "sovereign",
+    access: "restricted",
+    desire: "Conclure une alliance fragile",
+    connections: [],
+  },
+};
+const groundingState = {
+  campaign: {
+    ...campaign,
+    world: {
+      ...campaign.world,
+      facts: [],
+      entities: {
+        ...campaign.world.entities,
+        npcs: [queen],
+      },
+    },
+  },
+  characters: [{
+    id: "hero-test",
+    name: "Aldren",
+    history: [],
+  }],
+  selectedCharacterId: "hero-test",
+  itemTemplates: [],
+  itemInstances: [],
+  messages: [],
+  combat: { status: "inactive" },
+  narrativeScene: {
+    ...advancedScene,
+    presentEntityIds: [queen.id],
+    lastNarratedBeat: "Des pas lourds approchent derrière la porte.",
+  },
+};
+
+const horseReport = buildGroundingReport("J'appelle mon cheval.", groundingState);
+assert.equal(horseReport.claims[0]?.subject, "cheval");
+assert.equal(horseReport.claims[0]?.status, "unverified");
+assert.equal(horseReport.requiresWorldManager, true);
+assert.match(createGroundingDraftPatch(horseReport)?.facts?.[0]?.content ?? "", /faire apparaître|matérialiser/u);
+assert.deepEqual(
+  validateGroundedNarration("Aucun cheval ne répond à votre appel.", "J'appelle mon cheval.", horseReport, groundingState),
+  [],
+);
+assert.match(
+  validateGroundedNarration("Votre cheval traverse la cour et vient à vous.", "J'appelle mon cheval.", horseReport, groundingState)[0] ?? "",
+  /matérialise/u,
+);
+assert.equal(buildGroundingReport("J'ai un cheval.", groundingState).claims[0]?.status, "unverified");
+assert.equal(buildGroundingReport("J'appelle Tornade.", groundingState).claims[0]?.subject, "tornade");
+assert.deepEqual(buildGroundingReport("Mon personnage a peur.", groundingState).claims, []);
+
+const unknownQueenState = {
+  ...groundingState,
+  campaign: {
+    ...groundingState.campaign,
+    world: {
+      ...groundingState.campaign.world,
+      entities: { ...groundingState.campaign.world.entities, npcs: [] },
+    },
+  },
+  narrativeScene: { ...groundingState.narrativeScene, presentEntityIds: [] },
+};
+const unknownQueenReport = buildGroundingReport("Je parle à la reine.", unknownQueenState);
+assert.equal(unknownQueenReport.claims[0]?.subject, "reine");
+assert.equal(unknownQueenReport.claims[0]?.status, "unverified");
+
+const ownedKnifeState = {
+  ...groundingState,
+  itemTemplates: [{
+    id: "tpl-knife",
+    name: "Couteau",
+    type: "weapon",
+    types: ["weapon"],
+    tags: ["knife"],
+    aliases: ["lame"],
+  }],
+  itemInstances: [{
+    id: "knife-1",
+    templateId: "tpl-knife",
+    quantity: 1,
+    overrides: {},
+    location: { type: "inventory", parent: "hero-test" },
+  }],
+};
+assert.equal(buildGroundingReport("Je sors mon couteau.", ownedKnifeState).claims[0]?.status, "established");
+
+const queenReport = buildGroundingReport("Je demande audience à la reine.", groundingState);
+assert.equal(queenReport.npcDossiers[0]?.rank, "sovereign");
+assert.equal(queenReport.npcDossiers[0]?.access, "restricted");
+assert.match(queenReport.npcDossiers[0]?.attentionRule ?? "", /ignore un manant/u);
+assert.equal(queenReport.npcDossiers[0]?.directAttentionAllowed, false);
+assert.match(
+  validateGroundedNarration(
+    "La reine vous sourit et vous répond avec intérêt.",
+    "Je demande audience à la reine.",
+    queenReport,
+    groundingState,
+  )[0] ?? "",
+  /attention directe/u,
+);
+assert.deepEqual(
+  validateGroundedNarration(
+    "La reine poursuit son entretien sans vous regarder; un garde vient recueillir votre requête.",
+    "Je demande audience à la reine.",
+    queenReport,
+    groundingState,
+  ),
+  [],
+);
+assert.deepEqual(routePlayerInput("Je salue la reine.", groundingState, queenReport).agents, ["worldManager"]);
+
+const audienceState = {
+  ...groundingState,
+  narrativeScene: {
+    ...groundingState.narrativeScene,
+    recentConsequences: ["Audience accordée : Aldren a été introduit auprès de la reine."],
+  },
+};
+assert.equal(
+  buildGroundingReport("Je réponds à la reine.", audienceState).npcDossiers[0]?.directAttentionAllowed,
+  true,
+);
+
+const disruptionReport = buildGroundingReport("Je crie comme un ivrogne devant la reine.", groundingState);
+assert.equal(disruptionReport.socialIncident?.witnessed, true);
+assert.match(
+  validateGroundedNarration(
+    "Votre voix résonne longuement dans la salle.",
+    "Je crie comme un ivrogne devant la reine.",
+    disruptionReport,
+    groundingState,
+  )[0] ?? "",
+  /réaction/u,
+);
+assert.deepEqual(
+  validateGroundedNarration(
+    "Un silence tombe; les regards se tournent vers vous tandis qu'un garde s'approche.",
+    "Je crie comme un ivrogne devant la reine.",
+    disruptionReport,
+    groundingState,
+  ),
+  [],
+);
+
+const absentQueenState = {
+  ...groundingState,
+  narrativeScene: { ...groundingState.narrativeScene, presentEntityIds: [] },
+};
+const absentQueenReport = buildGroundingReport("Je parle de la reine.", absentQueenState);
+assert.match(
+  validateGroundedNarration("La Reine Aléandra s'approche et vous répond.", "Je parle de la reine.", absentQueenReport, absentQueenState)[0] ?? "",
+  /absente/u,
+);
+
+const waitingReport = buildGroundingReport("J'attends.", groundingState);
+assert.equal(waitingReport.mustAdvanceScene, true);
+assert.match(
+  validateGroundedNarration(
+    "Des pas lourds approchent derrière la porte.",
+    "J'attends.",
+    waitingReport,
+    groundingState,
+  )[0] ?? "",
+  /répète|reproduit/u,
+);
 
 const baseState = {
   selectedCharacterId: "hero-test",

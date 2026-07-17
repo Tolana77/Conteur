@@ -9,6 +9,7 @@ import type {
   ItemTemplate,
   EffectTemplate,
   EnemyTemplate,
+  GameActionTemplate,
   World,
 } from "../../app/types";
 import {
@@ -16,6 +17,8 @@ import {
   type CampaignStartSnapshot,
 } from "../campaign/campaignStart";
 import { createInitialNarrativeScene } from "../../core/game-engine/narrativeScene";
+import { initialGameActionTemplates } from "../actions";
+import { createInitialSpellbooks, initialSpellTemplates } from "../spells";
 
 export const WORLD_BLUEPRINT_SCHEMA_VERSION = 3 as const;
 
@@ -44,6 +47,14 @@ export interface GeneratedWorldEntity {
   importance: string;
   connections: string[];
   tags: string[];
+  aliases?: string[];
+  socialRank?: NonNullable<Entity["details"]>["socialRank"];
+  access?: NonNullable<Entity["details"]>["access"];
+  disposition?: string;
+  protocol?: string;
+  attentionRule?: string;
+  delegatesTo?: string[];
+  knownFacts?: string[];
 }
 
 export interface GeneratedStartingCharacter {
@@ -143,6 +154,7 @@ export interface CampaignPartySetup {
   characters: GeneratedStartingCharacter[];
   startingItems: GeneratedStartingItem[];
   abilityTemplates?: AbilityTemplate[];
+  gameActionTemplates?: GameActionTemplate[];
   effectTemplates?: EffectTemplate[];
 }
 
@@ -194,6 +206,7 @@ export function buildWorldCreationPrompt(
     "- Les conflits doivent évoluer sans intervention des joueurs grâce à la timeline.",
     "- Chaque secret possède au moins deux indices concrets situés dans des lieux, PNJ ou objets existants.",
     "- Chaque PNJ veut quelque chose maintenant, craint une conséquence et entretient au moins une connexion utile.",
+    "- Pour chaque PNJ, précise socialRank, access, disposition, protocol et attentionRule. Son rang doit réellement limiter qui obtient son attention; un souverain délègue les demandes ordinaires.",
     "- Les accroches proposent une décision ou une urgence, jamais une simple mission linéaire.",
     "- La scène d'ouverture commence au milieu d'une situation active et se termine sur un choix clair.",
     "- Ne crée aucun personnage ni équipement dans cette réponse : la création du personnage est une étape séparée.",
@@ -337,6 +350,14 @@ export function createCampaignFromBlueprint(
       importance: entity.importance,
       connections: entity.connections,
       tags: entity.tags,
+      aliases: entity.aliases,
+      socialRank: entity.socialRank,
+      access: entity.access,
+      disposition: entity.disposition,
+      protocol: entity.protocol,
+      attentionRule: entity.attentionRule,
+      delegatesTo: entity.delegatesTo,
+      knownFacts: entity.knownFacts,
     },
   });
   const world: World = {
@@ -390,6 +411,7 @@ export function createCampaignStartFromBlueprint(
   const campaign = createCampaignFromBlueprint(blueprint, characters, campaignId);
   const mergedEffectCatalog = mergeTemplatesById(effectCatalog, partySetup?.effectTemplates ?? []);
   const mergedAbilityCatalog = mergeTemplatesById(abilityCatalog, partySetup?.abilityTemplates ?? []);
+  const mergedGameActionCatalog = mergeTemplatesById(initialGameActionTemplates, partySetup?.gameActionTemplates ?? []);
   const catalogById = new Map(itemCatalog.map((template) => [template.id, template]));
   const generatedTemplates: ItemTemplate[] = [];
   const itemInstances: ItemInstance[] = fallbackParty.startingItems.map((item, index) => {
@@ -456,6 +478,9 @@ export function createCampaignStartFromBlueprint(
     itemInstances,
     abilityTemplates: mergedAbilityCatalog,
     abilityInstances,
+    gameActionTemplates: mergedGameActionCatalog,
+    spellTemplates: initialSpellTemplates,
+    spellbooks: createInitialSpellbooks(characters, initialSpellTemplates),
     effectTemplates: mergedEffectCatalog,
     enemyTemplates: enemyCatalog,
     narrativeScene: createInitialNarrativeScene(campaign, blueprint.campaign.openingScene),
@@ -474,6 +499,14 @@ function createBlueprintSkeleton(): WorldBlueprint {
     importance: "Pourquoi les joueurs s'y intéresseraient",
     connections: ["autre-id"],
     tags: ["mot-cle"],
+    aliases: ["titre ou surnom"],
+    socialRank: "notable",
+    access: "guarded",
+    disposition: "Indifférent tant que ses intérêts ne sont pas concernés",
+    protocol: "Les inconnus passent par son secrétaire",
+    attentionRule: "Répond seulement aux demandes relevant de sa charge",
+    delegatesTo: ["autre-id"],
+    knownFacts: ["Information que ce PNJ connaît réellement"],
   };
   return {
     schemaVersion: WORLD_BLUEPRINT_SCHEMA_VERSION,
@@ -651,7 +684,39 @@ function parseEntities(value: unknown, path: string, errors: string[]): Generate
     importance: requiredString(item.importance, `${path}[${index}].importance`, errors),
     connections: stringArray(item.connections, `${path}[${index}].connections`, errors),
     tags: stringArray(item.tags, `${path}[${index}].tags`, errors),
+    aliases: item.aliases === undefined ? undefined : stringArray(item.aliases, `${path}[${index}].aliases`, errors),
+    socialRank: parseOptionalSocialRank(item.socialRank, `${path}[${index}].socialRank`, errors),
+    access: parseOptionalAccess(item.access, `${path}[${index}].access`, errors),
+    disposition: optionalString(item.disposition),
+    protocol: optionalString(item.protocol),
+    attentionRule: optionalString(item.attentionRule),
+    delegatesTo: item.delegatesTo === undefined ? undefined : stringArray(item.delegatesTo, `${path}[${index}].delegatesTo`, errors),
+    knownFacts: item.knownFacts === undefined ? undefined : stringArray(item.knownFacts, `${path}[${index}].knownFacts`, errors),
   }));
+}
+
+function parseOptionalSocialRank(
+  value: unknown,
+  path: string,
+  errors: string[],
+): GeneratedWorldEntity["socialRank"] {
+  if (value === undefined) return undefined;
+  if (value === "outsider" || value === "commoner" || value === "notable" || value === "noble" || value === "highNoble" || value === "sovereign") {
+    return value;
+  }
+  errors.push(`${path} doit être outsider, commoner, notable, noble, highNoble ou sovereign.`);
+  return undefined;
+}
+
+function parseOptionalAccess(
+  value: unknown,
+  path: string,
+  errors: string[],
+): GeneratedWorldEntity["access"] {
+  if (value === undefined) return undefined;
+  if (value === "open" || value === "guarded" || value === "restricted") return value;
+  errors.push(`${path} doit être open, guarded ou restricted.`);
+  return undefined;
 }
 
 function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], warnings: string[]): void {
@@ -696,7 +761,10 @@ function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], w
   blueprint.world.secrets.forEach((secret) => validateReferences(secret.relatedIds, `${secret.id}.relatedIds`));
   blueprint.world.hooks.forEach((hook) => validateReferences(hook.relatedIds, `${hook.id}.relatedIds`));
   [...blueprint.world.locations, ...blueprint.world.npcs, ...blueprint.world.items]
-    .forEach((entity) => validateReferences(entity.connections, `${entity.id}.connections`));
+    .forEach((entity) => {
+      validateReferences(entity.connections, `${entity.id}.connections`);
+      validateReferences(entity.delegatesTo ?? [], `${entity.id}.delegatesTo`);
+    });
   blueprint.world.secrets.forEach((secret) => {
     if (secret.clues.length < 2) warnings.push(`${secret.id} devrait posséder au moins deux indices.`);
   });

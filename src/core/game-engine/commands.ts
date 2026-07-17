@@ -1,4 +1,5 @@
 import type {
+  ChatMessageKind,
   CharacterStats,
   Entity,
   NarrativeScenePatch,
@@ -78,7 +79,7 @@ export type GameCommandBody =
     }
   | {
       type: "chat.addGmMessage";
-      payload: { content: string };
+      payload: { content: string; kind?: ChatMessageKind; relatedCheckId?: string };
     };
 
 export type GameCommandType = GameCommandBody["type"];
@@ -188,6 +189,17 @@ function validatePayload(type: string, payload: Record<string, unknown>, errors:
   }
   if (type === "chat.addGmMessage") {
     requireString(payload, "content", errors);
+    if (
+      payload.kind !== undefined &&
+      payload.kind !== "standard" &&
+      payload.kind !== "checkSetup" &&
+      payload.kind !== "checkResult"
+    ) {
+      errors.push("payload.kind est invalide.");
+    }
+    if (payload.relatedCheckId !== undefined && typeof payload.relatedCheckId !== "string") {
+      errors.push("payload.relatedCheckId doit être un texte.");
+    }
     return;
   }
   errors.push(`Type de commande inconnu : ${type}.`);

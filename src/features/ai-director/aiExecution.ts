@@ -46,6 +46,7 @@ type AiExecutionActions = Pick<
   | "recordCampaignEvent"
   | "registerEffectTemplate"
   | "registerItemTemplate"
+  | "registerGameActionTemplate"
   | "registerAbilityTemplate"
   | "registerEnemyTemplate"
   | "createItemInstance"
@@ -111,6 +112,7 @@ export function executeAiCommand(
   const catalogContext = {
     effectTemplates: snapshot.effectTemplates,
     abilityTemplates: snapshot.abilityTemplates,
+    gameActionTemplates: snapshot.gameActionTemplates,
     itemTemplates: snapshot.itemTemplates,
     enemyTemplates: snapshot.enemyTemplates,
     knownIds: options.knownCatalogIds,
@@ -126,8 +128,9 @@ export function executeAiCommand(
   if (command.type === "createAbilityTemplate") {
     const parsed = parseAbilityTemplate(command.template, catalogContext);
     if (!parsed.value) return executionError(command, parsed.errors);
-    const success = actions.registerAbilityTemplate(parsed.value, command.mode, { source: "ai" });
-    return creationResult(command, success, `Capacité ${parsed.value.name}`);
+    const actionSuccess = actions.registerGameActionTemplate(parsed.value.action, command.mode);
+    const abilitySuccess = actionSuccess && actions.registerAbilityTemplate(parsed.value.ability, command.mode, { source: "ai" });
+    return creationResult(command, abilitySuccess, `Capacité ${parsed.value.action.name}`);
   }
 
   if (command.type === "createItemTemplate") {
@@ -200,7 +203,10 @@ export function executeAiCommand(
     itemTemplates: snapshot.itemTemplates,
     itemInstances: snapshot.itemInstances,
     abilityTemplates: snapshot.abilityTemplates,
+    gameActionTemplates: snapshot.gameActionTemplates,
     abilityInstances: snapshot.abilityInstances,
+    spellTemplates: snapshot.spellTemplates,
+    spellbooks: snapshot.spellbooks,
     combat: snapshot.combat,
     dealDamage: actions.dealDamage,
     healCharacter: actions.healCharacter,

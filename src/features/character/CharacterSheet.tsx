@@ -14,20 +14,35 @@ import type {
   AbilityInstance,
   AbilityRechargeTrigger,
   AbilityTemplate,
+  CharacterSpellbook,
   CharacterDerivedScores,
   EffectTemplate,
+  GameActionTemplate,
   ItemEffectRef,
   ItemInstance,
   ItemTemplate,
+  SpellLevel,
+  SpellTemplate,
 } from "../../app/types";
 import type { Character, CharacterStats, InventoryItem } from "../../core/models";
 import { getAbilityCharges, getAbilityMaxCharges } from "../abilities";
+import { getGameActionTemplate, resolveGameActionEffects } from "../actions";
 import {
   isItemEquipable,
   isItemUsable,
   preventsUnequip,
 } from "../items";
 import { formatEffectValueExpression } from "../items/valueExpressions";
+import {
+  checkSpellCast,
+  formatSpellComponents,
+  formatSpellLevel,
+  getAvailableSlotLevels,
+  getSpellPreparationLimit,
+  getSpellcastingProfileById,
+  isSpellPrepared,
+  resolveSpellEffects,
+} from "../spells";
 import { useGameStore } from "../../store/useGameStore";
 import {
   HighlightedGameText,
@@ -37,7 +52,7 @@ import {
 } from "../../ui/gameTerms";
 import type { GameStat } from "../../ui/gameTerms";
 
-type CharacterSheetPageId = "overview" | "inventory" | "abilities" | "history";
+type CharacterSheetPageId = "overview" | "inventory" | "abilities" | "spells" | "history";
 
 interface CharacterSheetPage {
   id: CharacterSheetPageId;
@@ -118,8 +133,8 @@ interface ResolvedAbility {
   description: string;
   types: string[];
   tags: string[];
-  activation: AbilityTemplate["activation"];
-  targeting: AbilityTemplate["targeting"];
+  activation: GameActionTemplate["activation"];
+  targeting: GameActionTemplate["targeting"];
   charges: number | null;
   maxCharges: number | null;
   recharge: AbilityRechargeTrigger[] | null;
@@ -252,6 +267,13 @@ const sheetPages: CharacterSheetPage[] = [
     label: "Capacités",
     render: (character, _inventory, _statBreakdowns, _setActivePage, onActionPrepared) => (
       <AbilitiesModule character={character} onActionPrepared={onActionPrepared} />
+    ),
+  },
+  {
+    id: "spells",
+    label: "Sorts",
+    render: (character, _inventory, _statBreakdowns, _setActivePage, onActionPrepared) => (
+      <SpellsModule character={character} onActionPrepared={onActionPrepared} />
     ),
   },
   {
@@ -773,7 +795,7 @@ function StatLine({
     >
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-[#E4D8BE]">
-          <HighlightedGameText text={label} />
+          <HighlightedGameText mode="mechanical" text={label} />
         </p>
         <p className="truncate text-[10px] uppercase text-[#E4D8BE]/42">{subtitle}</p>
       </div>
@@ -979,19 +1001,24 @@ function CurrentAbilitiesModule({
   onActionPrepared?: () => void;
 }) {
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
   const effectTemplates = useGameStore((state) => state.effectTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const addActionIntent = useGameStore((state) => state.addActionIntent);
+  const characterLevel = useGameStore((state) =>
+    state.characters.find((character) => character.id === characterId)?.niveau ?? 1);
   const abilities = useMemo(
     () => createAbilityView(
       characterId,
       abilityTemplates,
+      gameActionTemplates,
       abilityInstances,
       itemInstances,
       effectTemplates,
+      characterLevel,
     ).slice(0, 4),
-    [abilityInstances, abilityTemplates, characterId, effectTemplates, itemInstances],
+    [abilityInstances, abilityTemplates, characterId, characterLevel, effectTemplates, gameActionTemplates, itemInstances],
   );
 
   if (abilities.length === 0) {
@@ -1674,7 +1701,7 @@ function ItemEffectList({ item }: { item: ResolvedInventoryItem }) {
             key={`${label}-${index}`}
             style={stat ? getGameTermSolidSurfaceStyle(stat) : undefined}
           >
-            {stat ? label : <HighlightedGameText text={label} />}
+            {stat ? label : <HighlightedGameText mode="mechanical" text={label} />}
           </li>
         );
       })}
@@ -1685,6 +1712,7 @@ function ItemEffectList({ item }: { item: ResolvedInventoryItem }) {
 function ItemGrantedAbilityLine({ item }: { item: ResolvedInventoryItem }) {
   const [selectedAbility, setSelectedAbility] = useState<ResolvedAbility | null>(null);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
   const effectTemplates = useGameStore((state) => state.effectTemplates);
 
@@ -1695,8 +1723,11 @@ function ItemGrantedAbilityLine({ item }: { item: ResolvedInventoryItem }) {
   const abilities = item.grantedAbilityTemplateIds
     .map((templateId) => {
       const template = abilityTemplates.find((candidate) => candidate.id === templateId);
+      const action = template
+        ? getGameActionTemplate(gameActionTemplates, template.actionId)
+        : undefined;
 
-      if (!template) {
+      if (!template || !action) {
         return null;
       }
 
@@ -1707,16 +1738,16 @@ function ItemGrantedAbilityLine({ item }: { item: ResolvedInventoryItem }) {
       return {
         id: instance?.id ?? `preview:${item.id}:${template.id}`,
         templateId: template.id,
-        name: template.name,
-        description: template.description,
-        types: template.types,
-        tags: template.tags,
-        activation: template.activation,
-        targeting: template.targeting,
+        name: action.name,
+        description: action.description,
+        types: action.types,
+        tags: action.tags,
+        activation: action.activation,
+        targeting: action.targeting,
         charges: instance ? getAbilityCharges(instance, template) : template.charges?.initial ?? template.charges?.max ?? null,
         maxCharges: getAbilityMaxCharges(template),
         recharge: template.charges?.recharge ?? null,
-        effects: resolveNamedEffectRefs(template.effects, effectTemplates),
+        effects: resolveNamedEffectRefs(resolveGameActionEffects(action), effectTemplates),
       } satisfies ResolvedAbility;
     })
     .filter((ability): ability is ResolvedAbility => Boolean(ability));
@@ -1813,6 +1844,7 @@ function AbilitiesModule({
   onActionPrepared?: () => void;
 }) {
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
   const effectTemplates = useGameStore((state) => state.effectTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
@@ -1821,11 +1853,13 @@ function AbilitiesModule({
     () => createAbilityView(
       character.id,
       abilityTemplates,
+      gameActionTemplates,
       abilityInstances,
       itemInstances,
       effectTemplates,
+      character.niveau,
     ),
-    [abilityInstances, abilityTemplates, character.id, effectTemplates, itemInstances],
+    [abilityInstances, abilityTemplates, character.id, character.niveau, effectTemplates, gameActionTemplates, itemInstances],
   );
 
   if (abilities.length === 0 && character.competences.length === 0) {
@@ -1900,9 +1934,11 @@ function AbilitiesModule({
 function createAbilityView(
   characterId: string,
   templates: AbilityTemplate[],
+  actions: GameActionTemplate[],
   instances: AbilityInstance[],
   itemInstances: ItemInstance[] = [],
   effectTemplates: EffectTemplate[] = [],
+  characterLevel = 1,
 ): ResolvedAbility[] {
   return instances
     .filter((ability) => {
@@ -1923,8 +1959,9 @@ function createAbilityView(
     })
     .flatMap((ability) => {
       const template = templates.find((candidate) => candidate.id === ability.templateId);
+      const action = template ? getGameActionTemplate(actions, template.actionId) : undefined;
 
-      if (!template) {
+      if (!template || !action) {
         return [];
       }
 
@@ -1932,17 +1969,23 @@ function createAbilityView(
         {
           id: ability.id,
           templateId: ability.templateId,
-          name: String(ability.overrides.name ?? template.name),
-          description: String(ability.overrides.description ?? template.description),
-          types: template.types,
-          tags: template.tags,
-          activation: template.activation,
-          targeting: template.targeting,
+          name: String(ability.overrides.name ?? action.name),
+          description: String(ability.overrides.description ?? action.description),
+          types: action.types,
+          tags: action.tags,
+          activation: action.activation,
+          targeting: action.targeting,
           charges: getAbilityCharges(ability, template),
           maxCharges: getAbilityMaxCharges(template),
           recharge: template.charges?.recharge ?? null,
           effects: resolveNamedEffectRefs(
-            [...template.effects, ...ability.effects],
+            [
+              ...resolveGameActionEffects(action, {
+                characterLevel,
+                abilityLevel: Number(ability.data.level ?? 1),
+              }),
+              ...ability.effects,
+            ],
             effectTemplates,
           ),
         },
@@ -1987,7 +2030,7 @@ function AbilityEffectList({ ability }: { ability: ResolvedAbility }) {
         <ul className="space-y-1">
           {labels.map((label, index) => (
             <li className="text-sm leading-snug text-[#E4D8BE]/85" key={`${ability.id}-effect-${index}`}>
-              <HighlightedGameText text={label} />
+              <HighlightedGameText mode="mechanical" text={label} />
             </li>
           ))}
         </ul>
@@ -2022,8 +2065,8 @@ function formatAbilityEffect(effect: ItemEffectRef): string {
   return `${name}${levelLabel}`;
 }
 
-function formatAbilityTiming(timing: AbilityTemplate["activation"]["timing"]): string {
-  const labels: Record<AbilityTemplate["activation"]["timing"], string> = {
+function formatAbilityTiming(timing: GameActionTemplate["activation"]["timing"]): string {
+  const labels: Record<GameActionTemplate["activation"]["timing"], string> = {
     action: "Action",
     bonus: "Bonus",
     reaction: "Réaction",
@@ -2052,6 +2095,352 @@ function formatAbilityRecharge(ability: ResolvedAbility): string {
   };
 
   return ability.recharge.map((trigger) => labels[trigger]).join(" ou ");
+}
+
+const spellSchoolLabels: Record<SpellTemplate["school"], string> = {
+  abjuration: "Abjuration",
+  conjuration: "Invocation",
+  divination: "Divination",
+  enchantment: "Enchantement",
+  evocation: "Évocation",
+  illusion: "Illusion",
+  necromancy: "Nécromancie",
+  transmutation: "Transmutation",
+};
+
+function SpellsModule({
+  character,
+  onActionPrepared,
+}: {
+  character: SafeCharacter;
+  onActionPrepared?: () => void;
+}) {
+  const rulesCharacter = useGameStore((state) =>
+    state.characters.find((candidate) => candidate.id === character.id));
+  const spellTemplates = useGameStore((state) => state.spellTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
+  const book = useGameStore((state) =>
+    state.spellbooks.find((candidate) => candidate.characterId === character.id));
+  const prepareSpells = useGameStore((state) => state.prepareSpells);
+  const [listMode, setListMode] = useState<"known" | "catalog">("known");
+  const [levelFilter, setLevelFilter] = useState<"all" | `${SpellLevel}`>("all");
+  const [search, setSearch] = useState("");
+  const [preparationDraft, setPreparationDraft] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!book) {
+      setPreparationDraft([]);
+      return;
+    }
+    const cantripIds = new Set(
+      spellTemplates
+        .filter((spell) => spell.minimumSlotLevel === 0)
+        .map((spell) => spell.id),
+    );
+    setPreparationDraft(book.preparedSpellIds.filter((id) => !cantripIds.has(id)));
+  }, [book, spellTemplates]);
+
+  if (!book || !rulesCharacter) {
+    return (
+      <section className="ornate-module mx-auto mt-4 w-full max-w-[760px] px-4 pb-4 pt-7">
+        <OrnateModuleFrame title="Sorts" />
+        <p className="relative z-[2] text-center text-sm text-[#E4D8BE]/65">
+          {character.classe} ne possède pas encore de tradition magique reconnue.
+        </p>
+      </section>
+    );
+  }
+
+  const profile = getSpellcastingProfileById(book.classId);
+  const knownIds = new Set(book.knownSpellIds);
+  const maxSlotLevel = book.slots.reduce((maximum, slot) => Math.max(maximum, slot.level), 0);
+  const sourceSpells = spellTemplates
+    .filter((spell) => spell.classes.includes(book.classId))
+    .filter((spell) => spell.minimumSlotLevel === 0 || spell.minimumSlotLevel <= maxSlotLevel)
+    .filter((spell) => listMode === "catalog" || knownIds.has(spell.id));
+  const normalizedSearch = normalizeText(search);
+  const visibleSpells = sourceSpells
+    .filter((spell) => levelFilter === "all" || spell.minimumSlotLevel === Number(levelFilter))
+    .filter((spell) => {
+      const action = getGameActionTemplate(gameActionTemplates, spell.actionId);
+      return Boolean(action) && (!normalizedSearch || normalizeText(`${action?.name} ${action?.description}`).includes(normalizedSearch));
+    })
+    .sort((a, b) => {
+      const leftName = getGameActionTemplate(gameActionTemplates, a.actionId)?.name ?? a.id;
+      const rightName = getGameActionTemplate(gameActionTemplates, b.actionId)?.name ?? b.id;
+      return a.minimumSlotLevel - b.minimumSlotLevel || leftName.localeCompare(rightName, "fr");
+    });
+  const preparationLimit = getSpellPreparationLimit(rulesCharacter, profile);
+  const concentrationSpell = book.concentration
+    ? spellTemplates.find((spell) => spell.id === book.concentration?.spellId)
+    : undefined;
+  const concentrationAction = concentrationSpell
+    ? getGameActionTemplate(gameActionTemplates, concentrationSpell.actionId)
+    : undefined;
+
+  function togglePreparedSpell(spellId: string) {
+    setPreparationDraft((current) => current.includes(spellId)
+      ? current.filter((id) => id !== spellId)
+      : current.length < preparationLimit ? [...current, spellId] : current);
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-[920px] space-y-4">
+      <section className="ornate-module mt-4 px-3 pb-4 pt-7">
+        <OrnateModuleFrame title="Grimoire" />
+        <div className="relative z-[2] flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="ink-heading text-xl text-[#E4D8BE]">{profile.label}</p>
+            <p className="mt-1 text-xs text-[#E4D8BE]/55">
+              Incantation : {statFullLabels[book.castingAbility]} · récupération : {book.slotRecovery === "shortRest" ? "repos court" : "repos long"}
+            </p>
+          </div>
+          <div className="text-right text-xs text-[#E4D8BE]/60">
+            <p>{book.knownSpellIds.length} sorts connus</p>
+            {book.preparationMode === "prepared" ? (
+              <p>{book.preparedSpellIds.filter((id) => spellTemplates.find((spell) => spell.id === id)?.minimumSlotLevel !== 0).length}/{preparationLimit} préparés</p>
+            ) : (
+              <p>Incantation spontanée</p>
+            )}
+          </div>
+        </div>
+
+        {book.slots.length > 0 ? (
+          <div className="relative z-[2] mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            {book.slots.map((slot) => (
+              <div className="rounded border border-[#9C7A2E]/28 bg-[#15121A]/72 px-2 py-2" key={slot.level}>
+                <p className="text-[10px] uppercase text-[#9C7A2E]">Niveau {slot.level}</p>
+                <div className="mt-1 flex gap-1" aria-label={`${slot.remaining} emplacements sur ${slot.max}`}>
+                  {Array.from({ length: slot.max }, (_, index) => (
+                    <span
+                      className={`h-3 flex-1 border ${index < slot.remaining ? "border-[#9C7A2E] bg-[#9C7A2E]" : "border-[#9C7A2E]/35 bg-[#221E29]"}`}
+                      key={`${slot.level}-${index}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="relative z-[2] mt-4 text-sm text-[#E4D8BE]/55">Aucun emplacement débloqué à ce niveau.</p>
+        )}
+
+        {concentrationAction ? (
+          <p className="relative z-[2] mt-3 rounded border border-[#4B3B66] bg-[#4B3B66]/35 px-3 py-2 text-sm text-[#E4D8BE]">
+            Concentration : <strong>{concentrationAction.name}</strong>
+          </p>
+        ) : null}
+      </section>
+
+      {book.preparationMode === "prepared" && book.preparationRequired ? (
+        <section className="rounded border border-[#9C7A2E]/55 bg-[#5A2233]/22 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold text-[#E4D8BE]">Préparation après le repos long</p>
+              <p className="mt-1 text-xs text-[#E4D8BE]/65">
+                Choisissez jusqu'à {preparationLimit} sorts. Les tours mineurs restent toujours disponibles.
+              </p>
+            </div>
+            <button
+              className="fantasy-button rounded px-3 py-2 text-xs font-semibold disabled:opacity-40"
+              disabled={preparationDraft.length > preparationLimit}
+              onClick={() => prepareSpells(character.id, preparationDraft)}
+              type="button"
+            >
+              Valider {preparationDraft.length}/{preparationLimit}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="ornate-module mt-4 px-3 pb-4 pt-7">
+        <OrnateModuleFrame title="Catalogue de sorts" />
+        <div className="relative z-[2] flex flex-col gap-2 sm:flex-row">
+          <div className="flex rounded border border-[#9C7A2E]/25 bg-[#15121A] p-1">
+            <button
+              className={`flex-1 rounded px-3 py-1.5 text-xs ${listMode === "known" ? "fantasy-button-active" : "text-[#E4D8BE]/65"}`}
+              onClick={() => setListMode("known")}
+              type="button"
+            >
+              Connus
+            </button>
+            <button
+              className={`flex-1 rounded px-3 py-1.5 text-xs ${listMode === "catalog" ? "fantasy-button-active" : "text-[#E4D8BE]/65"}`}
+              onClick={() => setListMode("catalog")}
+              type="button"
+            >
+              Liste de classe
+            </button>
+          </div>
+          <select
+            className="fantasy-input rounded px-2 py-1.5 text-xs"
+            onChange={(event) => setLevelFilter(event.target.value as "all" | `${SpellLevel}`)}
+            value={levelFilter}
+          >
+            <option value="all">Tous les niveaux</option>
+            <option value="0">Tours mineurs</option>
+            {book.slots.map((slot) => <option key={slot.level} value={slot.level}>Niveau {slot.level}</option>)}
+          </select>
+          <input
+            className="fantasy-input min-w-0 flex-1 rounded px-3 py-1.5 text-sm"
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Rechercher un sort"
+            type="search"
+            value={search}
+          />
+        </div>
+
+        <div className="relative z-[2] mt-3 grid gap-3 lg:grid-cols-2">
+          {visibleSpells.map((spell) => (
+            <SpellCard
+              action={getGameActionTemplate(gameActionTemplates, spell.actionId)!}
+              book={book}
+              character={rulesCharacter}
+              isKnown={knownIds.has(spell.id)}
+              isPreparationOpen={book.preparationMode === "prepared" && book.preparationRequired}
+              isSelectedForPreparation={preparationDraft.includes(spell.id)}
+              key={spell.id}
+              onActionPrepared={onActionPrepared}
+              onTogglePreparation={() => togglePreparedSpell(spell.id)}
+              spell={spell}
+            />
+          ))}
+          {visibleSpells.length === 0 ? (
+            <p className="py-6 text-center text-sm text-[#E4D8BE]/55 lg:col-span-2">Aucun sort ne correspond à ces filtres.</p>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SpellCard({
+  action,
+  book,
+  character,
+  spell,
+  isKnown,
+  isPreparationOpen,
+  isSelectedForPreparation,
+  onTogglePreparation,
+  onActionPrepared,
+}: {
+  action: GameActionTemplate;
+  book: CharacterSpellbook;
+  character: Character;
+  spell: SpellTemplate;
+  isKnown: boolean;
+  isPreparationOpen: boolean;
+  isSelectedForPreparation: boolean;
+  onTogglePreparation: () => void;
+  onActionPrepared?: () => void;
+}) {
+  const itemInstances = useGameStore((state) => state.itemInstances);
+  const itemTemplates = useGameStore((state) => state.itemTemplates);
+  const combat = useGameStore((state) => state.combat);
+  const addSpellIntent = useGameStore((state) => state.addSpellIntent);
+  const availableLevels = getAvailableSlotLevels(book, spell);
+  const [slotLevel, setSlotLevel] = useState<SpellLevel>(availableLevels[0] ?? spell.minimumSlotLevel);
+
+  useEffect(() => {
+    if (!availableLevels.includes(slotLevel)) {
+      setSlotLevel(availableLevels[0] ?? spell.minimumSlotLevel);
+    }
+  }, [availableLevels, slotLevel, spell.minimumSlotLevel]);
+
+  const actor = combat.combatants.find((combatant) =>
+    combatant.sourceType === "character" && combatant.sourceId === character.id);
+  const castCheck = checkSpellCast({
+    character,
+    book,
+    spell,
+    slotLevel,
+    itemInstances,
+    itemTemplates,
+    combatant: actor,
+  });
+  const effectLabels = resolveSpellEffects(
+    spell,
+    action,
+    slotLevel,
+    book.castingAbility,
+    character.niveau,
+  ).map(formatAbilityEffect).filter(Boolean);
+  const prepared = isSpellPrepared(book, spell);
+  const canTogglePreparation = isPreparationOpen && isKnown && spell.minimumSlotLevel > 0;
+
+  return (
+    <article className={`rounded border p-3 ${prepared ? "border-[#9C7A2E]/32 bg-[#221E29]/92" : "border-[#9C7A2E]/16 bg-[#15121A]/72"}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] uppercase text-[#9C7A2E]">
+            {formatSpellLevel(spell.minimumSlotLevel)} · {spellSchoolLabels[spell.school]}
+          </p>
+          <h4 className="ink-heading mt-1 text-xl font-semibold leading-tight text-[#E4D8BE]">{action.name}</h4>
+        </div>
+        {canTogglePreparation ? (
+          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-[#E4D8BE]/70">
+            <input checked={isSelectedForPreparation} onChange={onTogglePreparation} type="checkbox" />
+            Préparer
+          </label>
+        ) : !isKnown ? (
+          <span className="shrink-0 rounded border border-[#9C7A2E]/20 px-2 py-1 text-[10px] uppercase text-[#E4D8BE]/45">Non appris</span>
+        ) : null}
+      </div>
+
+      <p className="mt-2 text-sm leading-relaxed text-[#E4D8BE]/75">{action.description}</p>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#E4D8BE]/58">
+        <span>{formatSpellComponents(spell)}</span>
+        <span>{action.activation.timing === "bonus" ? "Action bonus" : action.activation.timing === "reaction" ? "Réaction" : "Action"}</span>
+        {spell.concentration ? <span>Concentration</span> : null}
+        {spell.ritual ? <span>Rituel</span> : null}
+      </div>
+      {spell.components.material ? (
+        <p className="mt-1 text-[11px] text-[#9C7A2E]/75">M : {spell.components.material.description}</p>
+      ) : null}
+
+      {effectLabels.length > 0 ? (
+        <div className="mt-3 rounded border border-[#9C7A2E]/16 bg-[#15121A]/55 px-2 py-1.5">
+          {effectLabels.map((label, index) => (
+            <p className="text-xs text-[#E4D8BE]/82" key={`${spell.id}-effect-${index}`}>
+              <HighlightedGameText mode="mechanical" text={label} />
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-end justify-between gap-2">
+        {spell.minimumSlotLevel > 0 ? (
+          <label className="text-[10px] uppercase text-[#E4D8BE]/55">
+            Emplacement
+            <select
+              className="fantasy-input mt-1 block rounded px-2 py-1 text-xs"
+              disabled={availableLevels.length === 0}
+              onChange={(event) => setSlotLevel(Number(event.target.value) as SpellLevel)}
+              value={slotLevel}
+            >
+              {availableLevels.length > 0
+                ? availableLevels.map((level) => <option key={level} value={level}>Niveau {level}</option>)
+                : <option value={spell.minimumSlotLevel}>Indisponible</option>}
+            </select>
+          </label>
+        ) : <span className="text-xs text-[#E4D8BE]/55">Sans emplacement</span>}
+        <button
+          className="fantasy-button rounded px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-35"
+          disabled={!castCheck.canCast}
+          onClick={() => {
+            if (addSpellIntent(spell.id, slotLevel)) onActionPrepared?.();
+          }}
+          type="button"
+        >
+          Lancer
+        </button>
+      </div>
+      {!castCheck.canCast && isKnown ? (
+        <p className="mt-2 text-xs text-[#D99A91]">{castCheck.reasons[0]}</p>
+      ) : null}
+    </article>
+  );
 }
 
 function HistoryJournalModule({ character }: { character: SafeCharacter }) {
@@ -2091,7 +2480,7 @@ function HistoryJournalModule({ character }: { character: SafeCharacter }) {
                   Entrée {index + 1}
                 </p>
                 <p className="mt-1 text-sm text-[#E4D8BE]/75">
-                  <HighlightedGameText text={entry} />
+                  <HighlightedGameText mode="narrative" text={entry} />
                 </p>
               </article>
             ))
@@ -2111,7 +2500,7 @@ function HistoryJournalModule({ character }: { character: SafeCharacter }) {
                   {new Date(entry.timestamp).toLocaleString("fr-FR")}
                 </time>
                 <p className="mt-1 text-sm text-[#E4D8BE]/76">
-                  <HighlightedGameText text={entry.content} />
+                  <HighlightedGameText mode="none" text={entry.content} />
                 </p>
               </article>
             ))
@@ -2751,10 +3140,10 @@ export function CharacterSheet({ onNavigateToReading }: { onNavigateToReading?: 
               {character.name}
             </h2>
 
-            <nav className="mt-1 grid touch-pan-y grid-cols-4 gap-1 rounded border border-[#9C7A2E]/20 bg-[#15121A] p-1">
+            <nav className="mt-1 grid touch-pan-y grid-cols-5 gap-1 rounded border border-[#9C7A2E]/20 bg-[#15121A] p-1">
               {sheetPages.map((page) => (
                 <button
-                  className={`rounded px-1.5 py-1.5 text-xs font-semibold sm:text-sm ${
+                  className={`min-w-0 rounded px-1 py-1.5 text-[9px] font-semibold sm:text-sm ${
                     activePage.id === page.id
                       ? "fantasy-button-active"
                       : "text-[#E4D8BE]/70 hover:bg-[#6B4A5C]/25"

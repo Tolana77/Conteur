@@ -30,6 +30,23 @@ import {
   useAbilityCharge,
 } from "../features/abilities";
 import {
+  getGameActionTemplate,
+  initialGameActionTemplates,
+  resolveGameActionEffects,
+} from "../features/actions";
+import {
+  applyPreparedSpells,
+  checkSpellCast,
+  consumeSpellMaterials,
+  createInitialSpellbooks,
+  initialSpellTemplates,
+  resolveSpellEffects,
+  restoreSpellSlots,
+  spendSpellSlot,
+  synchronizeSpellbooks,
+} from "../features/spells";
+import {
+  deprecatedBuiltInItemTemplateReplacements,
   initialItemTemplates,
   isItemEquipable,
   isItemUsable,
@@ -55,11 +72,13 @@ import {
   type ItemInstanceInput,
 } from "../features/content";
 import {
-  getCombatantTargetPosition,
-  getSuggestedSide,
-  getTargetingRange,
+  canAffectCombatant,
+  getSelectableTargetKinds,
+  hasLineOfSight,
+  isActionTargetAllowed,
+  isSuggestedCombatant,
+  normalizeActionTargeting,
   resolveActionTargets,
-  toLegacyTargetingRule,
 } from "../features/combat/targeting";
 import { getCombatConditionTemplate } from "../features/combat/conditionTemplates";
 import {
@@ -73,11 +92,12 @@ import { resolveEffectValue, type ValueExpressionContext } from "../features/ite
 import type {
   Campaign,
   ActionTarget,
-  ActionTargetingRule,
+  ActionTargeting,
   AbilityInstance,
   AbilityRechargeTrigger,
   AbilityTemplate,
   Character,
+  CharacterSpellbook,
   CharacterDerivedScores,
   ChatActionIntent,
   ChatActionIntentKind,
@@ -93,6 +113,7 @@ import type {
   EffectTemplate,
   EnemyTemplate,
   Entity,
+  GameActionTemplate,
   GameActionReceipt,
   ItemInstance,
   ItemTemplate,
@@ -104,12 +125,14 @@ import type {
   PlayerCheckRequest,
   PlayerCheckRequestInput,
   PlayerCheckResolution,
+  SpellLevel,
+  SpellTemplate,
   CharacterStats,
 } from "../app/types";
 import type { AiApiTrace } from "../features/ai-director/types";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 33;
+export const GAME_STORAGE_VERSION = 37;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -146,6 +169,9 @@ export interface GameState {
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
   abilityInstances: AbilityInstance[];
+  gameActionTemplates: GameActionTemplate[];
+  spellTemplates: SpellTemplate[];
+  spellbooks: CharacterSpellbook[];
   effectTemplates: EffectTemplate[];
   enemyTemplates: EnemyTemplate[];
   disabledContentTemplateIds: DisabledContentTemplateIds;
@@ -179,8 +205,11 @@ export interface GameState {
   useAbility: (abilityId: string) => boolean;
   rechargeAbility: (abilityId: string) => void;
   setAbilityCharges: (abilityId: string, charges: number) => void;
+  learnSpell: (characterId: string, spellId: string) => boolean;
+  prepareSpells: (characterId: string, spellIds: string[]) => boolean;
   registerEffectTemplate: (template: EffectTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
   registerItemTemplate: (template: ItemTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
+  registerGameActionTemplate: (template: GameActionTemplate, mode?: "create" | "replace") => boolean;
   registerAbilityTemplate: (template: AbilityTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
   registerEnemyTemplate: (template: EnemyTemplate, mode?: "create" | "replace", meta?: ContentMutationMeta) => boolean;
   setContentTemplateActive: (kind: ContentTemplateKind, templateId: string, active: boolean) => boolean;
@@ -204,6 +233,7 @@ export interface GameState {
   attackCombatant: (attackerId: string, targetId: string, weaponName: string, damage: number) => void;
   consumeCombatNarrationCues: (cueIds: string[]) => void;
   addAttackIntent: (weaponId: string, label: string, target?: ActionTarget) => boolean;
+  addSpellIntent: (spellId: string, slotLevel: SpellLevel, target?: ActionTarget) => boolean;
   addActionIntent: (kind: ChatActionIntentKind, targetId: string, label: string, target?: ActionTarget) => boolean;
   updateActionIntentTarget: (intentId: string, target: ActionTarget) => void;
   removeActionIntent: (intentId: string) => void;
@@ -217,7 +247,10 @@ export interface GameState {
   advanceNarrativeScene: (playerAction: string) => void;
   applyNarrativeScenePatch: (patch: NarrativeScenePatch) => void;
   recordNarratedBeat: (narration: string, proactiveKey?: string) => void;
-  addGmMessage: (content: string) => void;
+  addGmMessage: (
+    content: string,
+    metadata?: Pick<Message, "kind" | "relatedCheckId">,
+  ) => void;
   sendPlayerMessage: (content: string) => void;
   setPendingGameDecision: (decision: PendingGameDecision | null) => void;
   setNarrativeMomentum: (momentum: NarrativeMomentum) => void;
@@ -721,6 +754,9 @@ type GameDataState = Pick<
   | "itemInstances"
   | "abilityTemplates"
   | "abilityInstances"
+  | "gameActionTemplates"
+  | "spellTemplates"
+  | "spellbooks"
   | "effectTemplates"
   | "enemyTemplates"
   | "disabledContentTemplateIds"
@@ -767,6 +803,7 @@ function createInitialState(): GameDataState {
   const characterId = defaultCampaign.characters[0]?.id ?? "";
   const itemInstances: ItemInstance[] = [];
   const abilityInstances: AbilityInstance[] = [];
+  const spellbooks = createInitialSpellbooks(defaultCampaign.characters, initialSpellTemplates);
   const narrativeScene = createInitialNarrativeScene(defaultCampaign);
   const campaignStartSnapshot = createCampaignStartSnapshot({
     campaign: defaultCampaign,
@@ -779,6 +816,9 @@ function createInitialState(): GameDataState {
     itemInstances,
     abilityTemplates: initialAbilityTemplates,
     abilityInstances,
+    gameActionTemplates: initialGameActionTemplates,
+    spellTemplates: initialSpellTemplates,
+    spellbooks,
     effectTemplates: initialEffectTemplates,
     enemyTemplates: initialEnemyTemplates,
     narrativeScene,
@@ -805,6 +845,9 @@ function createInitialState(): GameDataState {
     itemInstances,
     abilityTemplates: initialAbilityTemplates,
     abilityInstances,
+    gameActionTemplates: initialGameActionTemplates,
+    spellTemplates: initialSpellTemplates,
+    spellbooks,
     effectTemplates: initialEffectTemplates,
     enemyTemplates: initialEnemyTemplates,
     disabledContentTemplateIds: createEmptyDisabledContentTemplateIds(),
@@ -848,6 +891,9 @@ function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<Ga
     itemInstances,
     abilityTemplates: start.abilityTemplates,
     abilityInstances: start.abilityInstances,
+    gameActionTemplates: start.gameActionTemplates,
+    spellTemplates: start.spellTemplates,
+    spellbooks: synchronizeSpellbooks(start.spellbooks, characters, start.spellTemplates),
     effectTemplates: start.effectTemplates,
     enemyTemplates: start.enemyTemplates,
     disabledContentTemplateIds: createEmptyDisabledContentTemplateIds(),
@@ -864,6 +910,40 @@ function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<Ga
       start.effectTemplates,
     ),
   };
+}
+
+function normalizePendingActionIntents(value: unknown): ChatActionIntent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const intent = entry as ChatActionIntent & { targetingV2?: unknown };
+    if (
+      typeof intent.id !== "string" ||
+      typeof intent.kind !== "string" ||
+      typeof intent.targetId !== "string" ||
+      typeof intent.label !== "string"
+    ) {
+      return [];
+    }
+
+    const {
+      targeting: persistedTargeting,
+      targetingV2: legacyTargeting,
+      ...intentWithoutLegacyTargeting
+    } = intent;
+    const targeting = normalizeActionTargeting(persistedTargeting ?? legacyTargeting);
+
+    return [{
+      ...intentWithoutLegacyTargeting,
+      ...(targeting ? { targeting } : {}),
+    }];
+  });
 }
 
 function normalizePersistedState(persistedState: unknown): ReturnType<typeof createInitialState> {
@@ -901,9 +981,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         : initialState.messages,
       narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
       pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
-      pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
-        ? candidate.pendingActionIntents
-        : [],
+      pendingActionIntents: normalizePendingActionIntents(candidate.pendingActionIntents),
       diceRolls: Array.isArray(candidate.diceRolls) ? candidate.diceRolls : [],
       playerCheckRequests: normalizePlayerCheckRequests(candidate.playerCheckRequests),
       characterPortraits:
@@ -915,7 +993,10 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
         : initialState.itemTemplates,
       itemInstances: Array.isArray(candidate.itemInstances)
-        ? mergeById(candidate.itemInstances, initialState.itemInstances)
+        ? migrateDeprecatedItemInstances(
+            mergeById(candidate.itemInstances, initialState.itemInstances),
+            Array.isArray(candidate.itemTemplates) ? candidate.itemTemplates : [],
+          )
         : initialState.itemInstances,
       abilityTemplates: Array.isArray(candidate.abilityTemplates)
         ? mergeAbilityTemplates(candidate.abilityTemplates, initialState.abilityTemplates)
@@ -923,11 +1004,18 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       abilityInstances: Array.isArray(candidate.abilityInstances)
         ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
         : initialState.abilityInstances,
+      gameActionTemplates: Array.isArray(candidate.gameActionTemplates)
+        ? mergeBuiltInCatalog(candidate.gameActionTemplates, initialState.gameActionTemplates)
+        : initialState.gameActionTemplates,
+      spellTemplates: Array.isArray(candidate.spellTemplates)
+        ? mergeBuiltInCatalog(candidate.spellTemplates, initialState.spellTemplates)
+        : initialState.spellTemplates,
+      spellbooks: initialState.spellbooks,
       effectTemplates: Array.isArray(candidate.effectTemplates)
-        ? mergeById(candidate.effectTemplates, initialState.effectTemplates)
+        ? mergeBuiltInCatalog(candidate.effectTemplates, initialState.effectTemplates)
         : initialState.effectTemplates,
       enemyTemplates: Array.isArray(candidate.enemyTemplates)
-        ? mergeById(candidate.enemyTemplates, initialState.enemyTemplates)
+        ? mergeBuiltInCatalog(candidate.enemyTemplates, initialState.enemyTemplates)
         : initialState.enemyTemplates,
       disabledContentTemplateIds: normalizeDisabledContentTemplateIds(candidate.disabledContentTemplateIds),
       contentAuditLog: normalizeContentAuditLog(candidate.contentAuditLog),
@@ -938,13 +1026,16 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       characterDerivedScores: createCharacterDerivedScores(
         initialState.characters,
         Array.isArray(candidate.itemInstances)
-          ? mergeById(candidate.itemInstances, initialState.itemInstances)
+          ? migrateDeprecatedItemInstances(
+              mergeById(candidate.itemInstances, initialState.itemInstances),
+              Array.isArray(candidate.itemTemplates) ? candidate.itemTemplates : [],
+            )
           : initialState.itemInstances,
         Array.isArray(candidate.itemTemplates)
           ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
           : initialState.itemTemplates,
         Array.isArray(candidate.effectTemplates)
-          ? mergeById(candidate.effectTemplates, initialState.effectTemplates)
+          ? mergeBuiltInCatalog(candidate.effectTemplates, initialState.effectTemplates)
           : initialState.effectTemplates,
       ),
     };
@@ -958,12 +1049,18 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   const selectedCharacterExists = characters.some(
     (character) => character.id === candidate.selectedCharacterId,
   );
-  const itemTemplates = Array.isArray(candidate.itemTemplates)
-    ? mergeItemTemplates(candidate.itemTemplates, initialState.itemTemplates)
+  const persistedItemTemplates = Array.isArray(candidate.itemTemplates)
+    ? candidate.itemTemplates
+    : [];
+  const itemTemplates = persistedItemTemplates.length
+    ? mergeItemTemplates(persistedItemTemplates, initialState.itemTemplates)
     : initialState.itemTemplates;
-  const itemInstances = Array.isArray(candidate.itemInstances)
-    ? mergeById(candidate.itemInstances, initialState.itemInstances)
-    : initialState.itemInstances;
+  const itemInstances = migrateDeprecatedItemInstances(
+    Array.isArray(candidate.itemInstances)
+      ? mergeById(candidate.itemInstances, initialState.itemInstances)
+      : initialState.itemInstances,
+    persistedItemTemplates,
+  );
   const selectedCharacterId = selectedCharacterExists
     ? candidate.selectedCharacterId ?? initialState.selectedCharacterId
     : characters[0]?.id ?? initialState.selectedCharacterId;
@@ -977,11 +1074,22 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   const abilityInstances = Array.isArray(candidate.abilityInstances)
     ? mergeById(candidate.abilityInstances, initialState.abilityInstances)
     : initialState.abilityInstances;
+  const gameActionTemplates = Array.isArray(candidate.gameActionTemplates)
+    ? mergeBuiltInCatalog(candidate.gameActionTemplates, initialState.gameActionTemplates)
+    : initialState.gameActionTemplates;
+  const spellTemplates = Array.isArray(candidate.spellTemplates)
+    ? mergeBuiltInCatalog(candidate.spellTemplates, initialState.spellTemplates)
+    : initialState.spellTemplates;
+  const spellbooks = synchronizeSpellbooks(
+    Array.isArray(candidate.spellbooks) ? candidate.spellbooks : [],
+    characters,
+    spellTemplates,
+  );
   const effectTemplates = Array.isArray(candidate.effectTemplates)
-    ? mergeById(candidate.effectTemplates, initialState.effectTemplates)
+    ? mergeBuiltInCatalog(candidate.effectTemplates, initialState.effectTemplates)
     : initialState.effectTemplates;
   const enemyTemplates = Array.isArray(candidate.enemyTemplates)
-    ? mergeById(candidate.enemyTemplates, initialState.enemyTemplates)
+    ? mergeBuiltInCatalog(candidate.enemyTemplates, initialState.enemyTemplates)
     : initialState.enemyTemplates;
   const narrativeScene = normalizeNarrativeScene(candidate.narrativeScene, campaign);
   const gameEvents = normalizeGameEvents(candidate.gameEvents, campaign.id);
@@ -993,6 +1101,38 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         itemTemplates: mergeItemTemplates(
           normalizedCampaignStartSnapshot.itemTemplates,
           initialState.itemTemplates,
+        ),
+        itemInstances: migrateDeprecatedItemInstances(
+          normalizedCampaignStartSnapshot.itemInstances,
+          normalizedCampaignStartSnapshot.itemTemplates,
+        ),
+        abilityTemplates: mergeAbilityTemplates(
+          normalizedCampaignStartSnapshot.abilityTemplates,
+          initialState.abilityTemplates,
+        ),
+        gameActionTemplates: mergeBuiltInCatalog(
+          normalizedCampaignStartSnapshot.gameActionTemplates,
+          initialState.gameActionTemplates,
+        ),
+        spellTemplates: mergeBuiltInCatalog(
+          normalizedCampaignStartSnapshot.spellTemplates,
+          initialState.spellTemplates,
+        ),
+        spellbooks: synchronizeSpellbooks(
+          normalizedCampaignStartSnapshot.spellbooks,
+          normalizedCampaignStartSnapshot.characters,
+          mergeBuiltInCatalog(
+            normalizedCampaignStartSnapshot.spellTemplates,
+            initialState.spellTemplates,
+          ),
+        ),
+        effectTemplates: mergeBuiltInCatalog(
+          normalizedCampaignStartSnapshot.effectTemplates,
+          initialState.effectTemplates,
+        ),
+        enemyTemplates: mergeBuiltInCatalog(
+          normalizedCampaignStartSnapshot.enemyTemplates,
+          initialState.enemyTemplates,
         ),
       })
     : createCampaignStartSnapshot({
@@ -1006,6 +1146,9 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
         itemInstances,
         abilityTemplates,
         abilityInstances,
+        gameActionTemplates,
+        spellTemplates,
+        spellbooks,
         effectTemplates,
         enemyTemplates,
         narrativeScene,
@@ -1023,9 +1166,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
       : initialState.messages,
     narrativeMomentum: normalizeNarrativeMomentum(candidate.narrativeMomentum),
     pendingGameDecision: normalizePendingGameDecision(candidate.pendingGameDecision),
-    pendingActionIntents: Array.isArray(candidate.pendingActionIntents)
-      ? candidate.pendingActionIntents
-      : [],
+    pendingActionIntents: normalizePendingActionIntents(candidate.pendingActionIntents),
     diceRolls: Array.isArray(candidate.diceRolls) ? candidate.diceRolls : [],
     playerCheckRequests: normalizePlayerCheckRequests(candidate.playerCheckRequests),
     characterPortraits:
@@ -1037,6 +1178,9 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
     itemInstances,
     abilityTemplates,
     abilityInstances,
+    gameActionTemplates,
+    spellTemplates,
+    spellbooks,
     effectTemplates,
     enemyTemplates,
     disabledContentTemplateIds: normalizeDisabledContentTemplateIds(candidate.disabledContentTemplateIds),
@@ -1334,6 +1478,45 @@ function mergeById<T extends { id: string }>(currentItems: T[], defaultItems: T[
   return [...currentItems, ...missingDefaults];
 }
 
+function mergeBuiltInCatalog<T extends { id: string }>(currentItems: T[], defaultItems: T[]): T[] {
+  const defaultIds = new Set(defaultItems.map((item) => item.id));
+  const customItems = currentItems.filter((item) => !defaultIds.has(item.id));
+  return [...defaultItems, ...customItems];
+}
+
+function migrateDeprecatedItemInstances(
+  instances: ItemInstance[],
+  legacyTemplates: ItemTemplate[],
+): ItemInstance[] {
+  const legacyById = new Map(legacyTemplates.map((template) => [template.id, template]));
+  const deprecatedIds = new Set(Object.keys(deprecatedBuiltInItemTemplateReplacements));
+
+  return instances.map((instance) => {
+    const replacementTemplateId = deprecatedBuiltInItemTemplateReplacements[instance.templateId];
+    if (!replacementTemplateId) return instance;
+
+    const legacyTemplate = legacyById.get(instance.templateId);
+    const inheritedEffects = (legacyTemplate?.effects ?? []).filter((effect) => {
+      if (effect.effectId !== "inventoryInteraction") return true;
+      const requiredId = effect.variables?.requiredTemplateId;
+      const addedId = effect.variables?.addTemplateId;
+      return !(typeof requiredId === "string" && deprecatedIds.has(requiredId))
+        && !(typeof addedId === "string" && deprecatedIds.has(addedId));
+    });
+
+    return {
+      ...instance,
+      templateId: replacementTemplateId,
+      overrides: {
+        ...(legacyTemplate?.name ? { name: legacyTemplate.name } : {}),
+        ...(legacyTemplate?.description ? { description: legacyTemplate.description } : {}),
+        ...instance.overrides,
+      },
+      effects: [...inheritedEffects, ...instance.effects],
+    };
+  });
+}
+
 function upsertCatalogEntry<T extends { id: string }>(
   entries: T[],
   entry: T,
@@ -1368,6 +1551,7 @@ function createContentAuditEntry(
     before?: ContentTemplate;
     after?: ContentTemplate;
     note?: string;
+    name?: string;
   } = {},
 ): ContentAuditEntry {
   return {
@@ -1377,7 +1561,7 @@ function createContentAuditEntry(
     action,
     kind,
     templateId: template.id,
-    templateName: template.name,
+    templateName: options.name ?? ("name" in template ? String(template.name) : template.id),
     ...(options.before ? { before: cloneContentTemplate(options.before) } : {}),
     ...(options.after ? { after: cloneContentTemplate(options.after) } : {}),
     ...(options.note ? { note: options.note } : {}),
@@ -1392,6 +1576,7 @@ function createContentDependencyContext(state: GameDataState) {
   return {
     effectTemplates: state.effectTemplates,
     abilityTemplates: state.abilityTemplates,
+    gameActionTemplates: state.gameActionTemplates,
     itemTemplates: state.itemTemplates,
     enemyTemplates: state.enemyTemplates,
     itemInstances: state.itemInstances,
@@ -1420,18 +1605,21 @@ function mergeItemTemplates(
   currentTemplates: ItemTemplate[],
   defaultTemplates: ItemTemplate[],
 ): ItemTemplate[] {
-  const mergedTemplates = currentTemplates.map((template) => {
+  const mergedTemplates = currentTemplates
+    .filter((template) => !(template.id in deprecatedBuiltInItemTemplateReplacements))
+    .map((template) => {
     const defaultTemplate = defaultTemplates.find((item) => item.id === template.id);
+    const normalizedTemplate = normalizeItemTemplateModules(template);
 
     if (!defaultTemplate) {
-      return normalizeItemTemplateModules(template);
+      return normalizedTemplate;
     }
 
-    const currentModules = normalizeItemTemplateModules(template).modules;
+    const currentModules = normalizedTemplate.modules;
     const defaultModules = normalizeItemTemplateModules(defaultTemplate).modules;
 
     return {
-      ...template,
+      ...normalizedTemplate,
       type: defaultTemplate.type,
       types: defaultTemplate.types,
       tags: defaultTemplate.tags,
@@ -1445,7 +1633,6 @@ function mergeItemTemplates(
       attacks: defaultTemplate.attacks,
       attackModifiers: defaultTemplate.attackModifiers,
       targeting: defaultTemplate.targeting,
-      targetingV2: defaultTemplate.targetingV2,
       modules: {
         ...defaultModules,
         ...currentModules,
@@ -1455,7 +1642,7 @@ function mergeItemTemplates(
         },
       },
     };
-  });
+    });
 
   return mergeById(mergedTemplates, defaultTemplates);
 }
@@ -1464,46 +1651,46 @@ function mergeAbilityTemplates(
   currentTemplates: AbilityTemplate[],
   defaultTemplates: AbilityTemplate[],
 ): AbilityTemplate[] {
-  const mergedTemplates = currentTemplates.map((template) => {
-    const defaultTemplate = defaultTemplates.find((item) => item.id === template.id);
-
-    return defaultTemplate
-      ? {
-          ...template,
-          types: defaultTemplate.types,
-          tags: defaultTemplate.tags,
-          combatRole: defaultTemplate.combatRole,
-          activation: defaultTemplate.activation,
-          resourceCost: defaultTemplate.resourceCost,
-          targeting: defaultTemplate.targeting,
-          targetingV2: defaultTemplate.targetingV2,
-          charges: defaultTemplate.charges,
-          scaling: defaultTemplate.scaling,
-          requirements: defaultTemplate.requirements,
-          duration: defaultTemplate.duration,
-          effects: defaultTemplate.effects,
-          modules: {
-            ...template.modules,
-            ...defaultTemplate.modules,
-          },
-        }
-      : template;
-  });
-
-  return mergeById(mergedTemplates, defaultTemplates);
+  return mergeBuiltInCatalog(
+    currentTemplates.filter((template) => typeof template.actionId === "string"),
+    defaultTemplates,
+  );
 }
 
 function normalizeItemTemplateModules(template: ItemTemplate): ItemTemplate {
-  const { equipment: _equipment, ...modules } = template.modules;
+  const source = template as ItemTemplate & { targetingV2?: unknown };
+  const {
+    targeting: persistedTargeting,
+    targetingV2: legacyTargeting,
+    ...templateWithoutLegacyTargeting
+  } = source;
+  const { equipment: _equipment, ...modules } = source.modules;
   const { role: _role, roles: _roles, ...item } = modules.item ?? {};
-  const normalizedTypes = getTemplateTypes(template);
-  const normalizedTags = getTemplateMetadataTags(template, normalizedTypes);
+  const normalizedTypes = getTemplateTypes(source);
+  const normalizedTags = getTemplateMetadataTags(source, normalizedTypes);
+  const targeting = normalizeActionTargeting(persistedTargeting ?? legacyTargeting);
+  const attacks = source.attacks?.map((attack) => {
+    const attackSource = attack as typeof attack & { targetingV2?: unknown };
+    const {
+      targeting: persistedAttackTargeting,
+      targetingV2: legacyAttackTargeting,
+      ...attackWithoutLegacyTargeting
+    } = attackSource;
+    const attackTargeting = normalizeActionTargeting(persistedAttackTargeting ?? legacyAttackTargeting);
+
+    return {
+      ...attackWithoutLegacyTargeting,
+      ...(attackTargeting ? { targeting: attackTargeting } : {}),
+    };
+  });
 
   return {
-    ...template,
-    rarity: normalizeItemRarity(template.rarity),
+    ...templateWithoutLegacyTargeting,
+    rarity: normalizeItemRarity(source.rarity),
     types: normalizedTypes,
     tags: normalizedTags,
+    ...(attacks ? { attacks } : {}),
+    ...(targeting ? { targeting } : {}),
     modules: {
       ...modules,
       item,
@@ -1531,78 +1718,55 @@ function createActionIntent(
   kind: ChatActionIntentKind,
   targetId: string,
   label: string,
-  targeting: ActionTargetingRule | undefined,
+  targeting: ActionTargeting | undefined,
   target: ActionTarget | undefined,
+  spellLevel?: SpellLevel,
 ): ChatActionIntent {
   return {
     id: `intent-${crypto.randomUUID()}`,
     kind,
     targetId,
     label,
-    command: `${kind} ${targetId}`,
+    command: `${kind} ${targetId}${spellLevel === undefined ? "" : ` ${spellLevel}`}`,
     ...(targeting ? { targeting } : {}),
     ...(target ? { target } : {}),
+    ...(spellLevel === undefined ? {} : { spellLevel }),
     createdAt: Date.now(),
   };
 }
 
-function getActionTargetingRule(
-  state: GameDataState,
-  kind: ChatActionIntentKind,
-  targetId: string,
-): ActionTargetingRule | undefined {
-  if (kind === "useItem") {
-    const item = state.itemInstances.find((candidate) => candidate.id === targetId);
-    const template = item
-      ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
-      : undefined;
-
-    return toLegacyTargetingRule(template?.targetingV2) ?? template?.targeting ?? {
-      allowed: ["self"],
-      required: false,
-      defaultPriority: ["self"],
-    };
-  }
-
-  if (kind === "attack") {
-    const weapon = getEquippedWeaponData(
-      state.itemInstances,
-      state.itemTemplates,
-      state.selectedCharacterId,
-      targetId,
-    );
-
-    return weapon
-      ? toLegacyTargetingRule(weapon.targetingV2) ?? {
-          allowed: ["entity", "character", "position", "free"],
-          required: true,
-          defaultPriority: ["nearestEnemy"],
-          range: weapon.range,
-          lineOfSight: true,
-        }
-      : undefined;
-  }
-
-  const ability = state.abilityInstances.find((candidate) => candidate.id === targetId);
-  const template = ability
-    ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
-    : undefined;
-
-  return toLegacyTargetingRule(template?.targetingV2) ?? template?.targeting;
+function createSelfTargeting(required = false): ActionTargeting {
+  return {
+    aim: { allowed: ["self"], required, range: 0, lineOfSight: false },
+    area: { shape: "none" },
+    affects: { allowed: ["self"], maxTargets: 1 },
+    defaultPriority: ["self"],
+    suggestedSides: ["self"],
+  };
 }
 
-function getActionTargetingV2(
+function createAttackTargeting(range: number | string): ActionTargeting {
+  return {
+    aim: { allowed: ["entity", "position"], required: true, range, lineOfSight: true },
+    area: { shape: "none" },
+    affects: { allowed: ["living", "object"], maxTargets: 1, includeSelf: false },
+    defaultPriority: ["nearestEnemy"],
+    suggestedSides: ["enemy"],
+  };
+}
+
+function getActionTargeting(
   state: GameDataState,
   kind: ChatActionIntentKind,
   targetId: string,
-) {
+): ActionTargeting | undefined {
   if (kind === "useItem") {
     const item = state.itemInstances.find((candidate) => candidate.id === targetId);
     const template = item
       ? state.itemTemplates.find((candidate) => candidate.id === item.templateId)
       : undefined;
 
-    return template?.targetingV2;
+    return template?.targeting ?? createSelfTargeting(false);
   }
 
   if (kind === "attack") {
@@ -1613,7 +1777,12 @@ function getActionTargetingV2(
       targetId,
     );
 
-    return weapon?.targetingV2;
+    return weapon?.targeting ?? (weapon ? createAttackTargeting(weapon.range) : undefined);
+  }
+
+  if (kind === "castSpell") {
+    const spell = state.spellTemplates.find((candidate) => candidate.id === targetId);
+    return getGameActionTemplate(state.gameActionTemplates, spell?.actionId)?.targeting;
   }
 
   const ability = state.abilityInstances.find((candidate) => candidate.id === targetId);
@@ -1621,7 +1790,7 @@ function getActionTargetingV2(
     ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
     : undefined;
 
-  return template?.targetingV2;
+  return getGameActionTemplate(state.gameActionTemplates, template?.actionId)?.targeting;
 }
 
 function createSelfTarget(state: GameDataState): ActionTarget | undefined {
@@ -1651,10 +1820,12 @@ function createFallbackPositionTarget(): ActionTarget {
 
 function createDefaultActionTarget(
   state: GameDataState,
-  targeting: ActionTargetingRule | undefined,
+  targeting: ActionTargeting | undefined,
   intent?: Pick<ChatActionIntent, "kind" | "targetId" | "targeting">,
 ): ActionTarget | undefined {
-  if (!targeting || targeting.allowed.length === 0) {
+  const allowed = getSelectableTargetKinds(targeting);
+
+  if (!targeting || allowed.length === 0) {
     return undefined;
   }
 
@@ -1666,7 +1837,7 @@ function createDefaultActionTarget(
   if (state.combat.status === "active" && actor && intent) {
     const priorities = targeting.defaultPriority ?? ["self"];
 
-    if (priorities.includes("self") && targeting.allowed.includes("self")) {
+    if (priorities.includes("self") && allowed.includes("self")) {
       const target = createSelfTarget(state);
 
       if (target) {
@@ -1678,21 +1849,21 @@ function createDefaultActionTarget(
       .filter((combatant) => {
         if (combatant.id === actor.id) {
           return (
-            targeting.allowed.includes("self") &&
-            (!targeting.suggestedSides || targeting.suggestedSides.includes("self"))
+            allowed.includes("self") &&
+            isSuggestedCombatant(actor, combatant, targeting)
           );
         }
 
-        if (targeting.suggestedSides && !targeting.suggestedSides.includes(getSuggestedSide(actor, combatant))) {
+        if (!isSuggestedCombatant(actor, combatant, targeting)) {
           return false;
         }
 
         if (combatant.sourceType === "character") {
-          return targeting.allowed.includes("character");
+          return allowed.includes("character") && canAffectCombatant(actor, combatant, targeting);
         }
 
-        if (combatant.sourceType === "entity") {
-          return targeting.allowed.includes("entity");
+        if (combatant.sourceType === "entity" || combatant.sourceType === "hazard") {
+          return allowed.includes("entity") && canAffectCombatant(actor, combatant, targeting);
         }
 
         return false;
@@ -1700,15 +1871,19 @@ function createDefaultActionTarget(
       .map((combatant) => ({
         combatant,
         distance: getDistance(actor.position, combatant.position),
-        visible: hasLineOfSight(state.combat, actor.position, combatant.position),
+        valid: !resolveActionTargets({
+          actor,
+          combat: state.combat,
+          fallbackCharacterId: state.selectedCharacterId,
+          targeting,
+          target: {
+            kind: combatant.sourceType === "character" ? "character" : combatant.id === actor.id ? "self" : "entity",
+            id: combatant.sourceId,
+            label: combatant.name,
+          },
+        }).invalidReason,
       }))
-      .filter((candidate) => {
-        if (candidate.combatant.id === actor.id) {
-          return true;
-        }
-
-        return candidate.visible && candidate.distance <= getActionRange(state, intent as ChatActionIntent);
-      })
+      .filter((candidate) => candidate.valid)
       .sort((a, b) => {
         const aEnemy = a.combatant.side === "enemies" ? 0 : 1;
         const bEnemy = b.combatant.side === "enemies" ? 0 : 1;
@@ -1735,7 +1910,7 @@ function createDefaultActionTarget(
   const priorities = targeting.defaultPriority ?? ["self"];
 
   for (const priority of priorities) {
-    if (priority === "self" && targeting.allowed.includes("self")) {
+    if (priority === "self" && allowed.includes("self")) {
       const target = createSelfTarget(state);
 
       if (target) {
@@ -1743,7 +1918,7 @@ function createDefaultActionTarget(
       }
     }
 
-    if (priority === "nearestEnemy" && targeting.allowed.includes("entity")) {
+    if (priority === "nearestEnemy" && allowed.includes("entity")) {
       const target = createNearestEnemyTarget(state);
 
       if (target) {
@@ -1751,35 +1926,20 @@ function createDefaultActionTarget(
       }
     }
 
-    if (priority === "farthestPointAhead" && targeting.allowed.includes("position")) {
+    if (priority === "farthestPointAhead" && allowed.includes("position")) {
       return createFallbackPositionTarget();
     }
   }
 
-  if (targeting.allowed.includes("self")) {
+  if (allowed.includes("self")) {
     return createSelfTarget(state);
   }
 
-  if (targeting.allowed.includes("position")) {
+  if (allowed.includes("position")) {
     return createFallbackPositionTarget();
   }
 
   return undefined;
-}
-
-function isActionTargetAllowed(
-  targeting: ActionTargetingRule | undefined,
-  target: ActionTarget | undefined,
-): boolean {
-  if (!targeting) {
-    return true;
-  }
-
-  if (!target) {
-    return targeting.required !== true;
-  }
-
-  return targeting.allowed.includes(target.kind);
 }
 
 function updateCharacter(
@@ -1838,6 +1998,14 @@ function updateAbility(
   updater: (ability: AbilityInstance) => AbilityInstance,
 ): AbilityInstance[] {
   return abilityInstances.map((ability) => (ability.id === abilityId ? updater(ability) : ability));
+}
+
+function updateSpellbook(
+  spellbooks: CharacterSpellbook[],
+  characterId: string,
+  updater: (book: CharacterSpellbook) => CharacterSpellbook,
+): CharacterSpellbook[] {
+  return spellbooks.map((book) => book.characterId === characterId ? updater(book) : book);
 }
 
 function getAbilityTemplate(
@@ -2186,8 +2354,9 @@ function createEffectDiceRoll(
       variables: createDiceFormulaVariables(contextCharacter),
     });
     const level = Math.max(1, getEffectNumber(effect.variables?.level) || 1);
+    const baseLevel = Math.max(1, getEffectNumber(effect.variables?.baseLevel) || 1);
     const perLevel = getEffectNumber(effect.variables?.perLevel);
-    const levelBonus = Math.max(0, level - 1) * perLevel;
+    const levelBonus = Math.max(0, level - baseLevel) * perLevel;
 
     if (levelBonus <= 0) {
       return roll;
@@ -2474,25 +2643,6 @@ function doesSegmentHitObstacle(
   return false;
 }
 
-function hasLineOfSight(
-  combat: CombatScene,
-  from: CombatPosition,
-  to: CombatPosition,
-): boolean {
-  const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
-
-  return (
-    !combat.map.obstacles.some((obstacle) => doesSegmentHitObstacle(from, to, obstacle)) &&
-    !combat.map.elements.some((element) => {
-      const blocksLineOfSight =
-        element.blocksLineOfSight ||
-        element.effects?.some((effect) => effect.type === "lineOfSightBlock");
-
-      return blocksLineOfSight && doesSegmentHitMapElement(from, to, element, cellSize);
-    })
-  );
-}
-
 function hasMovementPath(combat: CombatScene, from: CombatPosition, to: CombatPosition): boolean {
   const cellSize = Math.max(0.1, combat.map.cellSize || 0.5);
 
@@ -2547,58 +2697,6 @@ function clampPositionToFirstStopMovement(
   requestedPosition: CombatPosition,
 ): CombatPosition {
   return getFirstStopMovementPoint(combat, from, requestedPosition) ?? requestedPosition;
-}
-
-function getActionRange(
-  state: GameDataState,
-  intent: ChatActionIntent,
-): number {
-  const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
-  const v2Range = getTargetingRange(targetingV2, intent.kind === "useAbility" ? 18 : 1.5);
-
-  if (v2Range > 0) {
-    return v2Range;
-  }
-
-  const targeting = intent.targeting ?? getActionTargetingRule(state, intent.kind, intent.targetId);
-  const parsedRange = Number(targeting?.range);
-
-  if (Number.isFinite(parsedRange) && parsedRange > 0) {
-    return parsedRange;
-  }
-
-  if (intent.kind === "useAbility") {
-    return 18;
-  }
-
-  return 1.5;
-}
-
-function getTargetCombatantFromIntent(
-  combat: CombatScene,
-  intent: ChatActionIntent,
-): Combatant | undefined {
-  const target = intent.target;
-
-  if (!target) {
-    return undefined;
-  }
-
-  if (target.kind === "self" || target.kind === "character") {
-    return combat.combatants.find(
-      (combatant) => combatant.sourceType === "character" && combatant.sourceId === target.id,
-    );
-  }
-
-  if (target.kind === "entity") {
-    return combat.combatants.find(
-      (combatant) =>
-        (combatant.sourceType === "entity" || combatant.sourceType === "hazard") &&
-        combatant.sourceId === target.id,
-    );
-  }
-
-  return undefined;
 }
 
 function getTargetCombatantFromActionTarget(
@@ -3329,21 +3427,28 @@ function getIntentCombatCost(
   state: GameDataState,
   intent: ChatActionIntent,
 ): "action" | "bonus" | "reaction" {
+  if (intent.kind === "castSpell") {
+    const spell = state.spellTemplates.find((candidate) => candidate.id === intent.targetId);
+    const timing = getGameActionTemplate(state.gameActionTemplates, spell?.actionId)?.activation.timing;
+    return timing === "bonus" ? "bonus" : timing === "reaction" ? "reaction" : "action";
+  }
+
   if (intent.kind === "useAbility") {
     const ability = state.abilityInstances.find((candidate) => candidate.id === intent.targetId);
     const template = ability
       ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
       : undefined;
+    const action = getGameActionTemplate(state.gameActionTemplates, template?.actionId);
 
-    if (template?.activation.timing === "bonus") {
+    if (action?.activation.timing === "bonus") {
       return "bonus";
     }
 
-    if (template?.activation.timing === "reaction") {
+    if (action?.activation.timing === "reaction") {
       return "reaction";
     }
 
-    if (template?.combatRole === "attack") {
+    if (action?.combatRole === "attack") {
       return "action";
     }
   }
@@ -3372,39 +3477,16 @@ function canCombatActionReachTarget(
   actor: Combatant,
   intent: ChatActionIntent,
 ): boolean {
-  const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+  const targeting = intent.targeting ?? getActionTargeting(state, intent.kind, intent.targetId);
+  const resolved = resolveActionTargets({
+    actor,
+    combat,
+    fallbackCharacterId: state.selectedCharacterId,
+    target: intent.target,
+    targeting,
+  });
 
-  if (targetingV2) {
-    const resolved = resolveActionTargets({
-      actor,
-      combat,
-      fallbackCharacterId: state.selectedCharacterId,
-      target: intent.target,
-      targeting: targetingV2,
-    });
-
-    return !resolved.invalidReason;
-  }
-
-  const targetPosition = getCombatantTargetPosition(combat, intent.target, state.selectedCharacterId);
-
-  if (targetPosition) {
-    return (
-      hasLineOfSight(combat, actor.position, targetPosition) &&
-      getDistance(actor.position, targetPosition) <= getActionRange(state, intent)
-    );
-  }
-
-  const targetCombatant = getTargetCombatantFromIntent(combat, intent);
-
-  if (!targetCombatant) {
-    return true;
-  }
-
-  return (
-    hasLineOfSight(combat, actor.position, targetCombatant.position) &&
-    getDistance(actor.position, targetCombatant.position) <= getActionRange(state, intent)
-  );
+  return !resolved.invalidReason;
 }
 
 function spendCombatAction(
@@ -3453,6 +3535,7 @@ function applyVisibilityReactionTriggers({
   afterCombat,
   abilityInstances,
   abilityTemplates,
+  gameActionTemplates,
   itemInstances,
   itemTemplates,
   movedCombatantId,
@@ -3461,6 +3544,7 @@ function applyVisibilityReactionTriggers({
   afterCombat: CombatScene;
   abilityInstances: AbilityInstance[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   itemInstances: ItemInstance[];
   itemTemplates: ItemTemplate[];
   movedCombatantId: string;
@@ -3498,10 +3582,12 @@ function applyVisibilityReactionTriggers({
         (candidate) => candidate.ownerId === watcher.sourceId && candidate.templateId === "abl_quick_shot",
       );
       const template = ability ? getAbilityTemplate(abilityTemplates, ability.templateId) : undefined;
+      const action = getGameActionTemplate(gameActionTemplates, template?.actionId);
 
       if (
         !ability ||
         !template ||
+        !action ||
         !canUseAbility(ability, template) ||
         !hasEquippedItemTag(itemInstances, itemTemplates, watcher.sourceId, "ranged")
       ) {
@@ -3524,9 +3610,9 @@ function applyVisibilityReactionTriggers({
         id: `intent-${crypto.randomUUID()}`,
         kind: "useAbility",
         targetId: ability.id,
-        label: `Utiliser ${template.name}`,
+        label: `Utiliser ${action.name}`,
         command: `useAbility:${ability.id}`,
-        targeting: template.targeting,
+        targeting: action.targeting,
         target,
         createdAt: Date.now(),
       };
@@ -3534,7 +3620,7 @@ function applyVisibilityReactionTriggers({
       pendingActionIntents.push(intent);
       logs.push(createCombatLog(
         "action",
-        `${watcher.name} peut utiliser ${template.name} en réaction contre ${currentTarget.name}.`,
+        `${watcher.name} peut utiliser ${action.name} en réaction contre ${currentTarget.name}.`,
       ));
     });
 
@@ -3652,9 +3738,10 @@ function getScaledEffectValue(
 ): number {
   const value = resolveEffectValue(effect.variables?.value, context);
   const level = Math.max(1, getEffectNumber(effect.variables?.level) || 1);
+  const baseLevel = Math.max(1, getEffectNumber(effect.variables?.baseLevel) || 1);
   const perLevel = getEffectNumber(effect.variables?.perLevel);
 
-  return value + Math.max(0, level - 1) * perLevel;
+  return value + Math.max(0, level - baseLevel) * perLevel;
 }
 
 function getCombinedItemEffects(
@@ -3727,7 +3814,7 @@ function getEquippedWeaponData(
     damage: item.overrides["base.damage"] ?? template.base.damage ?? template.base.attack ?? 1,
     damageType: item.overrides["base.damageType"] ?? template.base.damageType ?? "force",
     attackKind: Number(item.overrides["base.range"] ?? template.base.range ?? 1.5) > 1.5 ? "ranged" : "melee",
-    targetingV2: template.targetingV2,
+    targeting: template.targeting,
   };
   const attack = template.attacks?.find((candidate) => candidate.id === attackId) ?? fallbackAttack;
   const baseRange = getEffectNumber(attack.range) || 1.5;
@@ -3772,17 +3859,17 @@ function getEquippedWeaponData(
     damage,
     getDefaultDamageModifier(attackKind, template, null),
   ]) ?? damage;
-  const targetingV2 = attack.targetingV2
-    ? attack.targetingV2
-    : template.targetingV2
+  const targeting = attack.targeting
+    ? attack.targeting
+    : template.targeting
       ? {
-          ...template.targetingV2,
+          ...template.targeting,
           aim: {
-            ...template.targetingV2.aim,
+            ...template.targeting.aim,
             range,
           },
         }
-      : undefined;
+      : createAttackTargeting(range);
 
   return {
     item,
@@ -3797,7 +3884,7 @@ function getEquippedWeaponData(
     rawDamage: getEffectNumber(damage) || 1,
     damageType: getEffectString(canApplyModifier ? modifier?.damageType ?? attack.damageType : attack.damageType, "force"),
     attackKind,
-    targetingV2,
+    targeting,
     modifierItem: canApplyModifier && modifier?.consumeOnUse !== false ? modifierItem : undefined,
   };
 }
@@ -3906,6 +3993,31 @@ function isGrantedAbilityActive(ability: AbilityInstance, itemInstances: ItemIns
       item.location.type === "equipped" &&
       item.location.parent === ability.ownerId,
   );
+}
+
+function getAbilitySourceItemLevel(
+  ability: AbilityInstance,
+  itemInstances: ItemInstance[],
+  itemTemplates: ItemTemplate[],
+): number {
+  if (!ability.grantedByItemId) {
+    return 1;
+  }
+
+  const item = itemInstances.find((candidate) => candidate.id === ability.grantedByItemId);
+  const template = item
+    ? itemTemplates.find((candidate) => candidate.id === item.templateId)
+    : undefined;
+  const rawLevel = item
+    ? item.current.level
+      ?? item.data.level
+      ?? item.overrides["base.level"]
+      ?? template?.base.level
+      ?? 1
+    : 1;
+  const level = Number(rawLevel);
+
+  return Number.isFinite(level) ? Math.max(1, level) : 1;
 }
 
 function applyDamageReductions(
@@ -4113,6 +4225,7 @@ function applyUsableEffects(
   sourceItemId?: string,
   resolvedTargets?: ActionTarget[],
   sourceLabel?: string,
+  valueContextCharacterId?: string,
 ): Pick<GameDataState, "characters" | "itemInstances" | "combat"> & { diceRolls: DiceRoll[] } {
   let characters = state.characters;
   let itemInstances = state.itemInstances;
@@ -4132,14 +4245,16 @@ function applyUsableEffects(
           ? firstCombatant.sourceId
           : undefined;
     const contextCharacter = characters.find((character) => character.id === firstTargetCharacterId) ?? actorCharacter;
-    const diceRoll = createEffectDiceRoll(effect, contextCharacter, sourceLabel);
+    const valueContextCharacter = characters.find((character) => character.id === valueContextCharacterId)
+      ?? contextCharacter;
+    const diceRoll = createEffectDiceRoll(effect, valueContextCharacter, sourceLabel);
     const value = diceRoll
       ? diceRoll.result
-      : contextCharacter
+      : valueContextCharacter
         ? getScaledEffectValue(
             effect,
             createValueExpressionContext(
-              contextCharacter,
+              valueContextCharacter,
               itemInstances,
               state.itemTemplates,
               state.effectTemplates,
@@ -4554,9 +4669,9 @@ function resolveIntentEffectTargets(
   actor: Combatant | undefined,
   intent: ChatActionIntent,
 ): ActionTarget[] | undefined {
-  const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+  const targeting = intent.targeting ?? getActionTargeting(state, intent.kind, intent.targetId);
 
-  if (!targetingV2 || combat.status !== "active" || !actor) {
+  if (!targeting || combat.status !== "active" || !actor) {
     return undefined;
   }
 
@@ -4565,7 +4680,7 @@ function resolveIntentEffectTargets(
     combat,
     fallbackCharacterId: state.selectedCharacterId,
     target: intent.target,
-    targeting: targetingV2,
+    targeting,
   });
 
   if (resolved.invalidReason) {
@@ -4601,7 +4716,7 @@ function consumeItemCharge(itemInstances: ItemInstance[], itemId: string): ItemI
 function executePlayerActionIntents(
   state: GameDataState,
   intents: ChatActionIntent[],
-): Pick<GameDataState, "characters" | "campaign" | "itemInstances" | "abilityInstances"> & {
+): Pick<GameDataState, "characters" | "campaign" | "itemInstances" | "abilityInstances" | "spellbooks"> & {
   executedIntents: ChatActionIntent[];
   combat: CombatScene;
   diceRolls: DiceRoll[];
@@ -4609,6 +4724,7 @@ function executePlayerActionIntents(
   let characters = state.characters;
   let itemInstances = state.itemInstances;
   let abilityInstances = state.abilityInstances;
+  let spellbooks = state.spellbooks;
   let combat = state.combat;
   const diceRolls: DiceRoll[] = [];
   const executedIntents: ChatActionIntent[] = [];
@@ -4687,17 +4803,15 @@ function executePlayerActionIntents(
         selectedCharacterId,
         intent.targetId,
       );
-      const targetingV2 = getActionTargetingV2(state, intent.kind, intent.targetId);
+      const targeting = intent.targeting ?? getActionTargeting(state, intent.kind, intent.targetId);
       const resolvedTargets = resolveActionTargets({
         actor,
         combat,
         fallbackCharacterId: selectedCharacterId,
         target: intent.target,
-        targeting: targetingV2,
+        targeting,
       });
-      const target = targetingV2
-        ? resolvedTargets.affectedCombatants[0]
-        : getTargetCombatantFromIntent(combat, intent);
+      const target = resolvedTargets.affectedCombatants[0];
 
       if (!weapon || !actor || !canSpendCombatCost(actor, "action")) {
         return;
@@ -4849,6 +4963,74 @@ function executePlayerActionIntents(
       return;
     }
 
+    if (intent.kind === "castSpell") {
+      const character = characters.find((candidate) => candidate.id === selectedCharacterId);
+      const book = spellbooks.find((candidate) => candidate.characterId === selectedCharacterId);
+      const spell = state.spellTemplates.find((candidate) => candidate.id === intent.targetId);
+      const action = getGameActionTemplate(state.gameActionTemplates, spell?.actionId);
+      const slotLevel = intent.spellLevel ?? spell?.minimumSlotLevel;
+
+      if (!character || !book || !spell || !action || slotLevel === undefined) {
+        return;
+      }
+
+      const castCheck = checkSpellCast({
+        character,
+        book,
+        spell,
+        slotLevel,
+        itemInstances,
+        itemTemplates: state.itemTemplates,
+        combatant: actor,
+      });
+      if (!castCheck.canCast) {
+        return;
+      }
+
+      const resolvedState = applyUsableEffects(
+        {
+          characters,
+          itemInstances,
+          itemTemplates: state.itemTemplates,
+          effectTemplates: state.effectTemplates,
+          enemyTemplates: state.enemyTemplates,
+          disabledContentTemplateIds: state.disabledContentTemplateIds,
+          combat,
+        },
+        selectedCharacterId,
+        intent.target,
+        resolveSpellEffects(spell, action, slotLevel, book.castingAbility, character.niveau),
+        undefined,
+        resolveIntentEffectTargets(state, combat, actor, intent),
+        action.name,
+        selectedCharacterId,
+      );
+
+      characters = resolvedState.characters;
+      itemInstances = consumeSpellMaterials(resolvedState.itemInstances, castCheck.consumptions);
+      combat = resolvedState.combat;
+      diceRolls.push(...resolvedState.diceRolls);
+      spellbooks = updateSpellbook(spellbooks, selectedCharacterId, (current) =>
+        spendSpellSlot(current, slotLevel, spell.id, spell.concentration));
+      if (shouldSpendCombatAction && actor) {
+        combat = spendCombatAction(combat, actor.id, combatCost);
+      }
+      if (combat.status === "active") {
+        combat = {
+          ...combat,
+          log: [
+            createCombatLog(
+              "action",
+              `${actor?.name ?? character.name} lance ${action.name}${slotLevel > 0 ? ` au niveau ${slotLevel}` : ""}.`,
+            ),
+            ...combat.log,
+          ].slice(0, 30),
+        };
+      }
+      executedIntents.push(intent);
+      return;
+    }
+
     if (intent.kind === "useAbility") {
       const ability = abilityInstances.find(
         (candidate) => candidate.id === intent.targetId && candidate.ownerId === selectedCharacterId,
@@ -4856,12 +5038,14 @@ function executePlayerActionIntents(
       const template = ability
         ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
         : undefined;
+      const action = getGameActionTemplate(state.gameActionTemplates, template?.actionId);
 
       if (
         !ability ||
         !isGrantedAbilityActive(ability, itemInstances) ||
         !template ||
-        template.activation.timing === "passive"
+        !action ||
+        action.activation.timing === "passive"
       ) {
         return;
       }
@@ -4884,10 +5068,17 @@ function executePlayerActionIntents(
         },
         selectedCharacterId,
         intent.target,
-        [...template.effects, ...ability.effects],
+        [
+          ...resolveGameActionEffects(action, {
+            characterLevel: characters.find((candidate) => candidate.id === ability.ownerId)?.niveau ?? 1,
+            abilityLevel: Number(ability.data.level ?? 1),
+            itemLevel: getAbilitySourceItemLevel(ability, itemInstances, state.itemTemplates),
+          }),
+          ...ability.effects,
+        ],
         undefined,
         resolveIntentEffectTargets(state, combat, actor, intent),
-        String(ability.overrides.name ?? template.name),
+        String(ability.overrides.name ?? action.name),
       );
 
       characters = resolvedState.characters;
@@ -4907,6 +5098,7 @@ function executePlayerActionIntents(
     campaign: { ...state.campaign, characters },
     itemInstances,
     abilityInstances,
+    spellbooks,
     combat,
     executedIntents,
     diceRolls,
@@ -4924,6 +5116,7 @@ function createGameActionReceipt(
   const afterItems = new Map(after.itemInstances.map((item) => [item.id, item]));
   const beforeItems = new Map(before.itemInstances.map((item) => [item.id, item]));
   const afterAbilities = new Map(after.abilityInstances.map((ability) => [ability.id, ability]));
+  const afterSpellbooks = new Map(after.spellbooks.map((book) => [book.characterId, book]));
   const afterCombatants = new Map(after.combat.combatants.map((combatant) => [combatant.id, combatant]));
 
   before.characters.forEach((character) => {
@@ -4963,13 +5156,33 @@ function createGameActionReceipt(
     const afterCharges = Number(current?.current.charges ?? 0);
     if (beforeCharges === afterCharges) return;
     const template = before.abilityTemplates.find((candidate) => candidate.id === ability.templateId);
+    const action = template
+      ? before.gameActionTemplates.find((candidate) => candidate.id === template.actionId)
+      : undefined;
     changes.push({
       kind: "charges",
       entityId: ability.id,
-      label: String(ability.overrides.name ?? template?.name ?? ability.id),
+      label: String(ability.overrides.name ?? action?.name ?? ability.id),
       before: beforeCharges,
       after: afterCharges,
       delta: afterCharges - beforeCharges,
+    });
+  });
+
+  before.spellbooks.forEach((book) => {
+    const current = afterSpellbooks.get(book.characterId);
+    if (!current) return;
+    book.slots.forEach((slot) => {
+      const nextSlot = current.slots.find((candidate) => candidate.level === slot.level);
+      if (!nextSlot || nextSlot.remaining === slot.remaining) return;
+      changes.push({
+        kind: "resource",
+        entityId: book.characterId,
+        label: `Emplacement de sort Niv.${slot.level}`,
+        before: slot.remaining,
+        after: nextSlot.remaining,
+        delta: nextSlot.remaining - slot.remaining,
+      });
     });
   });
 
@@ -5041,6 +5254,12 @@ function createGameActionReceipt(
 }
 
 function resolveReceiptSourceLabel(state: GameDataState, intent: ChatActionIntent): string {
+  if (intent.kind === "castSpell") {
+    const spell = state.spellTemplates.find((candidate) => candidate.id === intent.targetId);
+    return spell
+      ? state.gameActionTemplates.find((candidate) => candidate.id === spell.actionId)?.name ?? intent.label
+      : intent.label;
+  }
   const item = state.itemInstances.find((candidate) => candidate.id === intent.targetId);
   if (item) {
     const template = state.itemTemplates.find((candidate) => candidate.id === item.templateId);
@@ -5049,7 +5268,10 @@ function resolveReceiptSourceLabel(state: GameDataState, intent: ChatActionInten
   const ability = state.abilityInstances.find((candidate) => candidate.id === intent.targetId);
   if (ability) {
     const template = state.abilityTemplates.find((candidate) => candidate.id === ability.templateId);
-    return String(ability.overrides.name ?? template?.name ?? intent.label);
+    const action = template
+      ? state.gameActionTemplates.find((candidate) => candidate.id === template.actionId)
+      : undefined;
+    return String(ability.overrides.name ?? action?.name ?? intent.label);
   }
   return intent.label;
 }
@@ -5406,6 +5628,12 @@ export const useGameStore = create<GameState>()(
         }
 
         const template = getAbilityTemplate(state.abilityTemplates, ability.templateId);
+        const action = template
+          ? getGameActionTemplate(state.gameActionTemplates, template.actionId)
+          : undefined;
+        if (!template || !action || action.activation.timing === "passive") {
+          return false;
+        }
         const nextAbility = useAbilityCharge(ability, template);
 
         if (nextAbility === ability) {
@@ -5424,7 +5652,14 @@ export const useGameStore = create<GameState>()(
           },
           ability.ownerId,
           { kind: "self", id: ability.ownerId, label: "Soi-même" },
-          [...(template?.effects ?? []), ...ability.effects],
+          [
+            ...resolveGameActionEffects(action, {
+              characterLevel: state.characters.find((candidate) => candidate.id === ability.ownerId)?.niveau ?? 1,
+              abilityLevel: Number(ability.data.level ?? 1),
+              itemLevel: getAbilitySourceItemLevel(ability, state.itemInstances, state.itemTemplates),
+            }),
+            ...ability.effects,
+          ],
         );
 
         set((currentState) => ({
@@ -5457,6 +5692,40 @@ export const useGameStore = create<GameState>()(
             ),
           ),
         }));
+      },
+      learnSpell: (characterId, spellId) => {
+        const state = get();
+        const character = state.characters.find((candidate) => candidate.id === characterId);
+        const book = state.spellbooks.find((candidate) => candidate.characterId === characterId);
+        const spell = state.spellTemplates.find((candidate) => candidate.id === spellId);
+        if (!character || !book || !spell || !spell.classes.includes(book.classId)) return false;
+        if (book.knownSpellIds.includes(spellId)) return true;
+        const maxSlotLevel = book.slots.reduce((maximum, slot) => Math.max(maximum, slot.level), 0);
+        if (spell.minimumSlotLevel > 0 && spell.minimumSlotLevel > maxSlotLevel) return false;
+
+        set((current) => ({
+          spellbooks: updateSpellbook(current.spellbooks, characterId, (currentBook) => ({
+            ...currentBook,
+            knownSpellIds: [...currentBook.knownSpellIds, spellId],
+            preparedSpellIds: currentBook.preparationMode === "known"
+              ? [...currentBook.preparedSpellIds, spellId]
+              : currentBook.preparedSpellIds,
+            updatedAt: Date.now(),
+          })),
+        }));
+        return true;
+      },
+      prepareSpells: (characterId, spellIds) => {
+        const state = get();
+        const character = state.characters.find((candidate) => candidate.id === characterId);
+        const book = state.spellbooks.find((candidate) => candidate.characterId === characterId);
+        if (!character || !book) return false;
+        const prepared = applyPreparedSpells(book, character, spellIds, state.spellTemplates);
+        if (!prepared) return false;
+        set((current) => ({
+          spellbooks: updateSpellbook(current.spellbooks, characterId, () => prepared),
+        }));
+        return true;
       },
       registerEffectTemplate: (template, mode = "create", meta = {}) => {
         const previous = get().effectTemplates.find((candidate) => candidate.id === template.id);
@@ -5509,6 +5778,12 @@ export const useGameStore = create<GameState>()(
         }));
         return true;
       },
+      registerGameActionTemplate: (template, mode = "create") => {
+        const gameActionTemplates = upsertCatalogEntry(get().gameActionTemplates, template, mode);
+        if (!gameActionTemplates) return false;
+        set({ gameActionTemplates });
+        return true;
+      },
       registerAbilityTemplate: (template, mode = "create", meta = {}) => {
         const previous = get().abilityTemplates.find((candidate) => candidate.id === template.id);
         const abilityTemplates = upsertCatalogEntry(get().abilityTemplates, template, mode);
@@ -5517,7 +5792,13 @@ export const useGameStore = create<GameState>()(
           "ability",
           meta.action ?? (previous ? "replace" : "create"),
           template,
-          { source: meta.source, before: previous, after: template, note: meta.note },
+          {
+            source: meta.source,
+            before: previous,
+            after: template,
+            note: meta.note,
+            name: getGameActionTemplate(get().gameActionTemplates, template.actionId)?.name,
+          },
         );
 
         set((state) => {
@@ -5841,6 +6122,10 @@ export const useGameStore = create<GameState>()(
             characterId,
             trigger,
           );
+          const spellbooks = state.spellbooks.map((book) =>
+            book.characterId === characterId
+              ? restoreSpellSlots(book, type === "short" ? "shortRest" : "longRest")
+              : book);
 
           const characters =
             type === "long"
@@ -5852,6 +6137,7 @@ export const useGameStore = create<GameState>()(
 
           return {
             abilityInstances,
+            spellbooks,
             characters,
             campaign: { ...state.campaign, characters },
           };
@@ -6151,6 +6437,7 @@ export const useGameStore = create<GameState>()(
             afterCombat: combat,
             abilityInstances: state.abilityInstances,
             abilityTemplates: state.abilityTemplates,
+            gameActionTemplates: state.gameActionTemplates,
             itemInstances: state.itemInstances,
             itemTemplates: state.itemTemplates,
             movedCombatantId: combatantId,
@@ -6274,6 +6561,7 @@ export const useGameStore = create<GameState>()(
                 afterCombat: combat,
                 abilityInstances: state.abilityInstances,
                 abilityTemplates: state.abilityTemplates,
+                gameActionTemplates: state.gameActionTemplates,
                 itemInstances: state.itemInstances,
                 itemTemplates: state.itemTemplates,
                 movedCombatantId: activeCombatant.id,
@@ -6381,13 +6669,7 @@ export const useGameStore = create<GameState>()(
           return false;
         }
 
-        const targeting: ActionTargetingRule = toLegacyTargetingRule(weapon.targetingV2) ?? {
-          allowed: ["entity", "character", "position", "free"],
-          required: true,
-          defaultPriority: ["nearestEnemy"],
-          range: weapon.range,
-          lineOfSight: true,
-        };
+        const targeting = weapon.targeting ?? createAttackTargeting(weapon.range);
 
         if (!isActionTargetAllowed(targeting, target)) {
           return false;
@@ -6400,6 +6682,50 @@ export const useGameStore = create<GameState>()(
           ],
         }));
 
+        return true;
+      },
+      addSpellIntent: (spellId, slotLevel, requestedTarget) => {
+        const state = get();
+        if (state.pendingActionIntents.length >= MAX_PLAYER_ACTION_INTENTS) return false;
+
+        const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
+        const book = state.spellbooks.find((candidate) => candidate.characterId === state.selectedCharacterId);
+        const spell = state.spellTemplates.find((candidate) => candidate.id === spellId);
+        const actor = state.combat.combatants.find(
+          (combatant) => combatant.sourceType === "character" && combatant.sourceId === state.selectedCharacterId,
+        );
+        if (!character || !book || !spell) return false;
+        const action = getGameActionTemplate(state.gameActionTemplates, spell.actionId);
+        if (!action) return false;
+
+        const castCheck = checkSpellCast({
+          character,
+          book,
+          spell,
+          slotLevel,
+          itemInstances: state.itemInstances,
+          itemTemplates: state.itemTemplates,
+          combatant: actor,
+        });
+        if (!castCheck.canCast) return false;
+
+        const intentDraft = { kind: "castSpell" as const, targetId: spellId, targeting: action.targeting };
+        const target = requestedTarget ?? createDefaultActionTarget(state, action.targeting, intentDraft);
+        if (!isActionTargetAllowed(action.targeting, target)) return false;
+
+        set((current) => ({
+          pendingActionIntents: [
+            ...current.pendingActionIntents,
+            createActionIntent(
+              "castSpell",
+              spell.id,
+              `Lancer ${action.name} · ${slotLevel === 0 ? "tour mineur" : `Niv.${slotLevel}`}`,
+              action.targeting,
+              target,
+              slotLevel,
+            ),
+          ],
+        }));
         return true;
       },
       addActionIntent: (kind, targetId, label, requestedTarget) => {
@@ -6433,12 +6759,16 @@ export const useGameStore = create<GameState>()(
           const template = ability
             ? getAbilityTemplate(state.abilityTemplates, ability.templateId)
             : undefined;
+          const action = template
+            ? getGameActionTemplate(state.gameActionTemplates, template.actionId)
+            : undefined;
           const nextAbility = ability ? useAbilityCharge(ability, template) : null;
 
           if (
             !ability ||
             !isGrantedAbilityActive(ability, state.itemInstances) ||
-            template?.activation.timing === "passive" ||
+            !action ||
+            action.activation.timing === "passive" ||
             !nextAbility ||
             nextAbility === ability
           ) {
@@ -6446,7 +6776,19 @@ export const useGameStore = create<GameState>()(
           }
         }
 
-        const targeting = getActionTargetingRule(state, kind, targetId);
+        if (kind === "castSpell") {
+          const spell = state.spellTemplates.find((candidate) => candidate.id === targetId);
+          const book = state.spellbooks.find((candidate) => candidate.characterId === state.selectedCharacterId);
+          const slotLevel = spell && book
+            ? (spell.minimumSlotLevel === 0
+              ? 0
+              : book.slots.find((slot) => slot.level >= spell.minimumSlotLevel && slot.remaining > 0)?.level)
+            : undefined;
+          if (slotLevel === undefined) return false;
+          return state.addSpellIntent(targetId, slotLevel, requestedTarget);
+        }
+
+        const targeting = getActionTargeting(state, kind, targetId);
         const intentDraft = { kind, targetId, targeting };
         const target = requestedTarget ?? createDefaultActionTarget(state, targeting, intentDraft);
 
@@ -6536,11 +6878,11 @@ export const useGameStore = create<GameState>()(
           payload: { narration, ...(proactiveKey ? { proactiveKey } : {}) },
         }));
       },
-      addGmMessage: (content) => {
+      addGmMessage: (content, metadata) => {
         const state = get();
         get().dispatchGameCommand(createStoreGameCommand(state, {
           type: "chat.addGmMessage",
-          payload: { content },
+          payload: { content, ...metadata },
         }, "gm"));
       },
       sendPlayerMessage: (content) => {
@@ -6560,6 +6902,7 @@ export const useGameStore = create<GameState>()(
           campaign: resolvedActions.campaign,
           itemInstances: resolvedActions.itemInstances,
           abilityInstances: resolvedActions.abilityInstances,
+          spellbooks: resolvedActions.spellbooks,
           combat: resolvedActions.combat,
           messages: [...state.messages, playerMessage],
           pendingActionIntents: [],
@@ -6707,6 +7050,9 @@ export const useGameStore = create<GameState>()(
         itemInstances: state.itemInstances,
         abilityTemplates: state.abilityTemplates,
         abilityInstances: state.abilityInstances,
+        gameActionTemplates: state.gameActionTemplates,
+        spellTemplates: state.spellTemplates,
+        spellbooks: state.spellbooks,
         effectTemplates: state.effectTemplates,
         enemyTemplates: state.enemyTemplates,
         disabledContentTemplateIds: state.disabledContentTemplateIds,

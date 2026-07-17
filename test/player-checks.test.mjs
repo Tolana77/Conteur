@@ -8,6 +8,7 @@ const vite = await createServer({
 });
 
 const {
+  createPlayerCheckNarrationContext,
   prepareImprovisedCheck,
   resolveCharacterStat,
   resolveCheckSkill,
@@ -113,6 +114,18 @@ assert.equal(prepared.request.skill, "Arcanes");
 assert.equal(prepared.request.stat, "intelligence");
 assert.equal(prepared.request.modifierPreview, 5);
 assert.equal(prepared.request.visibility, "public");
+assert.equal(prepared.message.includes("DD"), false);
+
+const pendingNarration = createPlayerCheckNarrationContext({
+  ...prepared.request,
+  id: "check-pending",
+  createdAt: 9,
+  status: "pending",
+});
+assert.equal(pendingNarration.stage, "pending");
+assert.equal(pendingNarration.challengeCue, "cela semble difficile");
+assert.equal(JSON.stringify(pendingNarration).includes('"dc"'), false);
+assert.equal(JSON.stringify(pendingNarration).includes('"difficulty"'), false);
 
 let rollCount = 0;
 const resolved = resolvePlayerCheckRequest({
@@ -149,6 +162,20 @@ assert.equal(rollCount, 1);
 assert.equal(resolved.status, "success");
 assert.equal(resolved.resolution.result, 17);
 assert.equal(resolved.resolution.degree, "success");
+assert.equal(resolved.message.includes("DD"), false);
+
+const resolvedNarration = createPlayerCheckNarrationContext({
+  ...prepared.request,
+  id: "check-test",
+  createdAt: 10,
+  status: "resolved",
+  resolution: resolved.resolution,
+});
+assert.equal(resolvedNarration.stage, "resolved");
+assert.equal(resolvedNarration.degree, "success");
+assert.equal(resolvedNarration.outcome, "Le sceau est compris");
+assert.equal(JSON.stringify(resolvedNarration).includes('"dc"'), false);
+assert.equal(JSON.stringify(resolvedNarration).includes('"difficulty"'), false);
 
 const localState = {
   selectedCharacterId: character.id,

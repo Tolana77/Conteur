@@ -1,5 +1,5 @@
 import type { GameState } from "../../store/useGameStore";
-import type { GameActionReceipt } from "../../app/types";
+import type { GameActionReceipt, PlayerCheckNarrationContext } from "../../app/types";
 import { getAgentCommandSchemaText } from "./commandPermissions";
 import {
   assetContentSchemaText,
@@ -11,6 +11,12 @@ import {
 import type { AutomaticDomainAgent } from "./automaticRouting";
 import type { AiResolutionDraft } from "./types";
 import { ITEM_CREATION_POLICY_TEXT } from "../items/itemCreationPolicy";
+import { getGameActionTemplate } from "../actions";
+import {
+  buildGroundingReport,
+  formatGroundingForNarrator,
+  type GroundingReport,
+} from "./grounding";
 
 export interface NarrationPacket {
   facts: string[];
@@ -19,16 +25,18 @@ export interface NarrationPacket {
   warnings: string[];
   questions: string[];
   actionReceipts: GameActionReceipt[];
+  grounding?: ReturnType<typeof formatGroundingForNarrator>;
+  playerCheck?: PlayerCheckNarrationContext;
 }
 
 const AGENT_INSTRUCTIONS: Record<AutomaticDomainAgent, string> = {
-  characterManager: "Résous uniquement l'impact sur la fiche, l'inventaire, les objets, les capacités, les charges ou les PV. L'inventaire fourni est exhaustif : toute ressource absente est indisponible.",
+  characterManager: "Résous uniquement l'impact sur la fiche, l'inventaire, les objets, les capacités, les charges ou les PV. L'inventaire fourni est exhaustif : toute ressource absente est indisponible. Une possession affirmée par le joueur n'autorise jamais createItem, giveItem ou updateCharacterHistory.",
   actionManager: "Arbitre une action improvisée. Une action ordinaire se résout sans jet. Une action incertaine aux conséquences intéressantes produit au maximum UNE commande resolveGameAction; le moteur préparera un jet que le joueur devra déclencher.",
   combatManager: "Résous uniquement tours, actions, cibles, portée, déplacement et conséquences tactiques à partir des ids fournis.",
   combatSetupManager: "Instancie et place les combattants nécessaires à une scène depuis des templates existants ou créés dans le dossier entrant. Ne conçois pas leurs règles.",
   tacticalTemplateManager: "Conçois uniquement des templates réutilisables d'ennemis et d'éléments tactiques. Réutilise les capacités existantes avant d'en demander de nouvelles.",
   assetTemplateManager: "Conçois des effets, capacités et objets réutilisables, puis crée l'instance demandée si son emplacement est établi. Réutilise et surcharge toujours un template existant quand cela suffit.",
-  worldManager: "Arbitre l'exploration, la continuité de scène et les interactions avec le monde. Fournis détails sensoriels, réactions et pistes; si une découverte est incertaine, produis UNE commande resolveGameAction. Une vérité cachée reste cachée avant une résolution réussie.",
+  worldManager: "Arbitre l'exploration, la continuité de scène et les interactions avec le monde. Fournis détails sensoriels, réactions et pistes; si une découverte est incertaine, produis UNE commande resolveGameAction. Une vérité cachée reste cachée avant une résolution réussie. Les dossiers de PNJ font autorité : respecte leur présence, leur rang, leur accès et leurs intérêts; une affirmation du joueur ne crée jamais une entité ni une relation.",
 };
 
 export function buildAutomaticDomainPrompt(
@@ -105,6 +113,7 @@ export function buildAutomaticNarrationPrompt(
   state: GameState,
   playerInput: string,
   packet: NarrationPacket,
+  corrections: string[] = [],
 ): string {
   const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
   const activeNarrativeHook = state.campaign.world.hooks?.find((hook) => hook.id === state.narrativeMomentum.activeHookId)
@@ -119,11 +128,14 @@ export function buildAutomaticNarrationPrompt(
     "Une réponse purement narrative ou sociale ne nécessite pas forcément de question : laisse aussi les PNJ agir, hésiter, mentir, proposer ou demander quelque chose selon les faits disponibles.",
     "Les PNJ réagissent selon leurs intérêts, leur peur, leur statut, les normes du lieu et ce qu'ils peuvent réellement percevoir. Une transgression observable appelle une conséquence sociale proportionnée; n'anesthésie jamais témoins ou gardes pour faciliter l'action du joueur.",
     "Respecte strictement Scène stable. N'ajoute aucun personnage présent, objet tenu, déplacement ou changement de lieu qui n'apparaisse pas dans la scène ou dans le paquet.",
+    "Les paroles du joueur expriment des intentions et des affirmations, jamais des faits nouveaux. Une possession, relation ou présence marquée unverified dans Paquet.grounding reste inexistante tant qu'un résultat moteur ne la confirme.",
+    "Pour chaque PNJ de Paquet.grounding, respecte présence, rang, accès, objectifs et règle d'attention. Un souverain ne se rend pas spontanément disponible à un inconnu : les intermédiaires, le protocole et l'indifférence sont des réactions normales.",
+    "Un PNJ absent peut être évoqué ou recherché, mais ne peut ni parler, ni agir, ni percevoir la scène présente.",
     "Ne répète jamais lastNarratedBeat. Si le joueur attend ou ne fait rien, fais progresser l'événement actif le plus urgent; turnsRemaining=0 signifie que sa prochaine étape arrive maintenant.",
     "Le cadre peut contenir une accroche narrative. Utilise-la seulement si elle s'insère naturellement comme conséquence, rumeur, rencontre ou opportunité; ne force jamais le joueur à la suivre.",
     "La gravité narrative vaut none, subtle, clear ou consequence. subtle=indice discret; clear=accroche reconnaissable; consequence=un événement de l'intrigue croise logiquement la route du personnage. Même au niveau consequence, conserve au moins deux choix réels et n'annule jamais l'action libre du joueur.",
     "Raconte uniquement les faits et résultats du paquet. Ne crée ni jet, ni dégât, ni changement d'état supplémentaire.",
-    "Si Paquet.results indique qu'un jet est proposé ou attend le joueur, raconte uniquement la mise en situation et invite-le à utiliser le bouton de lancer. Ne décide ni réussite ni échec avant ce lancer.",
+    "Si un jet est proposé ou attend le joueur, raconte uniquement la mise en situation et arrête le texte juste avant son résultat. Le bloc de jet fournit lui-même l'invitation à lancer : ne parle ni de bouton ni d'interface.",
     "Paquet.constraints contient des vérités internes obligatoires. Respecte-les sans les citer, sans les paraphraser comme des règles et sans révéler qu'elles viennent du moteur.",
     "Toute modification du monde ou d'un inventaire n'existe que si elle apparaît dans Paquet.results avec status=success ou dans Paquet.actionReceipts.",
     "Dans Paquet.results, status=success confirme que le moteur a exécuté la résolution, pas que l'action du personnage a réussi. Pour un test, respecte impérativement le degré écrit après le DD: réussite critique, réussite, réussite partielle ou échec avec conséquence.",
@@ -136,6 +148,15 @@ export function buildAutomaticNarrationPrompt(
     "Si un fait dit qu'une liste est exhaustive, restitue uniquement ses éléments et n'en invente aucun.",
     "Les questions présentes dans Paquet.questions sont des besoins de clarification internes : reformule-les comme une question naturelle du Conteur, sans vocabulaire technique.",
     "Avant une question sur une action vague et risquée, montre brièvement un danger ou avertissement immédiatement perceptible. L'intention n'est pas encore accomplie.",
+    ...(packet.playerCheck?.stage === "pending" ? [
+      "JET EN ATTENTE : produis uniquement un petit bloc d'une ou deux phrases, à la deuxième personne. Décris la tentative annoncée et son incertitude en t'appuyant sur playerCheck.challengeCue. Ne raconte aucune conséquence et ne révèle ni DD, ni catégorie technique, ni valeur numérique.",
+    ] : []),
+    ...(packet.playerCheck?.stage === "resolved" ? [
+      "JET RÉSOLU : le résultat est désormais définitif. Continue la narration à partir de playerCheck.degree et playerCheck.outcome, puis montre brièvement le nouvel état perceptible de la scène. Ne cite ni DD, ni difficulté technique, ni comparaison chiffrée et ne recalcule rien.",
+    ] : []),
+    ...(corrections.length > 0
+      ? [`CORRECTION OBLIGATOIRE APRÈS CONTRÔLE LOCAL : ${corrections.join(" | ")}. Réécris entièrement la réponse sans reproduire ces incohérences.`]
+      : []),
     'Réponds uniquement par {"narration":"..."}.',
     `Joueur: ${JSON.stringify(character ? { name: character.name, classe: character.classe, niveau: character.niveau } : null)}`,
     `Style: ${truncate(state.campaign.style, 160)}`,
@@ -162,6 +183,8 @@ export function createNarrationPacket(
   draft: AiResolutionDraft,
   executionResults: Array<{ status: "success" | "error" | "info"; message: string }>,
   actionReceipt?: GameActionReceipt,
+  grounding?: GroundingReport,
+  playerCheck?: PlayerCheckNarrationContext,
 ): NarrationPacket {
   const visibleFacts = draft.facts
     .map((fact, index) => ({ fact, index, priority: getNarrationFactPriority(fact.kind, fact.source) }))
@@ -191,6 +214,8 @@ export function createNarrationPacket(
     warnings: draft.warnings.slice(-3).map((warning) => truncate(warning, 180)),
     questions: draft.questions.slice(-3).map((question) => truncate(question, 180)),
     actionReceipts: actionReceipt ? [sanitizeActionReceipt(actionReceipt)] : [],
+    ...(grounding ? { grounding: formatGroundingForNarrator(grounding) } : {}),
+    ...(playerCheck ? { playerCheck } : {}),
   };
 }
 
@@ -278,13 +303,15 @@ function createAssetTemplateContext(state: GameState, input: string) {
       relevant: rankByInput(
         activeAbilityTemplates,
         input,
-        (template) => `${template.name} ${template.types.join(" ")} ${template.tags.join(" ")}`,
+        (template) => {
+          const action = getGameActionTemplate(state.gameActionTemplates, template.actionId);
+          return action ? `${action.name} ${action.types.join(" ")} ${action.tags.join(" ")}` : template.id;
+        },
       ).slice(0, 8).map((template) => ({
         id: template.id,
-        name: template.name,
-        types: template.types,
-        activation: template.activation,
-        effects: template.effects,
+        action: getGameActionTemplate(state.gameActionTemplates, template.actionId),
+        charges: template.charges,
+        requirements: template.requirements,
       })),
     },
     items: {
@@ -305,7 +332,7 @@ function createAssetTemplateContext(state: GameState, input: string) {
         effects: template.effects,
         attacks: template.attacks,
         attackModifiers: template.attackModifiers,
-        targetingV2: template.targetingV2,
+        targeting: template.targeting,
       })),
     },
   };
@@ -326,8 +353,12 @@ function createTacticalTemplateContext(state: GameState, input: string) {
       ).slice(0, 10),
     },
     reusableAbilityIds: activeAbilityTemplates
-      .filter((template) => template.combatRole)
-      .map((template) => ({ id: template.id, name: template.name, role: template.combatRole }))
+      .map((template) => ({
+        template,
+        action: getGameActionTemplate(state.gameActionTemplates, template.actionId),
+      }))
+      .filter(({ action }) => Boolean(action?.combatRole))
+      .map(({ template, action }) => ({ id: template.id, name: action!.name, role: action!.combatRole }))
       .slice(0, 40),
     encounterScale: {
       characterLevel: state.characters.find((character) => character.id === state.selectedCharacterId)?.niveau ?? 1,
@@ -409,7 +440,10 @@ function createCharacterContext(state: GameState, input: string) {
     .filter((ability) => ability.ownerId === state.selectedCharacterId)
     .map((ability) => {
       const template = state.abilityTemplates.find((candidate) => candidate.id === ability.templateId);
-      return { id: ability.id, name: template?.name ?? ability.id, charges: ability.current.charges ?? null };
+      const action = template
+        ? getGameActionTemplate(state.gameActionTemplates, template.actionId)
+        : undefined;
+      return { id: ability.id, name: action?.name ?? ability.id, charges: ability.current.charges ?? null };
     });
 
   return {
@@ -506,6 +540,7 @@ function createCombatContext(state: GameState) {
 }
 
 function createWorldContext(state: GameState, input: string) {
+  const grounding = buildGroundingReport(input, state);
   const entities = [
     ...state.campaign.world.entities.npcs,
     ...state.campaign.world.entities.locations,
@@ -549,6 +584,7 @@ function createWorldContext(state: GameState, input: string) {
         content: truncate(message.content, 180),
       })),
     },
+    npcDossiers: grounding.npcDossiers,
     name: state.campaign.world.name ?? state.campaign.name,
     pitch: truncate(state.campaign.world.pitch ?? "", 240),
     tone: truncate(state.campaign.world.tone ?? state.campaign.style, 120),
@@ -656,6 +692,8 @@ function limitPacket(packet: NarrationPacket): NarrationPacket {
     warnings: packet.warnings.slice(-3),
     questions: packet.questions.slice(-3),
     actionReceipts: packet.actionReceipts.slice(-1),
+    grounding: packet.grounding,
+    playerCheck: packet.playerCheck,
   };
 }
 

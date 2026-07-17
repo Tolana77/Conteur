@@ -129,7 +129,7 @@ const assistedJson = {
     combatRole: "attack",
     activation: { timing: "action" },
     resourceCost: { type: "charge", amount: 1 },
-    targetingV2: {
+    targeting: {
       aim: { allowed: ["entity"], required: true, range: 6, lineOfSight: true },
       area: { shape: "none" },
       affects: { allowed: ["living"], maxTargets: 1, requiresLiving: true },

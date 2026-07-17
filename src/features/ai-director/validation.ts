@@ -4,6 +4,7 @@ import type {
   CombatScene,
   EffectTemplate,
   EnemyTemplate,
+  GameActionTemplate,
   ItemInstance,
   ItemTemplate,
 } from "../../app/types";
@@ -18,8 +19,9 @@ import {
   type ContentCatalogKnownIds,
 } from "../content";
 import { isItemEquipable } from "../items/itemRules";
+import { getGameActionTemplate } from "../actions";
 import { isCommandAllowedForAgent } from "./commandPermissions";
-import { resolveCheckSkill, resolveDifficultyClass } from "./improvisedActions";
+import { resolveCheckSkill } from "./improvisedActions";
 import type { AiAgentId, AiDirectorCommand } from "./types";
 
 export interface AiCommandValidation {
@@ -36,6 +38,7 @@ export interface AiCommandValidationContext {
   itemTemplates: ItemTemplate[];
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   effectTemplates: EffectTemplate[];
   enemyTemplates: EnemyTemplate[];
   knownCatalogIds?: ContentCatalogKnownIds;
@@ -77,6 +80,7 @@ export function validateAiCommands(
     itemTemplates: [...context.itemTemplates],
     itemInstances: [...context.itemInstances],
     abilityTemplates: [...context.abilityTemplates],
+    gameActionTemplates: [...(context.gameActionTemplates ?? [])],
     effectTemplates: [...context.effectTemplates],
     enemyTemplates: [...context.enemyTemplates],
     knownCatalogIds: collectKnownCatalogIdsForCommands(commands, context),
@@ -262,7 +266,8 @@ function validateAiCommand(
     const template = context.abilityTemplates.find((candidate) => candidate.id === command.templateId);
     if (!character) return error(command, `Personnage introuvable: ${command.characterId}`);
     if (!template) return error(command, `Template de capacité introuvable: ${command.templateId}`);
-    return ready(command, `${character.name} recevra la capacité ${template.name}.`);
+    const action = getGameActionTemplate(context.gameActionTemplates, template.actionId);
+    return ready(command, `${character.name} recevra la capacité ${action?.name ?? template.id}.`);
   }
 
   if (command.type === "abilityCheck" || command.type === "skillCheck") {
@@ -279,7 +284,7 @@ function validateAiCommand(
       return error(command, `Compétence inconnue ou inadaptée : ${command.skill}. Précisez la méthode ou utilisez une compétence canonique.`);
     }
 
-    return ready(command, `${character.name} recevra une demande de test${resolvedSkill ? ` de ${resolvedSkill}` : ""} DD ${resolveDifficultyClass(undefined, command.dc)}.`);
+    return ready(command, `${character.name} recevra une demande de test${resolvedSkill ? ` de ${resolvedSkill}` : ""}.`);
   }
 
   if (command.type === "resolveGameAction") {
@@ -305,8 +310,7 @@ function validateAiCommand(
     if (command.skill && !resolvedSkill) {
       return error(command, `Compétence inconnue ou inadaptée : ${command.skill}. Précisez la méthode ou utilisez une compétence canonique.`);
     }
-    const dc = resolveDifficultyClass(command.difficulty, command.dc);
-    return ready(command, `${character.name} recevra une demande de test${resolvedSkill ? ` de ${resolvedSkill}` : ""} pour « ${command.action} » contre DD ${dc}.`);
+    return ready(command, `${character.name} recevra une demande de test${resolvedSkill ? ` de ${resolvedSkill}` : ""} pour « ${command.action} ».`);
   }
 
   if (command.type === "contestCheck" || command.type === "calculateHazardDamage") {
@@ -322,7 +326,7 @@ function validateAiCommand(
   if (command.type === "createAbilityTemplate") {
     const parsed = parseAbilityTemplate(command.template, createCatalogContext(context));
     if (!parsed.value) return error(command, parsed.errors.join(" "));
-    return validateCatalogDuplicate(command, parsed.value, context.abilityTemplates, "capacité");
+    return validateCatalogDuplicate(command, parsed.value.ability, context.abilityTemplates, "capacité");
   }
 
   if (command.type === "createItemTemplate") {
@@ -412,6 +416,7 @@ function createCatalogContext(context: AiCommandValidationContext) {
   return {
     effectTemplates: context.effectTemplates,
     abilityTemplates: context.abilityTemplates,
+    gameActionTemplates: context.gameActionTemplates ?? [],
     itemTemplates: context.itemTemplates,
     enemyTemplates: context.enemyTemplates,
     knownIds: context.knownCatalogIds,
@@ -422,7 +427,7 @@ export function collectKnownCatalogIdsForCommands(
   commands: AiDirectorCommand[],
   context: Pick<
     AiCommandValidationContext,
-    "effectTemplates" | "abilityTemplates" | "itemTemplates" | "enemyTemplates"
+    "effectTemplates" | "abilityTemplates" | "gameActionTemplates" | "itemTemplates" | "enemyTemplates"
   >,
 ): ContentCatalogKnownIds {
   const effectTemplateIds = new Set(context.effectTemplates.map((template) => template.id));
@@ -515,7 +520,10 @@ function applyValidatedCreationToContext(
   }
   if (command.type === "createAbilityTemplate") {
     const parsed = parseAbilityTemplate(command.template, catalog).value;
-    if (parsed) context.abilityTemplates = replaceById(context.abilityTemplates, parsed);
+    if (parsed) {
+      context.abilityTemplates = replaceById(context.abilityTemplates, parsed.ability);
+      context.gameActionTemplates = replaceById(context.gameActionTemplates, parsed.action);
+    }
     return;
   }
   if (command.type === "createItemTemplate") {

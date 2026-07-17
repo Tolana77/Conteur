@@ -2,12 +2,15 @@ export type { Campaign, Character, CharacterStats, Entity, World } from "../core
 import type { CharacterStats } from "../core/models";
 
 export type MessageSender = "player" | "gm";
+export type ChatMessageKind = "standard" | "checkSetup" | "checkResult";
 
 export interface Message {
   id: string;
   sender: MessageSender;
   content: string;
   timestamp: number;
+  kind?: ChatMessageKind;
+  relatedCheckId?: string;
   actions?: ChatActionIntent[];
   actionReceipt?: GameActionReceipt;
 }
@@ -95,7 +98,7 @@ export interface GameActionReceipt {
   }>;
 }
 
-export type ChatActionIntentKind = "useItem" | "useAbility" | "attack";
+export type ChatActionIntentKind = "useItem" | "useAbility" | "castSpell" | "attack";
 export type ActionTargetKind = "self" | "character" | "entity" | "item" | "position" | "free";
 
 export interface ActionTarget {
@@ -104,16 +107,6 @@ export interface ActionTarget {
   label: string;
   source?: "default" | "selected" | "free";
   position?: CombatPosition;
-}
-
-export interface ActionTargetingRule {
-  allowed: ActionTargetKind[];
-  required?: boolean;
-  defaultPriority?: Array<"self" | "nearestEnemy" | "farthestPointAhead" | "none">;
-  range?: number | string;
-  label?: "cible" | "destination";
-  lineOfSight?: boolean;
-  suggestedSides?: SuggestedTargetSide[];
 }
 
 export type AimKind = "self" | "entity" | "position" | "direction" | "item";
@@ -126,6 +119,7 @@ export interface AimRule {
   required?: boolean;
   range?: number | string;
   lineOfSight?: boolean;
+  label?: "cible" | "destination";
 }
 
 export interface AreaRule {
@@ -139,9 +133,10 @@ export interface AffectRule {
   allowed: AffectKind[];
   maxTargets?: number;
   requiresLiving?: boolean;
+  includeSelf?: boolean;
 }
 
-export interface ActionTargetingV2 {
+export interface ActionTargeting {
   aim: AimRule;
   area?: AreaRule;
   affects: AffectRule;
@@ -155,8 +150,9 @@ export interface ChatActionIntent {
   targetId: string;
   label: string;
   command: string;
-  targeting?: ActionTargetingRule;
+  targeting?: ActionTargeting;
   target?: ActionTarget;
+  spellLevel?: SpellLevel;
   createdAt: number;
 }
 
@@ -210,6 +206,28 @@ export interface PlayerCheckResolution {
   message: string;
   resolvedAt: number;
 }
+
+export type PlayerCheckNarrationContext =
+  | {
+      stage: "pending";
+      requestId: string;
+      action: string;
+      method?: string;
+      checkLabel: string;
+      challengeCue: string;
+    }
+  | {
+      stage: "resolved";
+      requestId: string;
+      action: string;
+      method?: string;
+      checkLabel: string;
+      formula: string;
+      result: number;
+      degree: PlayerCheckDegree;
+      outcome?: string;
+      stakes?: string;
+    };
 
 export interface PlayerCheckRequest {
   id: string;
@@ -316,8 +334,7 @@ export interface ItemTemplate {
   effects: ItemEffectRef[];
   attacks?: ItemAttackProfile[];
   attackModifiers?: ItemAttackModifierProfile[];
-  targeting?: ActionTargetingRule;
-  targetingV2?: ActionTargetingV2;
+  targeting?: ActionTargeting;
   modules: Record<string, Record<string, ItemModuleValue>>;
 }
 
@@ -330,7 +347,7 @@ export interface ItemAttackProfile {
   damageType: string;
   attackKind?: "melee" | "ranged" | "magic";
   cost?: "action" | "bonus" | "reaction";
-  targetingV2?: ActionTargetingV2;
+  targeting?: ActionTargeting;
 }
 
 export interface ItemAttackModifierProfile {
@@ -382,6 +399,17 @@ export interface AbilityScalingRule {
   notes?: string;
 }
 
+export interface GameActionScalingRule {
+  effectIndex: number;
+  variable: string;
+  mode: Exclude<AbilityScalingMode, "fixed">;
+  baseLevel: number;
+  addPerStep: number | string;
+  every?: number;
+  thresholds?: number[];
+  maxLevel?: number;
+}
+
 export interface AbilityResourceCost {
   type: "charge" | "mana" | "action" | "custom";
   resource?: string;
@@ -395,7 +423,7 @@ export interface AbilityChargeRule {
   rechargeAmount?: number | "full";
 }
 
-export interface AbilityTemplate {
+export interface GameActionTemplate {
   id: string;
   name: string;
   description: string;
@@ -409,14 +437,18 @@ export interface AbilityTemplate {
       amount: number | string;
     };
   };
-  resourceCost?: AbilityResourceCost;
-  targeting: ActionTargetingRule;
-  targetingV2?: ActionTargetingV2;
-  charges?: AbilityChargeRule;
-  scaling?: AbilityScalingRule;
-  requirements?: AbilityRequirement[];
+  targeting: ActionTargeting;
   duration?: AbilityDuration;
   effects: ItemEffectRef[];
+  scaling?: GameActionScalingRule[];
+}
+
+export interface AbilityTemplate {
+  id: string;
+  actionId: string;
+  resourceCost?: AbilityResourceCost;
+  charges?: AbilityChargeRule;
+  requirements?: AbilityRequirement[];
   modules: Record<string, Record<string, ItemModuleValue>>;
 }
 
@@ -432,6 +464,82 @@ export interface AbilityInstance {
   };
   data: Record<string, number | string | boolean>;
   effects: ItemEffectRef[];
+}
+
+export type SpellLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+export type SpellcastingClassId =
+  | "wizard"
+  | "cleric"
+  | "bard"
+  | "druid"
+  | "sorcerer"
+  | "warlock"
+  | "paladin"
+  | "ranger";
+export type SpellSchool =
+  | "abjuration"
+  | "conjuration"
+  | "divination"
+  | "enchantment"
+  | "evocation"
+  | "illusion"
+  | "necromancy"
+  | "transmutation";
+export type SpellPreparationMode = "prepared" | "known";
+export type SpellSlotProgression = "full" | "half" | "pact";
+
+export interface SpellMaterialRequirement {
+  name: string;
+  quantity: number;
+  consumed: boolean;
+  itemTemplateId?: string;
+  itemTag?: string;
+}
+
+export interface SpellComponents {
+  verbal: boolean;
+  somatic: boolean;
+  material?: {
+    description: string;
+    focusAllowed: boolean;
+    requirements: SpellMaterialRequirement[];
+  };
+}
+
+export interface SpellTemplate {
+  id: string;
+  actionId: string;
+  minimumSlotLevel: SpellLevel;
+  school: SpellSchool;
+  classes: SpellcastingClassId[];
+  tags: string[];
+  components: SpellComponents;
+  concentration: boolean;
+  ritual: boolean;
+}
+
+export interface SpellSlotState {
+  level: Exclude<SpellLevel, 0>;
+  max: number;
+  remaining: number;
+}
+
+export interface CharacterSpellbook {
+  characterId: string;
+  classId: SpellcastingClassId;
+  castingAbility: keyof CharacterStats;
+  progression: SpellSlotProgression;
+  preparationMode: SpellPreparationMode;
+  slotRecovery: "shortRest" | "longRest";
+  knownSpellIds: string[];
+  preparedSpellIds: string[];
+  slots: SpellSlotState[];
+  preparationRequired: boolean;
+  concentration?: {
+    spellId: string;
+    castAt: number;
+  };
+  updatedAt: number;
 }
 
 export interface EnemyAttackTemplate {

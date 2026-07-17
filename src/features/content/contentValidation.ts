@@ -1,9 +1,7 @@
 import type {
   AbilityRequirement,
   AbilityTemplate,
-  ActionTargetKind,
-  ActionTargetingRule,
-  ActionTargetingV2,
+  ActionTargeting,
   AffectKind,
   AimKind,
   AreaShape,
@@ -12,6 +10,8 @@ import type {
   EnemyAttackTemplate,
   EnemyBehaviorTemplate,
   EnemyTemplate,
+  GameActionScalingRule,
+  GameActionTemplate,
   ItemAttackProfile,
   ItemEffectRef,
   ItemInstance,
@@ -31,6 +31,7 @@ import {
 export interface ContentCatalogContext {
   effectTemplates: EffectTemplate[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   itemTemplates: ItemTemplate[];
   enemyTemplates: EnemyTemplate[];
   knownIds?: ContentCatalogKnownIds;
@@ -46,6 +47,11 @@ export interface ContentCatalogKnownIds {
 export interface ContentValidationResult<T> {
   value: T | null;
   errors: string[];
+}
+
+export interface AbilityTemplateBundle {
+  ability: AbilityTemplate;
+  action: GameActionTemplate;
 }
 
 export interface ItemInstanceInput {
@@ -141,10 +147,12 @@ export function parseItemTemplate(
         damageType: optionalString(modifier.damageType),
         consumeOnUse: optionalBoolean(modifier.consumeOnUse, `item.attackModifiers[${index}].consumeOnUse`, errors),
       }));
-  const targetingV2 = source.targetingV2 === undefined ? undefined : parseTargetingV2(source.targetingV2, "item.targetingV2", errors);
+  if (source.targetingV2 !== undefined) {
+    errors.push("item.targetingV2 est obsolète : utilise uniquement item.targeting.");
+  }
   const targeting = source.targeting === undefined
-    ? targetingV2 ? toLegacyTargeting(targetingV2) : undefined
-    : parseLegacyTargeting(source.targeting, "item.targeting", errors);
+    ? undefined
+    : parseActionTargeting(source.targeting, "item.targeting", errors);
   const modules = moduleRecord(source.modules ?? {}, "item.modules", errors);
   if (!types.length) errors.push("item.types doit contenir au moins une catégorie fonctionnelle.");
 
@@ -163,7 +171,6 @@ export function parseItemTemplate(
     ...(attacks ? { attacks } : {}),
     ...(attackModifiers ? { attackModifiers } : {}),
     ...(targeting ? { targeting } : {}),
-    ...(targetingV2 ? { targetingV2 } : {}),
     modules,
   };
   validateDirectStatItemEffects(template, context.effectTemplates).forEach((error) => errors.push(error));
@@ -177,50 +184,67 @@ export function parseItemTemplate(
 export function parseAbilityTemplate(
   value: unknown,
   context: ContentCatalogContext,
-): ContentValidationResult<AbilityTemplate> {
+): ContentValidationResult<AbilityTemplateBundle> {
   const errors: string[] = [];
   const source = record(value, "template de capacité", errors);
   if (!source) return { value: null, errors };
   const activationSource = record(source.activation, "ability.activation", errors) ?? {};
   const timing = activationTimings.has(activationSource.timing as never)
-    ? activationSource.timing as AbilityTemplate["activation"]["timing"]
+    ? activationSource.timing as GameActionTemplate["activation"]["timing"]
     : "action";
   if (!activationTimings.has(activationSource.timing as never)) errors.push("ability.activation.timing est invalide.");
-  const targetingV2 = source.targetingV2 === undefined ? undefined : parseTargetingV2(source.targetingV2, "ability.targetingV2", errors);
-  const targeting: ActionTargetingRule = source.targeting === undefined
-    ? targetingV2 ? toLegacyTargeting(targetingV2) : { allowed: ["self"], required: false, defaultPriority: ["self"] }
-    : parseLegacyTargeting(source.targeting, "ability.targeting", errors);
+  if (source.targetingV2 !== undefined) {
+    errors.push("ability.targetingV2 est obsolète : utilise uniquement ability.targeting.");
+  }
+  const targeting: ActionTargeting = source.targeting === undefined
+    ? {
+        aim: { allowed: ["self"], required: false },
+        area: { shape: "none" },
+        affects: { allowed: ["self"], maxTargets: 1 },
+        defaultPriority: ["self"],
+        suggestedSides: ["self"],
+      }
+    : parseActionTargeting(source.targeting, "ability.targeting", errors);
   const effects = effectReferences(source.effects ?? [], "ability.effects", errors);
   validateEffectReferences(effects, context, "ability.effects", errors);
   const combatRole = combatRoles.has(source.combatRole as never)
-    ? source.combatRole as AbilityTemplate["combatRole"]
+    ? source.combatRole as GameActionTemplate["combatRole"]
     : undefined;
   if (source.combatRole !== undefined && !combatRole) errors.push("ability.combatRole est invalide.");
   const charges = parseCharges(source.charges, errors);
   const resourceCost = parseResourceCost(source.resourceCost, errors);
   if (resourceCost?.type === "charge" && !charges) errors.push("Une capacité qui coûte des charges doit définir ability.charges.");
 
-  const template: AbilityTemplate = {
-    id: contentId(source.id, "ability.id", errors),
+  const id = contentId(source.id, "ability.id", errors);
+  const actionId = source.actionId === undefined
+    ? `action-${id}`
+    : contentId(source.actionId, "ability.actionId", errors);
+  const action: GameActionTemplate = {
+    id: actionId,
     name: requiredString(source.name, "ability.name", errors),
     description: requiredString(source.description, "ability.description", errors),
     types: stringArray(source.types, "ability.types", errors),
     tags: stringArray(source.tags ?? [], "ability.tags", errors),
     ...(combatRole ? { combatRole } : {}),
     activation: { timing },
-    ...(resourceCost ? { resourceCost } : {}),
     targeting,
-    ...(targetingV2 ? { targetingV2 } : {}),
-    ...(charges ? { charges } : {}),
-    ...(parseScaling(source.scaling, errors) ?? {}),
-    ...(parseRequirements(source.requirements, errors) ?? {}),
     ...(parseDuration(source.duration, errors) ?? {}),
     effects,
+    ...(parseGameActionScaling(source.scaling, errors) ?? {}),
+  };
+  const template: AbilityTemplate = {
+    id,
+    actionId,
+    ...(resourceCost ? { resourceCost } : {}),
+    ...(charges ? { charges } : {}),
+    ...(parseRequirements(source.requirements, errors) ?? {}),
     modules: moduleRecord(source.modules ?? { ability: {} }, "ability.modules", errors),
   };
-  if (!template.types.length) errors.push("ability.types doit contenir au moins un type.");
-  if (timing !== "passive" && !targetingV2) errors.push("ability.targetingV2 est requis pour une capacité active.");
-  return errors.length ? { value: null, errors } : { value: template, errors };
+  if (!action.types.length) errors.push("ability.types doit contenir au moins un type.");
+  if (timing !== "passive" && source.targeting === undefined) {
+    errors.push("ability.targeting est requis pour une capacité active.");
+  }
+  return errors.length ? { value: null, errors } : { value: { ability: template, action }, errors };
 }
 
 export function parseEnemyTemplate(
@@ -458,7 +482,9 @@ function parseItemAttacks(value: unknown, errors: string[]): ItemAttackProfile[]
     damageType: requiredString(attack.damageType, `item.attacks[${index}].damageType`, errors),
     attackKind: enumValue(attack.attackKind, ["melee", "ranged", "magic"] as const, `item.attacks[${index}].attackKind`, errors),
     cost: enumValue(attack.cost, ["action", "bonus", "reaction"] as const, `item.attacks[${index}].cost`, errors),
-    ...(attack.targetingV2 === undefined ? {} : { targetingV2: parseTargetingV2(attack.targetingV2, `item.attacks[${index}].targetingV2`, errors) }),
+    ...(attack.targeting === undefined
+      ? {}
+      : { targeting: parseActionTargeting(attack.targeting, `item.attacks[${index}].targeting`, errors) }),
   }));
 }
 
@@ -486,7 +512,7 @@ function parseEnemyBehavior(source: Record<string, unknown>, errors: string[]): 
   };
 }
 
-function parseTargetingV2(value: unknown, path: string, errors: string[]): ActionTargetingV2 {
+function parseActionTargeting(value: unknown, path: string, errors: string[]): ActionTargeting {
   const source = record(value, path, errors) ?? {};
   const aim = record(source.aim, `${path}.aim`, errors) ?? {};
   const affects = record(source.affects, `${path}.affects`, errors) ?? {};
@@ -497,6 +523,7 @@ function parseTargetingV2(value: unknown, path: string, errors: string[]): Actio
       required: optionalBoolean(aim.required, `${path}.aim.required`, errors),
       range: optionalNumberOrString(aim.range, `${path}.aim.range`, errors),
       lineOfSight: optionalBoolean(aim.lineOfSight, `${path}.aim.lineOfSight`, errors),
+      label: enumValue(aim.label, ["cible", "destination"] as const, `${path}.aim.label`, errors),
     },
     ...(area ? { area: {
       shape: enumValue(area.shape, [...areaShapes], `${path}.area.shape`, errors) ?? "none",
@@ -508,40 +535,10 @@ function parseTargetingV2(value: unknown, path: string, errors: string[]): Actio
       allowed: enumArray(affects.allowed, [...affectKinds], `${path}.affects.allowed`, errors),
       maxTargets: affects.maxTargets === undefined ? undefined : boundedInteger(affects.maxTargets, `${path}.affects.maxTargets`, 1, 100, errors),
       requiresLiving: optionalBoolean(affects.requiresLiving, `${path}.affects.requiresLiving`, errors),
+      includeSelf: optionalBoolean(affects.includeSelf, `${path}.affects.includeSelf`, errors),
     },
     defaultPriority: source.defaultPriority === undefined ? undefined : enumArray(source.defaultPriority, ["self", "nearestEnemy", "farthestPointAhead", "none"] as const, `${path}.defaultPriority`, errors),
     suggestedSides: source.suggestedSides === undefined ? undefined : enumArray(source.suggestedSides, ["self", "ally", "enemy", "neutral"] as const, `${path}.suggestedSides`, errors),
-  };
-}
-
-function parseLegacyTargeting(value: unknown, path: string, errors: string[]): ActionTargetingRule {
-  const source = record(value, path, errors) ?? {};
-  return {
-    allowed: enumArray(source.allowed, ["self", "character", "entity", "item", "position", "free"] as const, `${path}.allowed`, errors),
-    required: optionalBoolean(source.required, `${path}.required`, errors),
-    defaultPriority: source.defaultPriority === undefined ? undefined : enumArray(source.defaultPriority, ["self", "nearestEnemy", "farthestPointAhead", "none"] as const, `${path}.defaultPriority`, errors),
-    range: optionalNumberOrString(source.range, `${path}.range`, errors),
-    label: enumValue(source.label, ["cible", "destination"] as const, `${path}.label`, errors),
-    lineOfSight: optionalBoolean(source.lineOfSight, `${path}.lineOfSight`, errors),
-    suggestedSides: source.suggestedSides === undefined ? undefined : enumArray(source.suggestedSides, ["self", "ally", "enemy", "neutral"] as const, `${path}.suggestedSides`, errors),
-  };
-}
-
-function toLegacyTargeting(targeting: ActionTargetingV2): ActionTargetingRule {
-  const allowed = targeting.aim.allowed.flatMap<ActionTargetKind>((kind) => {
-    if (kind === "self") return ["self"];
-    if (kind === "entity") return ["entity", "character"];
-    if (kind === "position") return ["position"];
-    if (kind === "item") return ["item"];
-    return ["free"];
-  });
-  return {
-    allowed: [...new Set(allowed)],
-    required: targeting.aim.required,
-    defaultPriority: targeting.defaultPriority,
-    range: targeting.aim.range,
-    lineOfSight: targeting.aim.lineOfSight,
-    suggestedSides: targeting.suggestedSides,
   };
 }
 
@@ -565,12 +562,49 @@ function parseResourceCost(value: unknown, errors: string[]): AbilityTemplate["r
   return { type, resource: optionalString(source.resource), amount: numberOrString(source.amount, "ability.resourceCost.amount", errors) };
 }
 
-function parseScaling(value: unknown, errors: string[]): Pick<AbilityTemplate, "scaling"> | undefined {
+function parseGameActionScaling(
+  value: unknown,
+  errors: string[],
+): Pick<GameActionTemplate, "scaling"> | undefined {
   if (value === undefined) return undefined;
-  const source = record(value, "ability.scaling", errors) ?? {};
-  const mode = enumValue(source.mode, ["abilityLevel", "characterLevel", "slotLevel", "itemLevel", "fixed"] as const, "ability.scaling.mode", errors);
-  if (!mode) return undefined;
-  return { scaling: { level: numberOrString(source.level, "ability.scaling.level", errors), mode, maxLevel: optionalNumberOrString(source.maxLevel, "ability.scaling.maxLevel", errors), notes: optionalString(source.notes) } };
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const legacy = value as Record<string, unknown>;
+    if (legacy.mode === "fixed") return undefined;
+    errors.push("ability.scaling utilise désormais une liste de règles { effectIndex, variable, mode, baseLevel, addPerStep }.");
+    return undefined;
+  }
+  const scaling = objectArray(value, "ability.scaling", errors).map((source, index): GameActionScalingRule => {
+    const path = `ability.scaling[${index}]`;
+    const mode = enumValue(
+      source.mode,
+      ["abilityLevel", "characterLevel", "slotLevel", "itemLevel"] as const,
+      `${path}.mode`,
+      errors,
+    ) ?? "characterLevel";
+    const thresholds = source.thresholds === undefined
+      ? undefined
+      : Array.isArray(source.thresholds)
+        ? source.thresholds.flatMap((threshold, thresholdIndex) => {
+            const parsed = Number(threshold);
+            if (!Number.isInteger(parsed) || parsed < 1) {
+              errors.push(`${path}.thresholds[${thresholdIndex}] doit être un entier positif.`);
+              return [];
+            }
+            return [parsed];
+          })
+        : (errors.push(`${path}.thresholds doit être un tableau.`), undefined);
+    return {
+      effectIndex: boundedInteger(source.effectIndex, `${path}.effectIndex`, 0, 100, errors),
+      variable: requiredString(source.variable, `${path}.variable`, errors),
+      mode,
+      baseLevel: boundedInteger(source.baseLevel ?? 1, `${path}.baseLevel`, 0, 100, errors),
+      addPerStep: numberOrString(source.addPerStep, `${path}.addPerStep`, errors),
+      ...(source.every === undefined ? {} : { every: boundedInteger(source.every, `${path}.every`, 1, 100, errors) }),
+      ...(thresholds ? { thresholds } : {}),
+      ...(source.maxLevel === undefined ? {} : { maxLevel: boundedInteger(source.maxLevel, `${path}.maxLevel`, 1, 100, errors) }),
+    };
+  });
+  return { scaling };
 }
 
 function parseRequirements(value: unknown, errors: string[]): Pick<AbilityTemplate, "requirements"> | undefined {
@@ -607,7 +641,7 @@ function parseRequirements(value: unknown, errors: string[]): Pick<AbilityTempla
   return { requirements };
 }
 
-function parseDuration(value: unknown, errors: string[]): Pick<AbilityTemplate, "duration"> | undefined {
+function parseDuration(value: unknown, errors: string[]): Pick<GameActionTemplate, "duration"> | undefined {
   if (value === undefined) return undefined;
   const source = record(value, "ability.duration", errors) ?? {};
   if (source.type === "instant" || source.type === "permanent") return { duration: { type: source.type } };

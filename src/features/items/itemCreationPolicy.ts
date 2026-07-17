@@ -115,7 +115,7 @@ function createMechanicalSignature(template: ItemTemplate): string {
     effects: template.effects,
     attacks: template.attacks ?? [],
     attackModifiers: template.attackModifiers ?? [],
-    targetingV2: template.targetingV2 ?? null,
+    targeting: template.targeting ?? null,
     requiresAttunement: template.requiresAttunement ?? false,
     modules: template.modules,
   });

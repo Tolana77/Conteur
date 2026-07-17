@@ -16,7 +16,10 @@
     "test:objects": "node test/objects-effects.test.cjs",
     "test:item-catalog": "node test/item-template-catalog.test.mjs",
     "test:scene-pacing": "node test/scene-pacing.test.mjs",
-    "test:combat-narration": "node test/combat-narration.test.mjs"
+    "test:combat-narration": "node test/combat-narration.test.mjs",
+    "test:targeting": "node test/targeting.test.mjs",
+    "test:spells": "node test/spell-system.test.mjs",
+    "test:game-terms": "node test/game-terms.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",

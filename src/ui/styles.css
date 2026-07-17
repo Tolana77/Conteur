@@ -977,6 +977,15 @@ select {
   animation: dice-result-pop 260ms ease-out both;
 }
 
+.admin-tabs-scroll {
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.admin-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 @keyframes dice-card-in {
   0% {
     opacity: 0;

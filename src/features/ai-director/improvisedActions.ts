@@ -5,6 +5,7 @@ import type {
   ItemInstance,
   ItemTemplate,
   PlayerCheckDegree,
+  PlayerCheckNarrationContext,
   PlayerCheckRequest,
   PlayerCheckRequestInput,
   PlayerCheckResolution,
@@ -128,7 +129,7 @@ export function prepareImprovisedCheck(
       // devront passer plus tard par un pipeline distinct, sans bouton joueur.
       visibility: "public",
     },
-    message: `Jet proposé au joueur : ${label}, DD ${definition.dc}. Aucun dé n'a encore été lancé.`,
+    message: `Jet demandé au joueur : ${label}. Aucun dé n'a encore été lancé.`,
   };
 }
 
@@ -204,10 +205,10 @@ export function resolvePlayerCheckRequest(
   const costText = committedCosts.length
     ? ` Ressources consommées : ${formatCosts(committedCosts, context.itemInstances, context.itemTemplates)}.`
     : "";
-  const message = `${character.name} tente « ${request.action} ». Test de ${checkLabel} : ${formula} = ${roll.result} contre DD ${request.dc}${miracleText} : ${formatDegree(degree)}.${outcomeText}${stakes}${costText}`;
+  const message = `${character.name} tente « ${request.action} ». Test de ${checkLabel} : ${formula} = ${roll.result}${miracleText} : ${formatDegree(degree)}.${outcomeText}${stakes}${costText}`;
 
   context.recordCampaignEvent(
-    `${character.name} : ${request.action}, ${formatDegree(degree)} (${roll.result} contre DD ${request.dc}).${outcome ? ` ${outcome}` : ""}`,
+    `${character.name} : ${request.action}, ${formatDegree(degree)} (résultat ${roll.result}).${outcome ? ` ${outcome}` : ""}`,
   );
 
   return {
@@ -223,6 +224,47 @@ export function resolvePlayerCheckRequest(
       resolvedAt: context.now?.() ?? Date.now(),
     },
   };
+}
+
+/** Expose au Narrateur uniquement les éléments diégétiques d'un test. Le DD
+ * reste une donnée privée du moteur et ne traverse jamais ce contrat. */
+export function createPlayerCheckNarrationContext(
+  request: PlayerCheckRequest,
+): PlayerCheckNarrationContext | null {
+  const common = {
+    requestId: request.id,
+    action: request.action,
+    ...(request.method ? { method: request.method } : {}),
+    checkLabel: getPlayerCheckLabel(request.skill, request.stat),
+  };
+
+  if (request.status === "pending") {
+    return {
+      ...common,
+      stage: "pending",
+      challengeCue: getNarrativeChallengeCue(request.difficulty),
+    };
+  }
+
+  if (request.status !== "resolved" || !request.resolution) return null;
+  const outcome = getOutcomeText(request.resolution.degree, request.outcomes);
+  return {
+    ...common,
+    stage: "resolved",
+    formula: request.resolution.formula,
+    result: request.resolution.result,
+    degree: request.resolution.degree,
+    ...(outcome ? { outcome } : {}),
+    ...(request.stakes ? { stakes: request.stakes } : {}),
+  };
+}
+
+function getNarrativeChallengeCue(difficulty: ImprovisedDifficulty): string {
+  if (difficulty === "plausible") return "l'issue paraît incertaine";
+  if (difficulty === "difficult") return "cela semble difficile";
+  if (difficulty === "extreme") return "la tentative paraît particulièrement périlleuse";
+  if (difficulty === "legendary") return "la réussite semble presque impossible";
+  return "le geste demande de l'attention";
 }
 
 export function resolveDifficultyClass(difficulty?: ImprovisedDifficulty, explicitDc?: number): number {

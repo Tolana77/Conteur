@@ -411,6 +411,8 @@ function buildEvents(
         sender: "gm",
         content,
         timestamp: command.issuedAt,
+        ...(command.payload.kind ? { kind: command.payload.kind } : {}),
+        ...(command.payload.relatedCheckId ? { relatedCheckId: command.payload.relatedCheckId } : {}),
       },
     },
   }));

@@ -4,6 +4,19 @@ Ce document est la source de vérité compacte pour créer du contenu pendant un
 partie. Toutes les commandes sont validées localement, persistées dans
 `localStorage` et exécutées sans script libre.
 
+## Catalogues de base à consulter avant toute création
+
+- objets : `src/features/items/itemTemplates.ts` ;
+- effets : `src/features/content/effectTemplates.ts` ;
+- capacités : `src/features/abilities/abilityTemplates.ts` ;
+- ennemis : `src/features/content/enemyTemplates.ts`.
+
+Le catalogue initial contient volontairement des archétypes génériques couvrant
+le matériel d'aventure, les effets courants, les rôles tactiques et les familles
+d'ennemis usuelles. Chercher d'abord un id réutilisable. Une apparence, un nom,
+une faction, une espèce précise ou une histoire différente se place sur
+l'instance ; cela ne justifie jamais à lui seul un nouveau template.
+
 ## Ordre automatique
 
 Le moteur trie les commandes dans cet ordre :
@@ -47,7 +60,8 @@ Opérations fermées : `damage`, `randomDamage`, `heal`, `modifyStat`,
 
 ## Capacité
 
-Une capacité active exige `targetingV2`. Une capacité à charges indique sa
+Une capacité active exige `targeting`. Ce bloc est l'unique source de vérité
+pour la portée, la ligne de vue, le point visé et les entités affectées. Une capacité à charges indique sa
 recharge. Les effets peuvent référencer un effet créé juste avant.
 
 ```json
@@ -62,7 +76,7 @@ recharge. Les effets peuvent référencer un effet créé juste avant.
     "combatRole": "attack",
     "activation": { "timing": "action" },
     "resourceCost": { "type": "charge", "amount": 1 },
-    "targetingV2": {
+    "targeting": {
       "aim": { "allowed": ["entity"], "required": true, "range": 12, "lineOfSight": true },
       "affects": { "allowed": ["living"], "includeSelf": false },
       "area": { "shape": "none" }

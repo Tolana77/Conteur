@@ -6,7 +6,10 @@ export {
   isItemUsable,
   preventsUnequip,
 } from "./itemRules";
-export { initialItemTemplates } from "./itemTemplates";
+export {
+  deprecatedBuiltInItemTemplateReplacements,
+  initialItemTemplates,
+} from "./itemTemplates";
 export {
   findMechanicallyEquivalentItemTemplate,
   hasDirectStatItemEffect,

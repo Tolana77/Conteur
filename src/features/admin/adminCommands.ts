@@ -2,17 +2,22 @@ import type { Character, CharacterStats } from "../../core/models";
 import type {
   AbilityInstance,
   AbilityTemplate,
+  CharacterSpellbook,
   Combatant,
   CombatPosition,
   CombatScene,
   DiceVisibility,
+  GameActionTemplate,
   ItemEffectRef,
   ItemInstance,
   ItemTemplate,
+  SpellTemplate,
 } from "../../app/types";
 import { itemEffectCatalog, isItemEquipable, isItemUsable } from "../items";
 import { formatEffectValueExpression } from "../items/valueExpressions";
 import { getAbilityCharges, getAbilityMaxCharges } from "../abilities";
+import { getGameActionTemplate, resolveGameActionEffects } from "../actions";
+import { getSelectableTargetKinds, getTargetingRange } from "../combat/targeting";
 
 type CommandStatus = "success" | "error" | "info";
 
@@ -27,7 +32,10 @@ export interface AdminCommandContext {
   itemTemplates: ItemTemplate[];
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   abilityInstances: AbilityInstance[];
+  spellTemplates?: SpellTemplate[];
+  spellbooks?: CharacterSpellbook[];
   combat: CombatScene;
   dealDamage: (characterId: string, amount: number, damageType?: string) => void;
   healCharacter: (characterId: string, amount: number) => void;
@@ -47,6 +55,8 @@ export interface AdminCommandContext {
   useAbility: (abilityId: string) => boolean;
   rechargeAbility: (abilityId: string) => void;
   setAbilityCharges: (abilityId: string, charges: number) => void;
+  learnSpell?: (characterId: string, spellId: string) => boolean;
+  prepareSpells?: (characterId: string, spellIds: string[]) => boolean;
   rest: (characterId: string, type: "short" | "long") => void;
   startEncounter: (characterId: string) => void;
   startCombat: () => void;
@@ -125,6 +135,26 @@ export const adminCommandDocs = [
     name: "listAbilityTemplates",
     usage: "listAbilityTemplates",
     description: "Liste les templates de capacités disponibles.",
+  },
+  {
+    name: "listSpellTemplates",
+    usage: "listSpellTemplates [niveau]",
+    description: "Liste le catalogue de sorts, éventuellement filtré par niveau minimal.",
+  },
+  {
+    name: "listSpells",
+    usage: "listSpells <id|selected>",
+    description: "Liste les sorts connus, préparés et les emplacements du personnage.",
+  },
+  {
+    name: "learnSpell",
+    usage: "learnSpell <id|selected> <spellId>",
+    description: "Ajoute un sort de la liste de classe au grimoire du personnage.",
+  },
+  {
+    name: "prepareSpells",
+    usage: "prepareSpells <id|selected> <spellId,spellId,...>",
+    description: "Valide la préparation de sorts après un repos long.",
   },
   {
     name: "inspectAbility",
@@ -350,7 +380,10 @@ function formatItem(context: AdminCommandContext, item: ItemInstance): string {
 
 function formatAbility(context: AdminCommandContext, ability: AbilityInstance): string {
   const template = getAbilityTemplate(context, ability.templateId);
-  const name = String(ability.overrides.name ?? template?.name ?? ability.templateId);
+  const action = template
+    ? getGameActionTemplate(context.gameActionTemplates, template.actionId)
+    : undefined;
+  const name = String(ability.overrides.name ?? action?.name ?? ability.templateId);
   const charges = getAbilityCharges(ability, template);
   const maxCharges = getAbilityMaxCharges(template);
   const chargeLabel = charges === null || maxCharges === null ? "passif" : `${charges}/${maxCharges}`;
@@ -364,25 +397,29 @@ function formatAbilityDetails(context: AdminCommandContext, ability: AbilityInst
   if (!template) {
     return `${ability.id} — template introuvable: ${ability.templateId}`;
   }
+  const action = getGameActionTemplate(context.gameActionTemplates, template.actionId);
+  if (!action) {
+    return `${ability.id} — action introuvable: ${template.actionId}`;
+  }
 
-  const types = template.types.join(", ") || "misc";
-  const tags = template.tags.length > 0 ? `\nTags: ${template.tags.join(", ")}` : "";
+  const types = action.types.join(", ") || "misc";
+  const tags = action.tags.length > 0 ? `\nTags: ${action.tags.join(", ")}` : "";
   const recharge = template.charges
     ? `\nRecharge: ${template.charges.recharge.join(", ")}`
     : "\nRecharge: aucune charge";
 
   return [
     formatAbility(context, ability),
-    template.description,
-    `Activation: ${template.activation.timing}`,
-    `Cibles: ${template.targeting.allowed.join(", ")}${template.targeting.range ? `, portée ${template.targeting.range}` : ""}`,
+    action.description,
+    `Activation: ${action.activation.timing}`,
+    `Cibles: ${getSelectableTargetKinds(action.targeting).join(", ")}${getTargetingRange(action.targeting) ? `, portée ${getTargetingRange(action.targeting)} m` : ""}`,
     `Types: ${types}${tags}${recharge}`,
-    `Effets: ${formatAbilityEffects(ability, template)}`,
+    `Effets: ${formatAbilityEffects(ability, action)}`,
   ].join("\n");
 }
 
-function formatAbilityEffects(ability: AbilityInstance, template?: AbilityTemplate): string {
-  const effects = [...(template?.effects ?? []), ...ability.effects];
+function formatAbilityEffects(ability: AbilityInstance, action?: GameActionTemplate): string {
+  const effects = [...(action ? resolveGameActionEffects(action) : []), ...ability.effects];
 
   if (effects.length === 0) {
     return "Aucun effet";
@@ -516,11 +553,26 @@ export function executeAdminCommand(
       status: "info",
       message: context.abilityTemplates
         .map((template) => {
+          const action = getGameActionTemplate(context.gameActionTemplates, template.actionId);
           const charges = template.charges ? ` | charges: ${template.charges.max}` : " | passif";
           const recharge = template.charges ? ` | recharge: ${template.charges.recharge.join(", ")}` : "";
 
-          return `${template.id} — ${template.name} (${template.types.join(", ") || "misc"})${charges}${recharge}`;
+          return `${template.id} — ${action?.name ?? "Action introuvable"} (${action?.types.join(", ") || "misc"})${charges}${recharge}`;
         })
+        .join("\n"),
+    };
+  }
+
+  if (commandName === "listSpellTemplates") {
+    const requestedLevel = id === undefined ? null : parseNumber(id);
+    if (id !== undefined && (requestedLevel === null || requestedLevel < 0 || requestedLevel > 9)) {
+      return { status: "error", message: "Le niveau doit être compris entre 0 et 9." };
+    }
+    return {
+      status: "info",
+      message: (context.spellTemplates ?? [])
+        .filter((spell) => requestedLevel === null || spell.minimumSlotLevel === requestedLevel)
+        .map((spell) => `${spell.id} — ${getGameActionTemplate(context.gameActionTemplates, spell.actionId)?.name ?? "Action introuvable"} (Niv.${spell.minimumSlotLevel}) [${spell.classes.join(", ")}]`)
         .join("\n"),
     };
   }
@@ -789,6 +841,41 @@ export function executeAdminCommand(
           ? abilities.map((ability) => formatAbility(context, ability)).join("\n")
           : "Aucune capacité.",
     };
+  }
+
+  if (commandName === "listSpells") {
+    const book = context.spellbooks?.find((candidate) => candidate.characterId === character.id);
+    if (!book) return { status: "info", message: `${character.name} ne possède pas de grimoire.` };
+    const prepared = new Set(book.preparedSpellIds);
+    const spells = book.knownSpellIds.map((spellId) => {
+      const spell = context.spellTemplates?.find((candidate) => candidate.id === spellId);
+      const action = spell
+        ? getGameActionTemplate(context.gameActionTemplates, spell.actionId)
+        : undefined;
+      return `${spellId} — ${action?.name ?? "Sort inconnu"} (Niv.${spell?.minimumSlotLevel ?? "?"})${prepared.has(spellId) ? " [préparé]" : ""}`;
+    });
+    const slots = book.slots.map((slot) => `Niv.${slot.level}: ${slot.remaining}/${slot.max}`).join(" · ");
+    return {
+      status: "info",
+      message: [`Emplacements: ${slots || "aucun"}`, ...spells].join("\n"),
+    };
+  }
+
+  if (commandName === "learnSpell") {
+    if (!arg1) return { status: "error", message: "spellId manquant." };
+    const learned = context.learnSpell?.(character.id, arg1) ?? false;
+    return learned
+      ? { status: "success", message: `${character.name} apprend ${arg1}.` }
+      : { status: "error", message: `${arg1} est introuvable, trop élevé ou absent de la liste de classe.` };
+  }
+
+  if (commandName === "prepareSpells") {
+    if (!arg1) return { status: "error", message: "Liste de spellId manquante." };
+    const spellIds = arg1.split(",").map((value) => value.trim()).filter(Boolean);
+    const prepared = context.prepareSpells?.(character.id, spellIds) ?? false;
+    return prepared
+      ? { status: "success", message: `${character.name} prépare ${spellIds.length} sort(s).` }
+      : { status: "error", message: "Préparation invalide : ids, classe ou limite dépassée." };
   }
 
   if (commandName === "useAbility") {

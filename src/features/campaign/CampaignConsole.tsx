@@ -1,4 +1,10 @@
-import { FormEvent, useState } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import type { Entity } from "../../app/types";
 import {
   adminCommandDocs,
@@ -23,6 +29,16 @@ const entitySections = [
   { key: "items", label: "Objets" },
 ] as const;
 
+const adminSections = [
+  { id: "overview", label: "Aperçu" },
+  { id: "content", label: "Contenu" },
+  { id: "ai", label: "MJ IA" },
+  { id: "engine", label: "Moteur" },
+  { id: "world", label: "Monde" },
+] as const;
+
+type AdminSectionId = (typeof adminSections)[number]["id"];
+
 interface CampaignConsoleProps {
   onClose: () => void;
   initialView?: "campaign" | "world";
@@ -31,10 +47,7 @@ interface CampaignConsoleProps {
 export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignConsoleProps) {
   const [newFact, setNewFact] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
-  const [commandInput, setCommandInput] = useState("help");
-  const [commandHistory, setCommandHistory] = useState<
-    Array<AdminCommandResult & { input: string }>
-  >([]);
+  const [activeSection, setActiveSection] = useState<AdminSectionId>("overview");
   const storageVersion = useGameStore((state) => state.storageVersion);
   const gameRevision = useGameStore((state) => state.gameRevision);
   const gameEventCount = useGameStore((state) => state.gameEvents.length);
@@ -46,7 +59,10 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const spellTemplates = useGameStore((state) => state.spellTemplates);
+  const spellbooks = useGameStore((state) => state.spellbooks);
   const effectTemplates = useGameStore((state) => state.effectTemplates);
   const enemyTemplates = useGameStore((state) => state.enemyTemplates);
   const combat = useGameStore((state) => state.combat);
@@ -71,6 +87,8 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
   const useAbility = useGameStore((state) => state.useAbility);
   const rechargeAbility = useGameStore((state) => state.rechargeAbility);
   const setAbilityCharges = useGameStore((state) => state.setAbilityCharges);
+  const learnSpell = useGameStore((state) => state.learnSpell);
+  const prepareSpells = useGameStore((state) => state.prepareSpells);
   const rest = useGameStore((state) => state.rest);
   const startEncounter = useGameStore((state) => state.startEncounter);
   const startCombat = useGameStore((state) => state.startCombat);
@@ -124,21 +142,17 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
     setNotice("Ancienne clé de stockage nettoyée.");
   }
 
-  function handleRunCommand(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmedCommand = commandInput.trim();
-
-    if (!trimmedCommand) {
-      return;
-    }
-
-    const result = executeAdminCommand(trimmedCommand, {
+  function runAdminCommand(input: string): AdminCommandResult {
+    return executeAdminCommand(input, {
       characters,
       selectedCharacterId,
       itemTemplates,
       itemInstances,
       abilityTemplates,
+      gameActionTemplates,
       abilityInstances,
+      spellTemplates,
+      spellbooks,
       combat,
       dealDamage,
       healCharacter,
@@ -153,6 +167,8 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
       useAbility,
       rechargeAbility,
       setAbilityCharges,
+      learnSpell,
+      prepareSpells,
       rest,
       startEncounter,
       startCombat,
@@ -165,8 +181,6 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
       nextCombatTurn,
       rollFormula,
     });
-
-    setCommandHistory((history) => [{ ...result, input: trimmedCommand }, ...history].slice(0, 8));
   }
 
   return (
@@ -194,17 +208,41 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
           ) : null}
 
           {initialView === "world" ? <WorldWorkshop /> : <>
+          <nav
+            aria-label="Sections de la console administrateur"
+            className="admin-tabs-scroll sticky top-0 z-10 -mx-4 -mt-4 mb-5 overflow-x-auto border-b border-[#9C7A2E]/20 bg-[#221E29]/95 px-4 py-3 backdrop-blur"
+          >
+            <div className="mx-auto grid min-w-[34rem] grid-cols-5 gap-1 rounded border border-[#9C7A2E]/20 bg-[#15121A]/75 p-1">
+              {adminSections.map((section) => (
+                <button
+                  aria-current={activeSection === section.id ? "page" : undefined}
+                  className={`min-h-10 px-3 py-2 text-sm transition-colors ${
+                    activeSection === section.id
+                      ? "bg-[#5A2233] text-[#E4D8BE]"
+                      : "text-[#E4D8BE]/60 hover:bg-[#2A2431] hover:text-[#E4D8BE]"
+                  }`}
+                  key={section.id}
+                  onClick={() => setActiveSection(section.id)}
+                  type="button"
+                >
+                  {section.label}
+                </button>
+              ))}
+            </div>
+          </nav>
+
+          {activeSection === "overview" ? <>
           <section className="mb-6 grid gap-3 md:grid-cols-2">
             <div className="manuscript-card rounded p-3">
               <h3 className="ink-heading font-bold">{campaign.name}</h3>
               <p className="text-sm text-[#E4D8BE]/65">
-                <HighlightedGameText text={campaign.style} />
+                <HighlightedGameText mode="none" text={campaign.style} />
               </p>
             </div>
             <div className="manuscript-card rounded p-3">
               <h3 className="ink-heading font-bold">Lore</h3>
               <p className="text-sm text-[#E4D8BE]/65">
-                <HighlightedGameText text={campaign.world.lore} />
+                <HighlightedGameText mode="none" text={campaign.world.lore} />
               </p>
             </div>
           </section>
@@ -321,67 +359,20 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
               </div>
             </div>
           </section>
+          </> : null}
 
-          <ContentWorkshop />
+          {activeSection === "content" ? <ContentWorkshop /> : null}
 
-          <AiDirectorConsole />
-          <AiApiTraceConsole />
+          {activeSection === "ai" ? <>
+            <AiDirectorConsole />
+            <AiApiTraceConsole />
+          </> : null}
 
-          <section className="mb-6">
-            <h3 className="rune-label mb-2 text-sm">Commandes moteur</h3>
-            <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-              <div className="manuscript-card rounded p-3">
-                <form className="flex gap-2" onSubmit={handleRunCommand}>
-                  <input
-                    className="min-w-0 flex-1 rounded border border-[#9C7A2E]/25 bg-[#15121A] px-3 py-2 text-sm text-[#E4D8BE] placeholder:text-[#E4D8BE]/45"
-                    onChange={(event) => setCommandInput(event.target.value)}
-                    placeholder="dealDamage selected 2"
-                    value={commandInput}
-                  />
-                  <button className="fantasy-button rounded px-3 py-2 text-sm" type="submit">
-                    Exécuter
-                  </button>
-                </form>
-                <p className="mt-2 text-xs text-[#E4D8BE]/55">
-                  Utilise <span className="font-bold text-[#E4D8BE]">selected</span> pour cibler la
-                  fiche actuellement sélectionnée.
-                </p>
+          {activeSection === "engine" ? (
+            <AdminCommandConsole executeCommand={runAdminCommand} />
+          ) : null}
 
-                <div className="mt-3 space-y-2">
-                  {commandHistory.map((entry, index) => (
-                    <article
-                      className={`rounded border px-3 py-2 text-sm ${
-                        entry.status === "error"
-                          ? "border-[#5A2233] bg-[#5A2233]/25"
-                          : "border-[#9C7A2E]/25 bg-[#15121A]"
-                      }`}
-                      key={`${entry.input}-${index}`}
-                    >
-                      <p className="font-mono text-xs text-[#9C7A2E]">&gt; {entry.input}</p>
-                      <pre className="mt-1 whitespace-pre-wrap font-sans text-[#E4D8BE]">
-                        <HighlightedGameText text={entry.message} />
-                      </pre>
-                    </article>
-                  ))}
-                </div>
-              </div>
-
-              <div className="manuscript-card rounded p-3">
-                <p className="mb-2 text-xs font-semibold uppercase text-[#9C7A2E]">
-                  Fonctions disponibles
-                </p>
-                <div className="space-y-2">
-                  {adminCommandDocs.map((command) => (
-                    <article className="rounded border border-[#9C7A2E]/15 bg-[#15121A] p-2" key={command.name}>
-                      <p className="font-mono text-xs text-[#E4D8BE]">{command.usage}</p>
-                      <p className="mt-1 text-xs text-[#E4D8BE]/60">{command.description}</p>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-
+          {activeSection === "world" ? <>
           <section className="mb-6">
             <h3 className="rune-label mb-2 text-sm">Facts du monde</h3>
             <div className="space-y-2">
@@ -441,9 +432,225 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
               </div>
             ))}
           </section>
+          </> : null}
           </>}
         </div>
       </section>
     </div>
+  );
+}
+
+interface AdminCommandConsoleProps {
+  executeCommand: (input: string) => AdminCommandResult;
+}
+
+type AdminCommandHistoryEntry = AdminCommandResult & { input: string };
+
+function AdminCommandConsole({ executeCommand }: AdminCommandConsoleProps) {
+  const [commandInput, setCommandInput] = useState("");
+  const [commandHistory, setCommandHistory] = useState<AdminCommandHistoryEntry[]>([]);
+  const [historyCursor, setHistoryCursor] = useState(-1);
+  const [referenceQuery, setReferenceQuery] = useState("");
+  const commandInputRef = useRef<HTMLInputElement>(null);
+  const filteredCommandDocs = useMemo(() => {
+    const query = referenceQuery.trim().toLocaleLowerCase("fr");
+    if (!query) return adminCommandDocs;
+
+    return adminCommandDocs.filter((command) =>
+      `${command.name} ${command.usage} ${command.description}`
+        .toLocaleLowerCase("fr")
+        .includes(query),
+    );
+  }, [referenceQuery]);
+
+  function runCommand(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedCommand = commandInput.trim();
+    if (!trimmedCommand) return;
+
+    const result = executeCommand(trimmedCommand);
+    setCommandHistory((history) => [
+      { ...result, input: trimmedCommand },
+      ...history,
+    ].slice(0, 12));
+    setCommandInput("");
+    setHistoryCursor(-1);
+    commandInputRef.current?.focus();
+  }
+
+  function handleCommandKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setCommandInput("");
+      setHistoryCursor(-1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      if (!commandHistory.length) return;
+      event.preventDefault();
+      const nextCursor = Math.min(historyCursor + 1, commandHistory.length - 1);
+      setHistoryCursor(nextCursor);
+      setCommandInput(commandHistory[nextCursor]?.input ?? "");
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      if (historyCursor < 0) return;
+      event.preventDefault();
+      const nextCursor = historyCursor - 1;
+      setHistoryCursor(nextCursor);
+      setCommandInput(nextCursor >= 0 ? commandHistory[nextCursor]?.input ?? "" : "");
+    }
+  }
+
+  function prepareCommand(command: (typeof adminCommandDocs)[number]) {
+    setCommandInput(command.usage === command.name ? command.name : `${command.name} `);
+    setHistoryCursor(-1);
+    requestAnimationFrame(() => commandInputRef.current?.focus());
+  }
+
+  return (
+    <section className="mb-6">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="rune-label text-sm">Commandes moteur</h3>
+        {commandHistory.length ? (
+          <button
+            className="border border-[#9C7A2E]/20 px-2.5 py-1 text-xs text-[#E4D8BE]/55 hover:border-[#9C7A2E]/45 hover:text-[#E4D8BE]"
+            onClick={() => {
+              setCommandHistory([]);
+              setHistoryCursor(-1);
+            }}
+            type="button"
+          >
+            Effacer l’historique
+          </button>
+        ) : null}
+      </div>
+
+      <div className="manuscript-card rounded p-3 sm:p-4">
+        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={runCommand}>
+          <div className="flex min-w-0 flex-1">
+            <span
+              aria-hidden="true"
+              className="grid w-9 shrink-0 place-items-center border border-r-0 border-[#9C7A2E]/35 bg-[#15121A] font-mono text-sm text-[#9C7A2E]"
+            >
+              &gt;
+            </span>
+            <label className="sr-only" htmlFor="admin-command-input">Commande moteur</label>
+            <input
+              autoComplete="off"
+              autoFocus
+              className="min-w-0 flex-1 border border-[#9C7A2E]/35 bg-[#15121A] px-3 py-2.5 font-mono text-sm text-[#E4D8BE] outline-none placeholder:text-[#E4D8BE]/35 focus:border-[#9C7A2E]/75"
+              id="admin-command-input"
+              onChange={(event) => {
+                setCommandInput(event.target.value);
+                setHistoryCursor(-1);
+              }}
+              onKeyDown={handleCommandKeyDown}
+              placeholder="Écrire une commande…"
+              ref={commandInputRef}
+              spellCheck={false}
+              value={commandInput}
+            />
+            <button
+              aria-label="Effacer la commande"
+              className="grid w-10 shrink-0 place-items-center border border-l-0 border-[#9C7A2E]/35 bg-[#15121A] text-xl leading-none text-[#E4D8BE]/50 hover:text-[#E4D8BE] disabled:opacity-25"
+              disabled={!commandInput}
+              onClick={() => {
+                setCommandInput("");
+                setHistoryCursor(-1);
+                commandInputRef.current?.focus();
+              }}
+              title="Effacer"
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+          <button
+            className="fantasy-button min-h-11 px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-28"
+            disabled={!commandInput.trim()}
+            type="submit"
+          >
+            Exécuter
+          </button>
+        </form>
+
+        <p className="mt-2 text-[11px] text-[#E4D8BE]/45">
+          <span className="font-mono text-[#9C7A2E]">↑ ↓</span> historique · <span className="font-mono text-[#9C7A2E]">Échap</span> efface · <span className="font-mono text-[#E4D8BE]/70">selected</span> cible le personnage actif
+        </p>
+
+        {commandHistory.length ? (
+          <div aria-live="polite" className="mt-4 max-h-[22rem] space-y-2 overflow-y-auto pr-1">
+            {commandHistory.map((entry, index) => (
+              <article
+                className={`border px-3 py-2.5 text-sm ${
+                  entry.status === "error"
+                    ? "border-[#5A2233] bg-[#5A2233]/20"
+                    : entry.status === "success"
+                      ? "border-[#3F5641]/70 bg-[#3F5641]/15"
+                      : "border-[#9C7A2E]/25 bg-[#15121A]"
+                }`}
+                key={`${entry.input}-${index}`}
+              >
+                <p className="break-words font-mono text-xs text-[#9C7A2E]">&gt; {entry.input}</p>
+                <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap font-sans leading-relaxed text-[#E4D8BE]">
+                  <HighlightedGameText mode="narrative" text={entry.message} />
+                </pre>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <details className="group mt-3 border border-[#9C7A2E]/20 bg-[#15121A]/45">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm text-[#E4D8BE]/75 marker:content-none hover:bg-[#2A2431]">
+          <span>Référence des commandes</span>
+          <span className="flex items-center gap-2">
+            <span className="border border-[#9C7A2E]/25 px-2 py-0.5 font-mono text-[11px] text-[#9C7A2E]">
+              {adminCommandDocs.length}
+            </span>
+            <span
+              aria-hidden="true"
+              className="text-base text-[#9C7A2E] transition-transform group-open:rotate-180"
+            >
+              ⌄
+            </span>
+          </span>
+        </summary>
+        <div className="border-t border-[#9C7A2E]/15 p-3">
+          <label className="sr-only" htmlFor="admin-command-search">Rechercher une commande</label>
+          <input
+            className="mb-3 w-full border border-[#9C7A2E]/25 bg-[#15121A] px-3 py-2 text-sm text-[#E4D8BE] outline-none placeholder:text-[#E4D8BE]/35 focus:border-[#9C7A2E]/65"
+            id="admin-command-search"
+            onChange={(event) => setReferenceQuery(event.target.value)}
+            placeholder="Rechercher une commande…"
+            value={referenceQuery}
+          />
+          <div className="grid max-h-[20rem] gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+            {filteredCommandDocs.map((command) => (
+              <button
+                aria-label={`Préremplir ${command.usage}`}
+                className="min-w-0 border border-[#9C7A2E]/15 bg-[#221E29]/55 px-2.5 py-2 text-left hover:border-[#9C7A2E]/45 hover:bg-[#2A2431]"
+                key={command.name}
+                onClick={() => prepareCommand(command)}
+                type="button"
+              >
+                <span className="block break-words font-mono text-xs leading-relaxed text-[#E4D8BE]">
+                  {command.usage}
+                </span>
+                <span className="mt-1 block text-[11px] leading-relaxed text-[#E4D8BE]/50">
+                  {command.description}
+                </span>
+              </button>
+            ))}
+            {!filteredCommandDocs.length ? (
+              <p className="py-3 text-sm text-[#E4D8BE]/45">Aucune commande correspondante.</p>
+            ) : null}
+          </div>
+        </div>
+      </details>
+    </section>
   );
 }

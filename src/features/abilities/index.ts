@@ -7,4 +7,4 @@ export {
   setAbilityCharges,
   useAbilityCharge,
 } from "./abilityRules";
-export { initialAbilityTemplates } from "./abilityTemplates";
+export { initialAbilityActionTemplates, initialAbilityTemplates } from "./abilityTemplates";

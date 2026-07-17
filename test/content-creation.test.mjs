@@ -32,7 +32,7 @@ const effectTemplate = {
   actions: [{ operation: "damage", variables: { value: "1d6 + INT", damageType: "froid" } }],
 };
 
-const targetingV2 = {
+const targeting = {
   aim: { allowed: ["entity"], required: true, range: 12, lineOfSight: true },
   affects: { allowed: ["living"], includeSelf: false },
   area: { shape: "none" },
@@ -47,7 +47,7 @@ const abilityTemplate = {
   combatRole: "attack",
   activation: { timing: "action" },
   resourceCost: { type: "charge", amount: 1 },
-  targetingV2,
+  targeting,
   charges: { max: 2, initial: 2, recharge: ["shortRest"], rechargeAmount: "full" },
   effects: [{ effectId: effectTemplate.id, variables: {} }],
   modules: { ability: {} },
@@ -109,7 +109,7 @@ const summonAbilityTemplate = {
   tags: ["magic", "summon"],
   combatRole: "support",
   activation: { timing: "action" },
-  targetingV2: {
+  targeting: {
     aim: { allowed: ["position"], required: true, range: 6, lineOfSight: true },
     affects: { allowed: ["position"], includeSelf: false },
     area: { shape: "none" },
@@ -148,6 +148,7 @@ const context = {
   itemTemplates: [],
   itemInstances: [],
   abilityTemplates: [],
+  gameActionTemplates: [],
   effectTemplates: [],
   enemyTemplates: [],
 };
@@ -182,6 +183,7 @@ assert.match(invalidSummon[0].message, /ennemi inconnu/u);
 const runtime = {
   effectTemplates: [],
   abilityTemplates: [],
+  gameActionTemplates: [],
   itemTemplates: [],
   enemyTemplates: [],
   itemInstances: [],
@@ -191,6 +193,7 @@ const runtime = {
 
 const actions = {
   registerEffectTemplate(template) { runtime.effectTemplates.push(template); return true; },
+  registerGameActionTemplate(template) { runtime.gameActionTemplates.push(template); return true; },
   registerAbilityTemplate(template) { runtime.abilityTemplates.push(template); return true; },
   registerItemTemplate(template) { runtime.itemTemplates.push(template); return true; },
   registerEnemyTemplate(template) { runtime.enemyTemplates.push(template); return true; },
@@ -221,6 +224,7 @@ function snapshot() {
     itemTemplates: runtime.itemTemplates,
     itemInstances: runtime.itemInstances,
     abilityTemplates: runtime.abilityTemplates,
+    gameActionTemplates: runtime.gameActionTemplates,
     abilityInstances: runtime.abilityInstances,
     effectTemplates: runtime.effectTemplates,
     enemyTemplates: runtime.enemyTemplates,
@@ -236,7 +240,7 @@ const results = orderAiCommandsForExecution(commands).map((command) =>
 assert.equal(results.every((result) => result.status === "success"), true, results.map((result) => result.message).join("\n"));
 assert.equal(runtime.effectTemplates[0].id, effectTemplate.id);
 assert.equal(
-  runtime.abilityTemplates.find((template) => template.id === abilityTemplate.id).effects[0].effectId,
+  runtime.gameActionTemplates.find((action) => action.id === `action-${abilityTemplate.id}`).effects[0].effectId,
   effectTemplate.id,
 );
 assert.equal(runtime.abilityTemplates.some((template) => template.id === summonAbilityTemplate.id), true);
@@ -249,7 +253,10 @@ const { useGameStore } = await vite.ssrLoadModule("/src/store/useGameStore.ts");
 const store = useGameStore.getState();
 const modifierBefore = store.characterDerivedScores[store.selectedCharacterId].modifiers.force;
 assert.equal(store.registerEffectTemplate(effectTemplate), true);
-assert.equal(store.registerAbilityTemplate(abilityTemplate), true);
+const registeredAbility = runtime.abilityTemplates.find((template) => template.id === abilityTemplate.id);
+const registeredAction = runtime.gameActionTemplates.find((action) => action.id === registeredAbility.actionId);
+assert.equal(store.registerGameActionTemplate(registeredAction), true);
+assert.equal(store.registerAbilityTemplate(registeredAbility), true);
 assert.equal(store.registerItemTemplate(itemTemplate), true);
 assert.equal(store.registerEnemyTemplate(enemyTemplate), true);
 assert.equal(store.registerEffectTemplate({

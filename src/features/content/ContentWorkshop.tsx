@@ -3,6 +3,7 @@ import type {
   AbilityTemplate,
   EffectTemplate,
   EnemyTemplate,
+  GameActionTemplate,
   ItemTemplate,
 } from "../../app/types";
 import { useGameStore } from "../../store/useGameStore";
@@ -26,6 +27,7 @@ type EditorMode = "create" | "duplicate" | "replace";
 
 interface DraftValidation {
   template: ContentTemplate | null;
+  action?: GameActionTemplate;
   errors: string[];
 }
 
@@ -58,6 +60,7 @@ export function ContentWorkshop() {
 
   const effectTemplates = useGameStore((state) => state.effectTemplates);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const enemyTemplates = useGameStore((state) => state.enemyTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
@@ -68,6 +71,7 @@ export function ContentWorkshop() {
   const campaign = useGameStore((state) => state.campaign);
   const registerEffectTemplate = useGameStore((state) => state.registerEffectTemplate);
   const registerAbilityTemplate = useGameStore((state) => state.registerAbilityTemplate);
+  const registerGameActionTemplate = useGameStore((state) => state.registerGameActionTemplate);
   const registerItemTemplate = useGameStore((state) => state.registerItemTemplate);
   const registerEnemyTemplate = useGameStore((state) => state.registerEnemyTemplate);
   const setContentTemplateActive = useGameStore((state) => state.setContentTemplateActive);
@@ -83,13 +87,16 @@ export function ContentWorkshop() {
   const catalog = catalogs[kind] as ContentTemplate[];
   const filteredCatalog = useMemo(() => {
     const normalizedQuery = normalizeText(query);
-    return catalog.filter((template) =>
-      !normalizedQuery || normalizeText(`${template.id} ${template.name} ${template.description} ${template.tags.join(" ")}`).includes(normalizedQuery));
-  }, [catalog, query]);
+    return catalog.filter((template) => {
+      const presentation = getTemplatePresentation(kind, template, gameActionTemplates);
+      return !normalizedQuery || normalizeText(`${template.id} ${presentation.name} ${presentation.description} ${presentation.tags.join(" ")}`).includes(normalizedQuery);
+    });
+  }, [catalog, gameActionTemplates, kind, query]);
   const selectedTemplate = catalog.find((template) => template.id === selectedId) ?? null;
   const dependencyContext = useMemo(() => ({
     effectTemplates,
     abilityTemplates,
+    gameActionTemplates,
     itemTemplates,
     enemyTemplates,
     itemInstances,
@@ -103,6 +110,7 @@ export function ContentWorkshop() {
   }), [
     abilityInstances,
     abilityTemplates,
+    gameActionTemplates,
     campaign.world.entities,
     combat,
     effectTemplates,
@@ -131,15 +139,15 @@ export function ContentWorkshop() {
     }
     if (nextTemplate.id !== selectedId) setSelectedId(nextTemplate.id);
     setOriginalId(nextTemplate.id);
-    setDraft(JSON.stringify(nextTemplate, null, 2));
+    setDraft(JSON.stringify(toEditableTemplate(kind, nextTemplate, gameActionTemplates), null, 2));
     setValidation(null);
-  }, [catalog, editorMode, kind, selectedId]);
+  }, [catalog, editorMode, gameActionTemplates, kind, selectedId]);
 
   function selectTemplate(template: ContentTemplate) {
     setSelectedId(template.id);
     setOriginalId(template.id);
     setEditorMode("replace");
-    setDraft(JSON.stringify(template, null, 2));
+    setDraft(JSON.stringify(toEditableTemplate(kind, template, gameActionTemplates), null, 2));
     setValidation(null);
     setNotice(null);
   }
@@ -156,9 +164,11 @@ export function ContentWorkshop() {
 
   function duplicateSelectedTemplate() {
     if (!selectedTemplate) return;
-    const copy = JSON.parse(JSON.stringify(selectedTemplate)) as ContentTemplate;
-    copy.id = createCopyId(selectedTemplate.id, catalog);
-    copy.name = `${selectedTemplate.name} (copie)`;
+    const copy = toEditableTemplate(kind, selectedTemplate, gameActionTemplates);
+    const copyId = createCopyId(selectedTemplate.id, catalog);
+    copy.id = copyId;
+    if (kind === "ability") copy.actionId = `action-${copyId}`;
+    copy.name = `${getTemplatePresentation(kind, selectedTemplate, gameActionTemplates).name} (copie)`;
     setSelectedId(null);
     setOriginalId(null);
     setEditorMode("duplicate");
@@ -171,6 +181,7 @@ export function ContentWorkshop() {
     const result = parseDraft(kind, draft, {
       effectTemplates,
       abilityTemplates,
+      gameActionTemplates,
       itemTemplates,
       enemyTemplates,
     });
@@ -195,7 +206,10 @@ export function ContentWorkshop() {
     const meta: ContentMutationMeta = { source: "admin", action, note: "Modification depuis l'Atelier de contenu." };
     let success = false;
     if (kind === "effect") success = registerEffectTemplate(result.template as EffectTemplate, mode, meta);
-    if (kind === "ability") success = registerAbilityTemplate(result.template as AbilityTemplate, mode, meta);
+    if (kind === "ability" && result.action) {
+      success = registerGameActionTemplate(result.action, mode) &&
+        registerAbilityTemplate(result.template as AbilityTemplate, mode, meta);
+    }
     if (kind === "item") success = registerItemTemplate(result.template as ItemTemplate, mode, meta);
     if (kind === "enemy") success = registerEnemyTemplate(result.template as EnemyTemplate, mode, meta);
     if (!success) {
@@ -205,8 +219,12 @@ export function ContentWorkshop() {
     setSelectedId(result.template.id);
     setOriginalId(result.template.id);
     setEditorMode("replace");
-    setDraft(JSON.stringify(result.template, null, 2));
-    setNotice(`${result.template.name} a été enregistré.`);
+    const nextActions = result.action
+      ? [...gameActionTemplates.filter((action) => action.id !== result.action?.id), result.action]
+      : gameActionTemplates;
+    setDraft(JSON.stringify(toEditableTemplate(kind, result.template, nextActions), null, 2));
+    const savedName = result.action?.name ?? getTemplatePresentation(kind, result.template, gameActionTemplates).name;
+    setNotice(`${savedName} a été enregistré.`);
   }
 
   function toggleSelectedTemplate() {
@@ -221,7 +239,7 @@ export function ContentWorkshop() {
 
   function removeSelectedTemplate() {
     if (!selectedTemplate) return;
-    const confirmation = window.confirm(`Supprimer définitivement « ${selectedTemplate.name} » ?`);
+    const confirmation = window.confirm(`Supprimer définitivement « ${getTemplatePresentation(kind, selectedTemplate, gameActionTemplates).name} » ?`);
     if (!confirmation) return;
     const result = deleteContentTemplate(kind, selectedTemplate.id);
     if (!result.success) {
@@ -300,6 +318,7 @@ export function ContentWorkshop() {
           <div className="mt-2 max-h-[440px] space-y-1 overflow-y-auto pr-1">
             {filteredCatalog.map((template) => {
               const active = isContentTemplateActive(disabledIds, kind, template.id);
+              const presentation = getTemplatePresentation(kind, template, gameActionTemplates);
               return (
                 <button
                   className={`w-full rounded border px-2 py-2 text-left ${
@@ -311,7 +330,7 @@ export function ContentWorkshop() {
                   onClick={() => selectTemplate(template)}
                   type="button"
                 >
-                  <span className="block truncate text-sm text-[#E4D8BE]">{template.name}</span>
+                  <span className="block truncate text-sm text-[#E4D8BE]">{presentation.name}</span>
                   <span className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-[#E4D8BE]/40">
                     <span className="truncate font-mono">{template.id}</span>
                     {!active ? <span className="text-[#9C7A2E]">INACTIF</span> : null}
@@ -327,7 +346,11 @@ export function ContentWorkshop() {
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
               <p className="text-sm font-semibold text-[#E4D8BE]">
-                {editorMode === "replace" ? selectedTemplate?.name ?? "Catalogue vide" : editorMode === "duplicate" ? "Nouvelle copie" : "Nouveau template"}
+                {editorMode === "replace"
+                  ? selectedTemplate
+                    ? getTemplatePresentation(kind, selectedTemplate, gameActionTemplates).name
+                    : "Catalogue vide"
+                  : editorMode === "duplicate" ? "Nouvelle copie" : "Nouveau template"}
               </p>
               <p className="text-[11px] text-[#E4D8BE]/45">
                 {editorMode === "replace" ? "Modification contrôlée" : "Brouillon non enregistré"}
@@ -447,6 +470,7 @@ function parseDraft(
   context: {
     effectTemplates: EffectTemplate[];
     abilityTemplates: AbilityTemplate[];
+    gameActionTemplates: GameActionTemplate[];
     itemTemplates: ItemTemplate[];
     enemyTemplates: EnemyTemplate[];
   },
@@ -464,10 +488,18 @@ function parseDraft(
       : kind === "item"
         ? parseItemTemplate(candidate, context)
         : parseEnemyTemplate(candidate, context);
-  return { template: parsed.value, errors: parsed.errors };
+  if (kind === "ability") {
+    const abilityBundle = parsed.value as ReturnType<typeof parseAbilityTemplate>["value"];
+    return {
+      template: abilityBundle?.ability ?? null,
+      ...(abilityBundle?.action ? { action: abilityBundle.action } : {}),
+      errors: parsed.errors,
+    };
+  }
+  return { template: parsed.value as ContentTemplate | null, errors: parsed.errors };
 }
 
-function createTemplateSkeleton(kind: ContentTemplateKind, id: string): ContentTemplate {
+function createTemplateSkeleton(kind: ContentTemplateKind, id: string): Record<string, unknown> {
   if (kind === "effect") {
     return {
       id,
@@ -486,8 +518,7 @@ function createTemplateSkeleton(kind: ContentTemplateKind, id: string): ContentT
       tags: [],
       combatRole: "utility",
       activation: { timing: "action" },
-      targeting: { allowed: ["self"], required: false, defaultPriority: ["self"] },
-      targetingV2: {
+      targeting: {
         aim: { allowed: ["self"], required: false, range: 0, lineOfSight: false },
         affects: { allowed: ["self"], maxTargets: 1, requiresLiving: true },
         area: { shape: "none" },
@@ -546,6 +577,60 @@ function createTemplateSkeleton(kind: ContentTemplateKind, id: string): ContentT
     resistances: [],
     vulnerabilities: [],
     immunities: [],
+  };
+}
+
+function getTemplatePresentation(
+  kind: ContentTemplateKind,
+  template: ContentTemplate,
+  actions: GameActionTemplate[],
+): { name: string; description: string; tags: string[] } {
+  if (kind === "ability") {
+    const ability = template as AbilityTemplate;
+    const action = actions.find((candidate) => candidate.id === ability.actionId);
+    return {
+      name: action?.name ?? ability.id,
+      description: action?.description ?? "Action liée introuvable.",
+      tags: action?.tags ?? [],
+    };
+  }
+  const named = template as EffectTemplate | ItemTemplate | EnemyTemplate;
+  return { name: named.name, description: named.description, tags: named.tags };
+}
+
+function toEditableTemplate(
+  kind: ContentTemplateKind,
+  template: ContentTemplate,
+  actions: GameActionTemplate[],
+): Record<string, unknown> {
+  if (kind !== "ability") {
+    return JSON.parse(JSON.stringify(template)) as Record<string, unknown>;
+  }
+  const ability = template as AbilityTemplate;
+  const action = actions.find((candidate) => candidate.id === ability.actionId);
+  return {
+    id: ability.id,
+    actionId: ability.actionId,
+    name: action?.name ?? "Action introuvable",
+    description: action?.description ?? "",
+    types: action?.types ?? ["capacity"],
+    tags: action?.tags ?? [],
+    ...(action?.combatRole ? { combatRole: action.combatRole } : {}),
+    activation: action?.activation ?? { timing: "action" },
+    targeting: action?.targeting ?? {
+      aim: { allowed: ["self"], required: false },
+      affects: { allowed: ["self"], maxTargets: 1 },
+      area: { shape: "none" },
+      defaultPriority: ["self"],
+      suggestedSides: ["self"],
+    },
+    ...(action?.duration ? { duration: action.duration } : {}),
+    effects: action?.effects ?? [],
+    ...(action?.scaling ? { scaling: action.scaling } : {}),
+    ...(ability.resourceCost ? { resourceCost: ability.resourceCost } : {}),
+    ...(ability.charges ? { charges: ability.charges } : {}),
+    ...(ability.requirements ? { requirements: ability.requirements } : {}),
+    modules: ability.modules,
   };
 }
 

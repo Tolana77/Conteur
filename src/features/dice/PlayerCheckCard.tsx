@@ -3,64 +3,76 @@ import type { PlayerCheckRequest } from "../../app/types";
 import { useGameStore } from "../../store/useGameStore";
 import { HighlightedGameText } from "../../ui/gameTerms";
 import {
+  continueAfterPlayerCheck,
+} from "../ai-director/automatedDirector";
+import {
   formatCheckFormula,
   getPlayerCheckLabel,
   resolvePlayerCheckRequest,
 } from "../ai-director/improvisedActions";
 
-export function PlayerCheckCard({ request }: { request: PlayerCheckRequest }) {
+export function PlayerCheckCard({
+  request,
+  onBusyChange,
+}: {
+  request: PlayerCheckRequest;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const [isResolving, setIsResolving] = useState(false);
   const formula = formatCheckFormula(request.modifierPreview);
   const label = getPlayerCheckLabel(request.skill, request.stat);
 
-  const handleRoll = () => {
+  const handleRoll = async () => {
     if (isResolving || request.status !== "pending") return;
     setIsResolving(true);
+    onBusyChange?.(true);
 
-    const state = useGameStore.getState();
-    const liveRequest = state.playerCheckRequests.find((candidate) => candidate.id === request.id);
-    if (!liveRequest || liveRequest.status !== "pending") {
+    try {
+      const state = useGameStore.getState();
+      const liveRequest = state.playerCheckRequests.find((candidate) => candidate.id === request.id);
+      if (!liveRequest || liveRequest.status !== "pending") return;
+
+      const result = resolvePlayerCheckRequest(liveRequest, {
+        characters: state.characters,
+        derivedScores: state.characterDerivedScores,
+        itemInstances: state.itemInstances,
+        itemTemplates: state.itemTemplates,
+        rollFormula: state.rollFormula,
+        spendItemQuantity: state.spendItemQuantity,
+        recordCampaignEvent: state.recordCampaignEvent,
+      });
+
+      if (result.status === "success") {
+        const completed = useGameStore.getState().completePlayerCheck(request.id, result.resolution);
+        if (completed) await continueAfterPlayerCheck(request.id);
+      } else {
+        useGameStore.getState().failPlayerCheck(request.id, result.message);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "erreur inconnue";
+      useGameStore.getState().addGmMessage(
+        `Le résultat du jet est enregistré, mais le Conteur ne parvient pas encore à en poursuivre le récit : ${reason}`,
+        { kind: "checkResult", relatedCheckId: request.id },
+      );
+    } finally {
       setIsResolving(false);
-      return;
+      onBusyChange?.(false);
     }
-
-    const result = resolvePlayerCheckRequest(liveRequest, {
-      characters: state.characters,
-      derivedScores: state.characterDerivedScores,
-      itemInstances: state.itemInstances,
-      itemTemplates: state.itemTemplates,
-      rollFormula: state.rollFormula,
-      spendItemQuantity: state.spendItemQuantity,
-      recordCampaignEvent: state.recordCampaignEvent,
-    });
-
-    if (result.status === "success") {
-      const completed = useGameStore.getState().completePlayerCheck(request.id, result.resolution);
-      if (completed) useGameStore.getState().addGmMessage(result.message);
-    } else {
-      useGameStore.getState().failPlayerCheck(request.id, result.message);
-    }
-    setIsResolving(false);
   };
 
   return (
     <article className="flex justify-start">
       <section className="w-full max-w-[560px] border border-[#9C7A2E]/55 bg-[#221E29] px-4 py-3 text-[#E4D8BE]">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="rune-label text-[0.68rem] text-[#9C7A2E]">Jet demandé</p>
-            <h3 className="ink-heading mt-0.5 text-base font-semibold">
-              <HighlightedGameText text={request.action} />
-            </h3>
-          </div>
-          <span className="border border-[#9C7A2E]/45 bg-[#15121A] px-2 py-1 text-xs text-[#D6C9AE]">
-            DD {request.dc}
-          </span>
+        <div className="min-w-0">
+          <p className="rune-label text-[0.68rem] text-[#9C7A2E]">Jet demandé</p>
+          <h3 className="ink-heading mt-0.5 text-base font-semibold">
+            <HighlightedGameText mode="narrative" text={request.action} />
+          </h3>
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <strong className="font-semibold text-[#E4D8BE]">
-            <HighlightedGameText text={label} />
+            <HighlightedGameText mode="mechanical" text={label} />
           </strong>
           <span className="font-mono text-[#D6C9AE]">{formula}</span>
         </div>
@@ -79,6 +91,10 @@ export function PlayerCheckCard({ request }: { request: PlayerCheckRequest }) {
             </button>
             {request.error ? <p className="mt-2 text-xs text-[#D78A82]">{request.error}</p> : null}
           </div>
+        ) : isResolving ? (
+          <p className="mt-3 border-t border-[#9C7A2E]/25 pt-2 text-sm text-[#D6C9AE]">
+            Le Conteur interprète le résultat…
+          </p>
         ) : request.resolution ? (
           <p className="mt-3 border-t border-[#9C7A2E]/25 pt-2 text-sm text-[#BFB39E]">
             Résultat enregistré : <strong className="text-[#E4D8BE]">{request.resolution.result}</strong>

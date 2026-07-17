@@ -1,5 +1,5 @@
 export const targetingContentSchema =
-  "targetingV2={aim:{allowed:[self|entity|position|direction|item],required,range,lineOfSight},affects:{allowed:[self|living|enemy|ally|object|position],includeSelf},area?:{shape:none|circle|cone|line|selfAura,radius?,length?,width?}}";
+  "targeting={aim:{allowed:[self|entity|position|direction|item],required,range,lineOfSight,label?:cible|destination},affects:{allowed:[self|living|enemy|ally|object|position],includeSelf?,maxTargets?},area?:{shape:none|circle|cone|line|selfAura,radius?,length?,width?},defaultPriority?,suggestedSides?}";
 
 export const assetContentSchemaText = [
   "Effect={id,name,description,tags,actions:[{operation,variables}]}",

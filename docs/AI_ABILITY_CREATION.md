@@ -11,7 +11,7 @@ La logique doit passer par :
 - `combatRole`
 - `activation`
 - `resourceCost`
-- `targetingV2`
+- `targeting`
 - `charges`
 - `scaling`
 - `requirements`
@@ -39,12 +39,6 @@ Pour appliquer un etat, utilise toujours l'effet `applyCondition` avec la variab
   activation: { timing: "action" },
   resourceCost: { type: "charge", amount: 1 },
   targeting: {
-    allowed: ["entity", "position", "free"],
-    required: true,
-    defaultPriority: ["nearestEnemy"],
-    range: 12
-  },
-  targetingV2: {
     aim: { allowed: ["entity", "position"], required: true, range: 12, lineOfSight: true },
     area: { shape: "none" },
     affects: { allowed: ["living"], maxTargets: 1, requiresLiving: true },
@@ -135,9 +129,11 @@ Les effets peuvent utiliser :
 Convention : `FOR`, `DEX`, `CON`, `INT`, `SAG`, `CHA` designent le modificateur
 de caracteristique, pas la valeur brute.
 
-## targetingV2
+## targeting
 
-Le ciblage decrit ce que le joueur vise et ce qui est affecte.
+Le ciblage decrit ce que le joueur vise et ce qui est affecte. Il n'existe
+aucun second format de ciblage : ce bloc est la source de verite du moteur,
+du chat et de la carte de combat.
 
 Exemples :
 
@@ -209,7 +205,7 @@ Une capacite valide doit respecter au minimum :
 - id unique
 - nom non vide
 - `combatRole` explicite
-- `targetingV2` present sauf passif tres simple
+- `targeting` present sauf passif tres simple
 - effet connu
 - variables obligatoires presentes
 - capacite a charges avec recharge

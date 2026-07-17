@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
 export type GameStat = "force" | "dexterite" | "constitution" | "intelligence" | "sagesse" | "charisme";
+export type GameTermHighlightMode = "mechanical" | "narrative" | "none";
 
 interface GameTerm {
   label: string;
@@ -61,12 +62,41 @@ const termPattern = Array.from(termLookup.keys())
   .map(escapeRegExp)
   .join("|");
 const gameTermRegex = new RegExp(`(?<![A-Za-zÀ-ÖØ-öø-ÿ])(${termPattern})(?![A-Za-zÀ-ÖØ-öø-ÿ])`, "giu");
+const statAbbreviations = new Set(["for", "dex", "con", "int", "sag", "cha"]);
 
-export function HighlightedGameText({ text }: { text: string }) {
-  return <>{renderHighlightedGameText(text)}</>;
+const mechanicalReferencePrefix = new RegExp(
+  String.raw`\b(?:test|tests|jet|jets|sauvegarde|sauvegardes|bonus|malus|modificateur|modificateurs|score|scores|compétence|compétences|caractéristique|caractéristiques)\b[^.!?;:\n]{0,40}(?:(?:de|du|des|en)\s+|d['’])$`,
+  "iu",
+);
+const mechanicalLabelPrefix = new RegExp(
+  String.raw`\b(?:test|jet|sauvegarde|bonus|malus|modificateur|score|compétence|caractéristique)s?\s*:\s*$`,
+  "iu",
+);
+const difficultyReferencePrefix = /\bDD\s*\d+\s+(?:(?:de|en)\s+|d['’])$/iu;
+const mechanicalTriggerBeforeParenthesis = new RegExp(
+  String.raw`\b(?:test|jet|sauvegarde|bonus|malus|modificateur|score|compétence|caractéristique)s?\b[^.!?;\n]{0,64}\(\s*$`,
+  "iu",
+);
+const abbreviationAfterTerm = /^\s*\(\s*(?:FOR|DEX|CON|INT|SAG|CHA)\b/u;
+const numericValueAfterTerm = /^\s*(?::|=|[+-])\s*[+-]?\d/u;
+const formulaBeforeTerm = /(?:\b\d+d\d+|\b\d+)\s*[+-]\s*$/iu;
+
+export function HighlightedGameText({
+  text,
+  mode = "narrative",
+}: {
+  text: string;
+  mode?: GameTermHighlightMode;
+}) {
+  return <>{renderHighlightedGameText(text, mode)}</>;
 }
 
-export function renderHighlightedGameText(text: string): ReactNode[] {
+export function renderHighlightedGameText(
+  text: string,
+  mode: GameTermHighlightMode = "narrative",
+): ReactNode[] {
+  if (mode === "none") return [text];
+
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
 
@@ -76,6 +106,10 @@ export function renderHighlightedGameText(text: string): ReactNode[] {
     const term = termLookup.get(matchedText.toLowerCase());
 
     if (!term) {
+      return;
+    }
+
+    if (!shouldHighlightGameTerm(text, matchedText, matchIndex, mode)) {
       return;
     }
 
@@ -99,6 +133,40 @@ export function renderHighlightedGameText(text: string): ReactNode[] {
   }
 
   return nodes.length > 0 ? nodes : [text];
+}
+
+function shouldHighlightGameTerm(
+  text: string,
+  matchedText: string,
+  matchIndex: number,
+  mode: Exclude<GameTermHighlightMode, "none">,
+): boolean {
+  const normalizedTerm = matchedText.toLocaleLowerCase("fr-FR");
+
+  // Les abréviations ne sont mécaniques qu'en capitales. Cela évite notamment
+  // de colorer les mots français « con », « for » ou « int » dans un récit.
+  if (statAbbreviations.has(normalizedTerm)) {
+    return matchedText === matchedText.toLocaleUpperCase("fr-FR");
+  }
+
+  if (mode === "mechanical") return true;
+
+  const before = text
+    .slice(Math.max(0, matchIndex - 96), matchIndex)
+    .replace(/\s+/gu, " ");
+  const after = text.slice(matchIndex + matchedText.length, matchIndex + matchedText.length + 32);
+
+  // Dans un récit, un nom complet n'est coloré que lorsque la formulation
+  // prouve qu'il s'agit d'une règle, jamais sur sa seule présence lexicale.
+  if (mechanicalReferencePrefix.test(before)) return true;
+  if (mechanicalLabelPrefix.test(before)) return true;
+  if (difficultyReferencePrefix.test(before)) return true;
+  if (numericValueAfterTerm.test(after)) return true;
+  if (abbreviationAfterTerm.test(after)) return true;
+  if (formulaBeforeTerm.test(before)) return true;
+  if (/\(\s*$/u.test(before) && mechanicalTriggerBeforeParenthesis.test(before)) return true;
+
+  return false;
 }
 
 export function getGameTermTextStyle(stat: GameStat): CSSProperties {

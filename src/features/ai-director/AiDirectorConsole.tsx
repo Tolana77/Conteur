@@ -54,7 +54,10 @@ export function AiDirectorConsole() {
   const itemTemplates = useGameStore((state) => state.itemTemplates);
   const itemInstances = useGameStore((state) => state.itemInstances);
   const abilityTemplates = useGameStore((state) => state.abilityTemplates);
+  const gameActionTemplates = useGameStore((state) => state.gameActionTemplates);
   const abilityInstances = useGameStore((state) => state.abilityInstances);
+  const spellTemplates = useGameStore((state) => state.spellTemplates);
+  const spellbooks = useGameStore((state) => state.spellbooks);
   const effectTemplates = useGameStore((state) => state.effectTemplates);
   const enemyTemplates = useGameStore((state) => state.enemyTemplates);
   const disabledContentTemplateIds = useGameStore((state) => state.disabledContentTemplateIds);
@@ -71,7 +74,10 @@ export function AiDirectorConsole() {
     itemTemplates,
     itemInstances,
     abilityTemplates,
+    gameActionTemplates,
     abilityInstances,
+    spellTemplates,
+    spellbooks,
     effectTemplates,
     enemyTemplates,
     disabledContentTemplateIds,
@@ -79,6 +85,9 @@ export function AiDirectorConsole() {
   }), [
     abilityInstances,
     abilityTemplates,
+    gameActionTemplates,
+    spellbooks,
+    spellTemplates,
     effectTemplates,
     enemyTemplates,
     disabledContentTemplateIds,
@@ -110,6 +119,7 @@ export function AiDirectorConsole() {
             itemTemplates: storageSnapshot.itemTemplates,
             itemInstances: storageSnapshot.itemInstances,
             abilityTemplates: storageSnapshot.abilityTemplates,
+            gameActionTemplates: storageSnapshot.gameActionTemplates,
             effectTemplates: storageSnapshot.effectTemplates,
             enemyTemplates: storageSnapshot.enemyTemplates,
           })
@@ -122,6 +132,7 @@ export function AiDirectorConsole() {
       storageSnapshot.itemInstances,
       storageSnapshot.itemTemplates,
       storageSnapshot.abilityTemplates,
+      storageSnapshot.gameActionTemplates,
       storageSnapshot.effectTemplates,
       storageSnapshot.enemyTemplates,
       storageSnapshot.selectedCharacterId,
@@ -755,7 +766,10 @@ function createLiveSnapshot(state: ReturnType<typeof useGameStore.getState>): Ai
     itemTemplates: state.itemTemplates,
     itemInstances: state.itemInstances,
     abilityTemplates: state.abilityTemplates,
+    gameActionTemplates: state.gameActionTemplates,
     abilityInstances: state.abilityInstances,
+    spellTemplates: state.spellTemplates,
+    spellbooks: state.spellbooks,
     effectTemplates: state.effectTemplates,
     enemyTemplates: state.enemyTemplates,
     disabledContentTemplateIds: state.disabledContentTemplateIds,

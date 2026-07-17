@@ -301,16 +301,14 @@ export const itemEffectCatalog: EffectCatalogEntry[] = [
 
 export const itemEffects = {
   preventUnequip: preventUnequip(),
-  rareCharismaPlus2: modifyStat("charisme", 2),
+  rareStrengthPlus2: modifyStat("force", 2),
   heal1: heal(1),
   heal3: heal(3),
   heal4: heal("1d8 + CON"),
   healingPotion: heal("2d4 + 2"),
   damagePoison2: damage("1d4", "poison", { nom: "Poison" }),
   acidVial: damage("2d6", "acide", { nom: "Acide" }),
-  damageMixed1: [heal("1d4"), damage("1d4", "poison", { nom: "Poison" })],
   fireballLevel3: damage("8d6", "feu", { nom: "Boule de feu", level: 3 }),
-  chaoticDamage3: randomDamage("1d6 + NIV", ["feu", "froid", "foudre", "poison"]),
   reduceFire2: reduceDamage("feu", 2, 1, "Résistance au feu"),
   silence: applyCondition("silenced", { nom: "Silence", duration: 3 }),
   caltropsZone: {
@@ -343,12 +341,6 @@ export const itemEffects = {
       color: "#5C5566",
     },
   },
-  transmuteMagnetStone: inventoryInteraction({
-    nom: "Transmutation",
-    requiredTemplateId: "tpl_magnet_stone",
-    consumeRequired: true,
-    addTemplateId: "tpl_singing_coin",
-  }),
   grantEmberBolt: grantAbility("abl_ember_bolt", "Trait de braise"),
   grantShadowStep: grantAbility("abl_shadow_step", "Pas d'ombre"),
   applyPoisoned: applyCondition("poisoned"),

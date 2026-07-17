@@ -19,8 +19,8 @@ export const AI_AGENT_PROMPT_LIMITS = Object.freeze({
   combatSetupManager: 11_000,
   tacticalTemplateManager: 15_000,
   assetTemplateManager: 17_000,
-  worldManager: 10_000,
-  narrationManager: 9_000,
+  worldManager: 11_000,
+  narrationManager: 10_000,
   rulesValidator: 10_000,
 });
 

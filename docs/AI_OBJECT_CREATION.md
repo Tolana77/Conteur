@@ -350,9 +350,9 @@ de le consommer et/ou de creer un nouvel objet.
 
 ```ts
 inventoryInteraction({
-  requiredTemplateId: "tpl_magnet_stone",
+  requiredTemplateId: "tpl_wild_plant",
   consumeRequired: true,
-  addTemplateId: "tpl_singing_coin",
+  addTemplateId: "tpl_healing_potion",
   quantity: 1
 })
 ```
@@ -493,17 +493,17 @@ const poisonVialInstance = {
 ### Armure existante avec effet d'instance
 
 Ne pas creer un nouveau template pour une armure presque identique.
-Reutiliser `tpl_cracked_armor` et ajouter l'effet propre a cet exemplaire.
+Reutiliser `tpl_breastplate` et ajouter l'effet propre a cet exemplaire.
 
 ```ts
 const reinforcedArmorInstance = {
-  id: "item-cracked-armor-01",
-  templateId: "tpl_cracked_armor",
+  id: "item-ember-breastplate-01",
+  templateId: "tpl_breastplate",
   quantity: 1,
   overrides: {
-    name: "Armure fendue pare-braise",
-    description: "Une vieille cuirasse reparee avec un alliage qui supporte mieux la chaleur.",
-    "base.weight": 8.5
+    name: "Cuirasse pare-braise",
+    description: "Une cuirasse noircie, reparee avec un alliage qui supporte mieux la chaleur.",
+    "base.weight": 9.4
   },
   current: {},
   data: {},

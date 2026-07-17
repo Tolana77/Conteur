@@ -10,12 +10,12 @@ import { WorldStatus } from "../features/world/WorldStatus";
 
 type PanelId = "left" | "center" | "right" | "combat" | "genre";
 
-const panels: Array<{ id: PanelId; label: string }> = [
-  { id: "left", label: "Personnages" },
-  { id: "combat", label: "Combat" },
-  { id: "center", label: "Lecture" },
-  { id: "right", label: "Fiche" },
-  { id: "genre", label: "Univers" },
+const panels: Array<{ id: PanelId; label: string; mobileLabel: string }> = [
+  { id: "left", label: "Personnages", mobileLabel: "Persos" },
+  { id: "combat", label: "Combat", mobileLabel: "Combat" },
+  { id: "center", label: "Lecture", mobileLabel: "Lecture" },
+  { id: "right", label: "Fiche", mobileLabel: "Fiche" },
+  { id: "genre", label: "Univers", mobileLabel: "Univers" },
 ];
 
 function getNextPanel(currentPanel: PanelId, direction: 1 | -1): PanelId {
@@ -111,7 +111,7 @@ export function GamePage() {
           >
             {panels.map((panel) => (
               <button
-                className={`rounded px-1 py-2 text-xs font-semibold sm:px-2 sm:text-sm ${
+                className={`min-w-0 rounded px-0.5 py-2 text-[10px] font-semibold sm:px-2 sm:text-sm ${
                   activePanel === panel.id
                     ? "bg-[#5A2233] text-[#E4D8BE]"
                     : "text-[#E4D8BE]/75 hover:bg-[#6B4A5C]/25"
@@ -120,12 +120,13 @@ export function GamePage() {
                 onClick={() => setActivePanel(panel.id)}
                 type="button"
               >
-                {panel.label}
+                <span className="sm:hidden">{panel.mobileLabel}</span>
+                <span className="hidden sm:inline">{panel.label}</span>
               </button>
             ))}
           </nav>
             <button
-              className="h-full rounded border border-[#9C7A2E]/30 bg-[#221E29] px-3 py-2 text-sm font-bold text-[#E4D8BE] hover:bg-[#5A2233]/50"
+              className="h-full rounded border border-[#9C7A2E]/30 bg-[#221E29] px-2 py-2 text-sm font-bold text-[#E4D8BE] hover:bg-[#5A2233]/50 sm:px-3"
               onClick={() => setConsoleView("campaign")}
               type="button"
             >

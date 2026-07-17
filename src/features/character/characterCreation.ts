@@ -3,6 +3,7 @@ import type {
   CharacterStats,
   EffectTemplate,
   EnemyTemplate,
+  GameActionTemplate,
   ItemTemplate,
 } from "../../app/types";
 import {
@@ -66,6 +67,7 @@ export interface CharacterCreationPackage extends CampaignPartySetup {
   schemaVersion: typeof CHARACTER_CREATION_SCHEMA_VERSION;
   characters: [GeneratedStartingCharacter];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   effectTemplates: EffectTemplate[];
 }
 
@@ -80,6 +82,7 @@ export interface CharacterCreationContext {
   startingEquipment: string;
   itemTemplates: ItemTemplate[];
   abilityTemplates: AbilityTemplate[];
+  gameActionTemplates: GameActionTemplate[];
   effectTemplates: EffectTemplate[];
   enemyTemplates?: EnemyTemplate[];
 }
@@ -147,6 +150,7 @@ export function createClassicCharacterPackage(
     }],
     startingItems,
     abilityTemplates: [],
+    gameActionTemplates: [],
     effectTemplates: [],
   };
   return validateCharacterCreationPackage(setup, context);
@@ -191,7 +195,7 @@ export function buildCharacterCreationPrompt(
     characterSkillDefinitions.map((skill) => `${skill.name} (${statShort(skill.stat)})`).join(", "),
     "",
     "CAPACITÉS EXISTANTES",
-    formatAbilityCatalog(context.abilityTemplates),
+    formatAbilityCatalog(context.abilityTemplates, context.gameActionTemplates ?? []),
     "",
     "EFFETS EXISTANTS",
     formatEffectCatalog(context.effectTemplates),
@@ -261,6 +265,7 @@ export function parseCharacterCreationPackage(
   const contentContext: ContentCatalogContext = {
     effectTemplates: [...context.effectTemplates, ...effectTemplates],
     abilityTemplates: context.abilityTemplates,
+    gameActionTemplates: context.gameActionTemplates ?? [],
     itemTemplates: context.itemTemplates,
     enemyTemplates: context.enemyTemplates ?? [],
     knownIds: {
@@ -270,7 +275,7 @@ export function parseCharacterCreationPackage(
       enemyTemplateIds: new Set(),
     },
   };
-  const abilityTemplates = rawAbilities.flatMap((source, index) => {
+  const abilityBundles = rawAbilities.flatMap((source, index) => {
     const result = parseAbilityTemplate(source, contentContext);
     if (!result.value) {
       result.errors.forEach((error) => errors.push(`abilityTemplates[${index}]: ${error}`));
@@ -278,7 +283,10 @@ export function parseCharacterCreationPackage(
     }
     return [result.value];
   });
+  const abilityTemplates = abilityBundles.map((bundle) => bundle.ability);
+  const gameActionTemplates = abilityBundles.map((bundle) => bundle.action);
   rejectCatalogCollisions(abilityTemplates, context.abilityTemplates, "capacité", errors);
+  rejectCatalogCollisions(gameActionTemplates, context.gameActionTemplates ?? [], "action", errors);
 
   const characterSource = record(root.character, "character", errors);
   const character = characterSource
@@ -294,6 +302,7 @@ export function parseCharacterCreationPackage(
     characters: [character],
     startingItems,
     abilityTemplates,
+    gameActionTemplates,
     effectTemplates,
   };
   return validateCharacterCreationPackage(setup, context, errors, warnings);
@@ -346,6 +355,7 @@ export function validateCharacterCreationPackage(
   }
 
   const allAbilityTemplates = [...context.abilityTemplates, ...setup.abilityTemplates];
+  const allGameActions = [...(context.gameActionTemplates ?? []), ...(setup.gameActionTemplates ?? [])];
   const abilityIds = [...new Set(character.abilityTemplateIds)];
   character.abilityTemplateIds = abilityIds;
   abilityIds.forEach((id) => {
@@ -357,7 +367,7 @@ export function validateCharacterCreationPackage(
   if (abilityIds.length > abilityLimit) {
     errors.push(`Trop de capacités de départ: ${abilityIds.length}/${abilityLimit}.`);
   }
-  validateAbilityRequirements(abilityIds, allAbilityTemplates, setup.startingItems, context.itemTemplates, errors, warnings);
+  validateAbilityRequirements(abilityIds, allAbilityTemplates, allGameActions, setup.startingItems, context.itemTemplates, errors, warnings);
   validateCustomAbilityBalance(setup, context, errors, warnings);
   validateStartingItems(setup.startingItems, character.id, context.itemTemplates, errors, warnings);
 
@@ -528,11 +538,18 @@ function validateCustomAbilityBalance(
   const effectCatalog = [...context.effectTemplates, ...setup.effectTemplates];
   const usedCustomIds = new Set(setup.characters[0].abilityTemplateIds);
   setup.abilityTemplates.forEach((ability) => {
-    if (!usedCustomIds.has(ability.id)) warnings.push(`La capacité créée ${ability.name} n'est pas attribuée au personnage.`);
-    if (ability.charges && ability.charges.max > 3 + Math.floor(level / 5)) {
-      errors.push(`${ability.name}: trop de charges pour le niveau ${level}.`);
+    const action = setup.gameActionTemplates?.find((candidate) => candidate.id === ability.actionId)
+      ?? context.gameActionTemplates?.find((candidate) => candidate.id === ability.actionId);
+    const name = action?.name ?? ability.id;
+    if (!action) {
+      errors.push(`${ability.id}: action ${ability.actionId} introuvable.`);
+      return;
     }
-    const resolvedEffects = resolveEffectReferences(ability.effects, effectCatalog);
+    if (!usedCustomIds.has(ability.id)) warnings.push(`La capacité créée ${name} n'est pas attribuée au personnage.`);
+    if (ability.charges && ability.charges.max > 3 + Math.floor(level / 5)) {
+      errors.push(`${name}: trop de charges pour le niveau ${level}.`);
+    }
+    const resolvedEffects = resolveEffectReferences(action.effects, effectCatalog);
     const consequentialEffects = new Set([
       "applyCondition",
       "createZone",
@@ -546,65 +563,65 @@ function validateCustomAbilityBalance(
       "summon",
       "teleport",
     ]);
-    if (ability.activation.timing === "free" && resolvedEffects.some((effect) => consequentialEffects.has(effect.effectId))) {
-      errors.push(`${ability.name}: une action gratuite ne peut pas produire un effet mécanique majeur.`);
+    if (action.activation.timing === "free" && resolvedEffects.some((effect) => consequentialEffects.has(effect.effectId))) {
+      errors.push(`${name}: une action gratuite ne peut pas produire un effet mécanique majeur.`);
     }
-    if (ability.activation.timing === "passive" && resolvedEffects.some((effect) => ["damage", "heal", "move", "randomDamage", "summon", "teleport"].includes(effect.effectId))) {
-      errors.push(`${ability.name}: un passif ne peut pas exécuter directement cet effet.`);
+    if (action.activation.timing === "passive" && resolvedEffects.some((effect) => ["damage", "heal", "move", "randomDamage", "summon", "teleport"].includes(effect.effectId))) {
+      errors.push(`${name}: un passif ne peut pas exécuter directement cet effet.`);
     }
-    if (ability.targetingV2) {
-      const range = estimateFormulaMaximum(ability.targetingV2.aim.range, level);
-      if (range > 6 + level * 6) errors.push(`${ability.name}: portée trop élevée (${range} m).`);
-      const area = ability.targetingV2.area;
+    if (action.targeting) {
+      const range = estimateFormulaMaximum(action.targeting.aim.range, level);
+      if (range > 6 + level * 6) errors.push(`${name}: portée trop élevée (${range} m).`);
+      const area = action.targeting.area;
       const areaSize = Math.max(
         estimateFormulaMaximum(area?.radius, level),
         estimateFormulaMaximum(area?.length, level),
         estimateFormulaMaximum(area?.width, level),
       );
-      if (areaSize > 2 + level * 2) errors.push(`${ability.name}: zone d'effet trop vaste (${areaSize} m).`);
-      if ((ability.targetingV2.affects.maxTargets ?? 1) > 2 + Math.floor(level / 2)) {
-        errors.push(`${ability.name}: trop de cibles pour le niveau ${level}.`);
+      if (areaSize > 2 + level * 2) errors.push(`${name}: zone d'effet trop vaste (${areaSize} m).`);
+      if ((action.targeting.affects.maxTargets ?? 1) > 2 + Math.floor(level / 2)) {
+        errors.push(`${name}: trop de cibles pour le niveau ${level}.`);
       }
     }
     resolvedEffects.forEach((effect) => {
       const value = effect.variables?.value;
       if (effect.effectId === "damage" || effect.effectId === "randomDamage") {
         const maximum = estimateFormulaMaximum(value, level);
-        if (maximum > 12 + level * 6) errors.push(`${ability.name}: dégâts potentiels trop élevés (${maximum}).`);
+        if (maximum > 12 + level * 6) errors.push(`${name}: dégâts potentiels trop élevés (${maximum}).`);
       }
       if (effect.effectId === "heal") {
         const maximum = estimateFormulaMaximum(value, level);
-        if (maximum > 10 + level * 4) errors.push(`${ability.name}: soin potentiel trop élevé (${maximum}).`);
+        if (maximum > 10 + level * 4) errors.push(`${name}: soin potentiel trop élevé (${maximum}).`);
       }
       if (effect.effectId === "teleport") {
         const range = estimateFormulaMaximum(effect.variables?.range, level);
-        if (range > 3 + level * 1.5) errors.push(`${ability.name}: téléportation trop longue (${range} m).`);
+        if (range > 3 + level * 1.5) errors.push(`${name}: téléportation trop longue (${range} m).`);
       }
       if (effect.effectId === "move") {
         const distance = estimateFormulaMaximum(effect.variables?.distance, level);
-        if (distance > 3 + level) errors.push(`${ability.name}: déplacement forcé trop long (${distance} m).`);
+        if (distance > 3 + level) errors.push(`${name}: déplacement forcé trop long (${distance} m).`);
       }
       if (effect.effectId === "modifyStat") {
         const modifier = estimateFormulaMagnitude(effect.variables?.value, level);
-        const maximum = ability.activation.timing === "passive" ? 1 : 2;
-        if (modifier > maximum) errors.push(`${ability.name}: modification de caractéristique trop élevée (${modifier}).`);
+        const maximum = action.activation.timing === "passive" ? 1 : 2;
+        if (modifier > maximum) errors.push(`${name}: modification de caractéristique trop élevée (${modifier}).`);
       }
       if (effect.effectId === "reduceDamage") {
         const reduction = estimateFormulaMaximum(effect.variables?.value, level);
-        if (reduction > 2 + Math.floor(level / 2)) errors.push(`${ability.name}: réduction de dégâts trop élevée (${reduction}).`);
+        if (reduction > 2 + Math.floor(level / 2)) errors.push(`${name}: réduction de dégâts trop élevée (${reduction}).`);
       }
       if (effect.effectId === "modifyResource") {
         const amount = estimateFormulaMagnitude(effect.variables?.value, level);
-        if (amount > 1) errors.push(`${ability.name}: modification de ressource trop élevée (${amount}).`);
+        if (amount > 1) errors.push(`${name}: modification de ressource trop élevée (${amount}).`);
       }
       if (effect.effectId === "createZone") {
         const radius = estimateFormulaMaximum(effect.variables?.radius, level);
         const damage = estimateFormulaMaximum(effect.variables?.damage, level);
-        if (radius > 2 + level) errors.push(`${ability.name}: zone créée trop vaste (${radius} m).`);
-        if (damage > 8 + level * 4) errors.push(`${ability.name}: dégâts de zone trop élevés (${damage}).`);
+        if (radius > 2 + level) errors.push(`${name}: zone créée trop vaste (${radius} m).`);
+        if (damage > 8 + level * 4) errors.push(`${name}: dégâts de zone trop élevés (${damage}).`);
       }
       if (effect.effectId === "summon" && level < 5) {
-        errors.push(`${ability.name}: les invocations autonomes ne sont pas autorisées avant le niveau 5.`);
+        errors.push(`${name}: les invocations autonomes ne sont pas autorisées avant le niveau 5.`);
       }
     });
   });
@@ -613,6 +630,7 @@ function validateCustomAbilityBalance(
 function validateAbilityRequirements(
   abilityIds: string[],
   abilities: AbilityTemplate[],
+  actions: GameActionTemplate[],
   items: GeneratedStartingItem[],
   itemTemplates: ItemTemplate[],
   errors: string[],
@@ -626,16 +644,17 @@ function validateAbilityRequirements(
   abilityIds.forEach((abilityId) => {
     const ability = abilities.find((template) => template.id === abilityId);
     if (!ability) return;
+    const name = actions.find((action) => action.id === ability.actionId)?.name ?? ability.id;
     ability.requirements?.forEach((requirement) => {
       if (requirement.type === "equippedItemTag" && !equippedTags.has(normalize(requirement.tag))) {
-        errors.push(`${ability.name} exige un objet équipé avec le tag ${requirement.tag}.`);
+        errors.push(`${name} exige un objet équipé avec le tag ${requirement.tag}.`);
       }
       if (requirement.type === "equippedItemType" && !equippedTypes.has(normalize(requirement.itemType))) {
-        errors.push(`${ability.name} exige un objet équipé de type ${requirement.itemType}.`);
+        errors.push(`${name} exige un objet équipé de type ${requirement.itemType}.`);
       }
     });
     if (ability.charges && (ability.charges.initial ?? ability.charges.max) === 0) {
-      warnings.push(`${ability.name} commence sans charge et devra être rechargée en jeu.`);
+      warnings.push(`${name} commence sans charge et devra être rechargée en jeu.`);
     }
   });
 }
@@ -723,14 +742,16 @@ function createCharacterResponseSkeleton(level: number) {
     }],
     effectTemplates: [],
     abilityTemplates: [],
+    gameActionTemplates: [],
   };
 }
 
-function formatAbilityCatalog(catalog: AbilityTemplate[]): string {
+function formatAbilityCatalog(catalog: AbilityTemplate[], actions: GameActionTemplate[]): string {
   if (!catalog.length) return "Aucune.";
   return catalog.map((ability) => {
+    const action = actions.find((candidate) => candidate.id === ability.actionId);
     const charges = ability.charges ? `, ${ability.charges.max} charge(s)` : "";
-    return `- ${ability.id}: ${ability.name} [${ability.combatRole ?? "utility"}, ${ability.activation.timing}${charges}]`;
+    return `- ${ability.id}: ${action?.name ?? ability.id} [${action?.combatRole ?? "utility"}, ${action?.activation.timing ?? "action"}${charges}]`;
   }).join("\n");
 }
 

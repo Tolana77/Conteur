@@ -2,20 +2,25 @@ import type {
   AbilityInstance,
   AbilityTemplate,
   Campaign,
+  CharacterSpellbook,
   Character,
   EffectTemplate,
   EnemyTemplate,
+  GameActionTemplate,
   ItemInstance,
   ItemTemplate,
   NarrativeSceneState,
+  SpellTemplate,
 } from "../../app/types";
+import { initialGameActionTemplates } from "../actions";
 import { initialEffectTemplates, initialEnemyTemplates } from "../content";
+import { createInitialSpellbooks, initialSpellTemplates } from "../spells";
 import {
   createInitialNarrativeScene,
   normalizeNarrativeScene,
 } from "../../core/game-engine/narrativeScene";
 
-export const CAMPAIGN_START_VERSION = 4 as const;
+export const CAMPAIGN_START_VERSION = 6 as const;
 
 export interface CampaignStartSnapshot {
   version: typeof CAMPAIGN_START_VERSION;
@@ -27,6 +32,9 @@ export interface CampaignStartSnapshot {
   itemInstances: ItemInstance[];
   abilityTemplates: AbilityTemplate[];
   abilityInstances: AbilityInstance[];
+  gameActionTemplates: GameActionTemplate[];
+  spellTemplates: SpellTemplate[];
+  spellbooks: CharacterSpellbook[];
   effectTemplates: EffectTemplate[];
   enemyTemplates: EnemyTemplate[];
   narrativeScene: NarrativeSceneState;
@@ -80,17 +88,26 @@ export function normalizeCampaignStartSnapshot(value: unknown): CampaignStartSna
     itemInstances: value.itemInstances,
     abilityTemplates: value.abilityTemplates,
     abilityInstances: value.abilityInstances,
+    gameActionTemplates: value.gameActionTemplates ?? initialGameActionTemplates,
+    spellTemplates: value.spellTemplates ?? initialSpellTemplates,
+    spellbooks: value.spellbooks ?? createInitialSpellbooks(characters, initialSpellTemplates),
     effectTemplates: value.effectTemplates ?? initialEffectTemplates,
     enemyTemplates: value.enemyTemplates ?? initialEnemyTemplates,
     narrativeScene,
   });
 }
 
-type CampaignStartFields = Omit<CampaignStartSnapshot, "version" | "narrativeScene"> & {
+type CampaignStartFields = Omit<
+  CampaignStartSnapshot,
+  "version" | "narrativeScene" | "gameActionTemplates" | "spellTemplates" | "spellbooks"
+> & {
   version?: number;
   narrativeScene?: NarrativeSceneState;
   effectTemplates?: EffectTemplate[];
   enemyTemplates?: EnemyTemplate[];
+  gameActionTemplates?: GameActionTemplate[];
+  spellTemplates?: SpellTemplate[];
+  spellbooks?: CharacterSpellbook[];
 };
 
 function hasCampaignStartFields(value: unknown): value is CampaignStartFields {

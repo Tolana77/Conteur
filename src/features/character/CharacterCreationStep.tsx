@@ -24,6 +24,7 @@ import {
   type CharacterCreationPackage,
   type ClassicItemSelection,
 } from "./characterCreation";
+import { getGameActionTemplate } from "../actions";
 
 const fieldClass = "w-full rounded border border-[#9C7A2E]/25 bg-[#15121A] px-3 py-2 text-sm text-[#E4D8BE] outline-none focus:border-[#9C7A2E]";
 type CreationMode = "classic" | "description";
@@ -269,6 +270,7 @@ export function CharacterCreationStep({
             </div>
             <div className="grid gap-2 md:grid-cols-2">
               {context.abilityTemplates.map((ability) => {
+                const action = getGameActionTemplate(context.gameActionTemplates, ability.actionId);
                 const selected = character.abilityTemplateIds.includes(ability.id);
                 const disabled = !selected && character.abilityTemplateIds.length >= abilityLimit;
                 return (
@@ -276,11 +278,11 @@ export function CharacterCreationStep({
                     <span className="flex items-start gap-2">
                       <input checked={selected} disabled={disabled} onChange={() => toggleAbility(ability.id)} type="checkbox" />
                       <span>
-                        <strong className="block text-sm font-semibold text-[#E4D8BE]">{ability.name}</strong>
-                        <span className="block text-[10px] uppercase text-[#9C7A2E]">{activationLabel(ability.activation.timing)}</span>
+                        <strong className="block text-sm font-semibold text-[#E4D8BE]">{action?.name ?? ability.id}</strong>
+                        <span className="block text-[10px] uppercase text-[#9C7A2E]">{activationLabel(action?.activation.timing ?? "action")}</span>
                       </span>
                     </span>
-                    <span className="mt-1 block text-xs leading-5 text-[#E4D8BE]/60">{ability.description}</span>
+                    <span className="mt-1 block text-xs leading-5 text-[#E4D8BE]/60">{action?.description ?? "Action associée introuvable."}</span>
                   </label>
                 );
               })}
