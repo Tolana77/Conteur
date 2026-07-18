@@ -37,6 +37,10 @@ import {
   type GroundingReport,
 } from "./grounding";
 import { createPlayerCheckNarrationContext } from "./improvisedActions";
+import {
+  createManipulableObjectContext,
+  isObjectAcquisitionIntent,
+} from "../world/manipulableObjects";
 
 export interface AutomatedDirectorResult {
   narration: string;
@@ -105,15 +109,16 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
     const agentId = agentQueue.shift()!;
     try {
       const response = await runDomainAgent(agentId, effectiveInput, draft);
+      const safeDraftPatch = sanitizeAcquisitionAuthorization(response.draftPatch, draft);
       agentsRun.push(agentId);
       domainAgentCount += 1;
       const executableCommands = response.commands.filter((command) => command.type !== "sendNarration");
       draft = mergeResolutionDraft(draft, {
-        ...response.draftPatch,
+        ...safeDraftPatch,
         proposedCommands: executableCommands,
       });
       if (agentId === "worldManager" || agentId === "combatManager") {
-        applyScenePatches(response.draftPatch?.scenePatches);
+        applyScenePatches(safeDraftPatch?.scenePatches);
       }
 
       for (const command of response.commands) {
@@ -128,7 +133,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
 
       const requestedAgents = [
         ...response.agentRequests,
-        ...(response.draftPatch?.suggestedAgents ?? []),
+        ...(safeDraftPatch?.suggestedAgents ?? []),
       ];
       requestedAgents.forEach((request) => {
         if (
@@ -250,9 +255,10 @@ export async function continueAfterPlayerCheck(requestId: string): Promise<Autom
     throw new Error("Le résultat de ce jet n'est pas disponible.");
   }
 
+  const postCheck = await resolvePostCheckAcquisition(request.action, playerCheck);
   const packet = createNarrationPacket(
-    createEmptyResolutionDraft(),
-    [],
+    postCheck.draft,
+    postCheck.executionResults,
     undefined,
     undefined,
     playerCheck,
@@ -274,9 +280,186 @@ export async function continueAfterPlayerCheck(requestId: string): Promise<Autom
 
   return {
     narration,
-    agentsRun: ["narrationManager"],
-    warnings,
+    agentsRun: [...postCheck.agentsRun, "narrationManager"],
+    warnings: [
+      ...postCheck.draft.warnings,
+      ...postCheck.executionResults.filter((result) => result.status === "error").map((result) => result.message),
+      ...warnings,
+    ],
   };
+}
+
+async function resolvePostCheckAcquisition(
+  action: string,
+  playerCheck: Extract<PlayerCheckNarrationContext, { stage: "resolved" }>,
+): Promise<{
+  draft: AiResolutionDraft;
+  executionResults: ReturnType<typeof executeValidatedCommands>;
+  agentsRun: AiAgentId[];
+}> {
+  let draft = createEmptyResolutionDraft();
+  const agentsRun: AiAgentId[] = [];
+  if (
+    !isObjectAcquisitionIntent(action) ||
+    playerCheck.degree === "failure"
+  ) {
+    return { draft, executionResults: [], agentsRun };
+  }
+
+  draft = mergeResolutionDraft(draft, {
+    facts: [{
+      source: "localEngine",
+      kind: "resolvedAcquisitionAttempt",
+      content: `Tentative d'acquisition résolue par le moteur : « ${action} »; degré ${playerCheck.degree}${playerCheck.outcome ? `; issue ${playerCheck.outcome}` : ""}. Aucun nouveau jet n'est autorisé. Un objet n'entre dans l'inventaire que par une commande réussie fondée sur manipulableObjects.`,
+      visibility: "gmOnly",
+    }],
+  });
+
+  const beforeState = useGameStore.getState();
+  const deterministicItem = playerCheck.degree === "partial"
+    ? undefined
+    : selectDeterministicAcquisition(beforeState, action);
+  const gatheredCommands: SourcedCommand[] = [];
+
+  if (deterministicItem) {
+    draft = mergeResolutionDraft(draft, {
+      facts: [{
+        source: "localEngine",
+        kind: "acquisitionAuthorized",
+        content: `${deterministicItem.name} existe réellement auprès de ${deterministicItem.holderName ?? "la scène"} et le résultat autorise son transfert dans l'inventaire.`,
+        visibility: "playerVisible",
+        relatedIds: [deterministicItem.id],
+      }],
+    });
+    gatheredCommands.push({
+      source: "localEngine",
+      command: {
+        type: "pickupItem",
+        characterId: beforeState.selectedCharacterId,
+        itemId: deterministicItem.id,
+      },
+    });
+  } else {
+    const queue: AutomaticDomainAgent[] = ["worldManager"];
+    const scheduled = new Set<AutomaticDomainAgent>(queue);
+
+    while (queue.length > 0 && agentsRun.length < 3) {
+      const agentId = queue.shift()!;
+      try {
+        const response = await runDomainAgent(agentId, action, draft);
+        const safeDraftPatch = sanitizeAcquisitionAuthorization(response.draftPatch, draft);
+        agentsRun.push(agentId);
+        const executableCommands = response.commands.filter((command) =>
+          command.type !== "sendNarration" &&
+          command.type !== "resolveGameAction" &&
+          command.type !== "abilityCheck" &&
+          command.type !== "skillCheck" &&
+          command.type !== "roll");
+        draft = mergeResolutionDraft(draft, {
+          ...safeDraftPatch,
+          proposedCommands: executableCommands,
+        });
+        if (agentId === "worldManager") applyScenePatches(safeDraftPatch?.scenePatches);
+
+        executableCommands.forEach((command) => {
+          if (isCommandAllowedForAgent(agentId, command.type)) {
+            gatheredCommands.push({ command, source: agentId });
+          }
+        });
+
+        const hasAuthorizedLoot = draft.facts.some((fact) =>
+          fact.kind === "acquisitionAuthorized" || fact.kind === "latentLootAuthorized");
+        const requestedAgents = [
+          ...response.agentRequests,
+          ...(safeDraftPatch?.suggestedAgents ?? []),
+          ...(agentId === "worldManager" && hasAuthorizedLoot
+            ? [{ agent: "characterManager" as const, reason: "Transférer le butin autorisé." }]
+            : []),
+        ];
+        requestedAgents.forEach((request) => {
+          if (
+            (request.agent !== "characterManager" && request.agent !== "assetTemplateManager") ||
+            scheduled.has(request.agent)
+          ) return;
+          scheduled.add(request.agent);
+          queue.push(request.agent);
+        });
+        queue.sort((left, right) => getAutomaticAgentPriority(left) - getAutomaticAgentPriority(right));
+      } catch (error) {
+        draft = mergeResolutionDraft(draft, {
+          warnings: [`Résolution du butin par ${agentId} indisponible : ${errorMessage(error)}`],
+        });
+      }
+    }
+  }
+
+  const executionResults = executeValidatedCommands(gatheredCommands);
+  const afterState = useGameStore.getState();
+  const previouslyOwned = new Set(beforeState.itemInstances
+    .filter((item) => item.location.parent === beforeState.selectedCharacterId)
+    .map((item) => item.id));
+  const acquiredItems = afterState.itemInstances.filter((item) =>
+    item.location.parent === afterState.selectedCharacterId && !previouslyOwned.has(item.id));
+
+  if (acquiredItems.length > 0) {
+    const names = acquiredItems.map((item) => getItemDisplayName(item.id, afterState));
+    draft = mergeResolutionDraft(draft, {
+      facts: [{
+        source: "localEngine",
+        kind: "inventoryMutation",
+        content: `Inventaire réellement modifié : ${names.join(", ")}. Ces objets sont désormais présents dans le sac.`,
+        visibility: "playerVisible",
+        relatedIds: acquiredItems.map((item) => item.id),
+      }],
+    });
+    retireAcquiredWorldEntities(draft, afterState);
+  } else if (gatheredCommands.length > 0) {
+    draft = mergeResolutionDraft(draft, {
+      warnings: ["Aucun objet n'a rejoint l'inventaire malgré la tentative d'acquisition."],
+    });
+  }
+
+  return { draft, executionResults, agentsRun };
+}
+
+function selectDeterministicAcquisition(state: GameState, action: string) {
+  const objects = createManipulableObjectContext(state, action, 12)
+    .filter((object) => object.source === "itemInstance" && object.transferable && object.affordances.includes("takeFromHolder"));
+  const normalizedAction = normalizeGroundingTerm(action);
+  const explicit = objects.filter((object) =>
+    object.visibility === "visible" && normalizedAction.includes(normalizeGroundingTerm(object.name)));
+  if (explicit.length === 1) return explicit[0];
+
+  const holderMatches = objects.filter((object) =>
+    object.holderName && normalizedAction.includes(normalizeGroundingTerm(object.holderName)));
+  if (holderMatches.length === 1) return holderMatches[0];
+
+  if (/\b(detrousse|fouille les poches)\b/u.test(normalizedAction) && objects.length === 1) {
+    return objects[0];
+  }
+  return undefined;
+}
+
+function getItemDisplayName(itemId: string, state: GameState): string {
+  const item = state.itemInstances.find((candidate) => candidate.id === itemId);
+  const template = item ? state.itemTemplates.find((candidate) => candidate.id === item.templateId) : undefined;
+  return String(item?.overrides.name ?? template?.name ?? itemId);
+}
+
+function retireAcquiredWorldEntities(draft: AiResolutionDraft, state: GameState): void {
+  const authorizedIds = new Set(draft.facts
+    .filter((fact) => fact.kind === "acquisitionAuthorized")
+    .flatMap((fact) => fact.relatedIds ?? []));
+  state.campaign.world.entities.items
+    .filter((entity) => authorizedIds.has(entity.id))
+    .forEach((entity) => state.updateEntity({
+      ...entity,
+      details: {
+        ...entity.details,
+        ownerId: state.selectedCharacterId,
+        tags: [...new Set([...(entity.details?.tags ?? []), "acquired"])],
+      },
+    }));
 }
 
 function resolveNarratedDueEvents(): void {
@@ -664,6 +847,24 @@ function mergeResolutionDraft(draft: AiResolutionDraft, patch?: AiResolutionDraf
     safety: mergeUnique(draft.safety, patch.safety),
     warnings: mergeUniqueStrings(draft.warnings, patch.warnings),
     questions: mergeUniqueStrings(draft.questions, patch.questions),
+  };
+}
+
+function sanitizeAcquisitionAuthorization(
+  patch: AiResolutionDraftPatch | undefined,
+  incomingDraft: AiResolutionDraft,
+): AiResolutionDraftPatch | undefined {
+  if (!patch || incomingDraft.facts.some((fact) => fact.kind === "resolvedAcquisitionAttempt")) return patch;
+  const acquisitionFactKinds = new Set(["acquisitionAuthorized", "latentLootAuthorized"]);
+  const unauthorizedFacts = (patch.facts ?? []).filter((fact) => acquisitionFactKinds.has(fact.kind));
+  if (unauthorizedFacts.length === 0) return patch;
+  return {
+    ...patch,
+    facts: (patch.facts ?? []).filter((fact) => !acquisitionFactKinds.has(fact.kind)),
+    warnings: [
+      ...(patch.warnings ?? []),
+      "Autorisation d'acquisition ignorée : aucun résultat moteur préalable ne l'établit.",
+    ],
   };
 }
 

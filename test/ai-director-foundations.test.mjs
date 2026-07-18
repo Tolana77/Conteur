@@ -19,6 +19,9 @@ const {
   createGroundingDraftPatch,
   validateGroundedNarration,
 } = await vite.ssrLoadModule("/src/features/ai-director/grounding.ts");
+const {
+  createManipulableObjectContext,
+} = await vite.ssrLoadModule("/src/features/world/manipulableObjects.ts");
 const { normalizeCampaignStartSnapshot } = await vite.ssrLoadModule("/src/features/campaign/campaignStart.ts");
 
 const campaign = {
@@ -170,6 +173,36 @@ const ownedKnifeState = {
 };
 assert.equal(buildGroundingReport("Je sors mon couteau.", ownedKnifeState).claims[0]?.status, "established");
 
+const manipulableState = {
+  ...groundingState,
+  itemTemplates: [
+    { id: "tpl-purse", name: "Bourse de cuir", description: "Une petite bourse fermée.", type: "container", types: ["container"], tags: [], aliases: ["bourse"] },
+    { id: "tpl-torch", name: "Torche", description: "Une torche encore sèche.", type: "tool", types: ["tool"], tags: [], aliases: [] },
+  ],
+  itemInstances: [
+    { id: "item-held-purse", templateId: "tpl-purse", quantity: 1, overrides: {}, current: {}, data: {}, effects: [], location: { type: "world", parent: queen.id } },
+    { id: "item-ground-torch", templateId: "tpl-torch", quantity: 1, overrides: {}, current: {}, data: {}, effects: [], location: { type: "world", parent: "loc-throne" } },
+    { id: "item-remote-torch", templateId: "tpl-torch", quantity: 1, overrides: { name: "Torche lointaine" }, current: {}, data: {}, effects: [], location: { type: "world", parent: "loc-elsewhere" } },
+  ],
+};
+const manipulableObjects = createManipulableObjectContext(manipulableState, "Je détrousse la reine.");
+assert.deepEqual(manipulableObjects.map((object) => object.id).sort(), ["item-ground-torch", "item-held-purse"]);
+assert.equal(manipulableObjects.find((object) => object.id === "item-held-purse")?.affordances.includes("takeFromHolder"), true);
+assert.equal(manipulableObjects.find((object) => object.id === "item-ground-torch")?.affordances.includes("pickUp"), true);
+assert.deepEqual(
+  routePlayerInput("Je détrousse la reine.", manipulableState).agents,
+  ["actionManager", "worldManager"],
+);
+assert.equal(
+  resolveAutomaticLocalRequest("Je ramasse la bourse.", manipulableState).commands.length,
+  0,
+  "Un objet détenu ne doit jamais être ramassé comme un objet au sol.",
+);
+assert.equal(
+  resolveAutomaticLocalRequest("Je ramasse la torche.", manipulableState).commands[0]?.type,
+  "pickupItem",
+);
+
 const queenReport = buildGroundingReport("Je demande audience à la reine.", groundingState);
 assert.equal(queenReport.npcDossiers[0]?.rank, "sovereign");
 assert.equal(queenReport.npcDossiers[0]?.access, "restricted");
@@ -251,6 +284,8 @@ assert.match(
 );
 
 const baseState = {
+  campaign,
+  characters: campaign.characters,
   selectedCharacterId: "hero-test",
   messages: [],
   combat: { status: "inactive" },
@@ -261,7 +296,7 @@ const baseState = {
 
 assert.deepEqual(
   routePlayerInput("Je vole l'épée du roi devant toute la cour.", baseState).agents,
-  ["characterManager", "actionManager", "worldManager"],
+  ["actionManager", "worldManager"],
 );
 assert.deepEqual(
   routePlayerInput("Je me cure les ongles avec un couteau.", baseState).agents,

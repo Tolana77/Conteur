@@ -168,5 +168,14 @@ export interface AiApiTrace {
   status: number;
   prompt: string;
   response: string;
+  model?: string;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cachedInputTokens?: number;
+    reasoningTokens?: number;
+    source: "provider" | "estimate";
+  };
   error?: string;
 }

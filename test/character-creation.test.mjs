@@ -230,6 +230,58 @@ assert.ok(migratedBlueprint.blueprint);
 assert.deepEqual(migratedBlueprint.blueprint.party, { characters: [], startingItems: [] });
 assert.ok(migratedBlueprint.warnings.some((warning) => warning.includes("groupe a été retiré")));
 
+const flexibleBlueprint = parseWorldBlueprint(`Voici la campagne demandée :
+\`\`\`json
+{
+  "campagne": {
+    "nom": "Les Veilleurs de Brume",
+    "genre": "Fantasy étrange",
+    "niveau": "2",
+    "introduction": "Une cloche sonne dans une ville qui ne possède aucun clocher."
+  },
+  "monde": {
+    "nom": "Val-Brisé",
+    "faits": "La brume efface parfois les chemins; les cloches annoncent un changement",
+    "lieux": {
+      "La Tour noyée": {
+        "description": "Une tour à demi engloutie dans le marais.",
+        "climat": "Pluie froide et brouillard mouvant",
+        "services": ["abri", "archives inondées"]
+      }
+    },
+    "pnjs": [
+      {
+        "id": "temoin",
+        "nom": "Mara l'Écoutante",
+        "objectif": "Comprendre la cloche",
+        "connections": ["La Tour noyée"],
+        "manies": ["compte les silences", "évite les miroirs"]
+      },
+      { "id": "temoin", "nom": "Le second témoin" }
+    ],
+    "objets": []
+  }
+}
+\`\`\`
+Quelques notes peuvent suivre.`);
+assert.equal(flexibleBlueprint.errors.length, 0);
+assert.ok(flexibleBlueprint.blueprint);
+assert.equal(flexibleBlueprint.blueprint.campaign.level, 2);
+assert.equal(flexibleBlueprint.blueprint.world.locations[0].data.climat, "Pluie froide et brouillard mouvant");
+assert.deepEqual(flexibleBlueprint.blueprint.world.npcs[0].data.manies, ["compte les silences", "évite les miroirs"]);
+assert.equal(flexibleBlueprint.blueprint.world.npcs[0].connections[0], flexibleBlueprint.blueprint.world.locations[0].id);
+assert.notEqual(flexibleBlueprint.blueprint.world.npcs[0].id, flexibleBlueprint.blueprint.world.npcs[1].id);
+assert.ok(flexibleBlueprint.warnings.some((warning) => warning.includes("schemaVersion absente")));
+assert.ok(flexibleBlueprint.warnings.some((warning) => warning.includes("renommé automatiquement")));
+
+const repairedTrailingCommas = parseWorldBlueprint(`{
+  "campagne": { "nom": "Import réparé", },
+  "monde": { "nom": "Monde réparé", "lieux": ["Le Port"], },
+}`);
+assert.equal(repairedTrailingCommas.errors.length, 0);
+assert.equal(repairedTrailingCommas.blueprint.world.locations[0].name, "Le Port");
+assert.ok(repairedTrailingCommas.warnings.some((warning) => warning.includes("virgules finales")));
+
 const start = createCampaignStartFromBlueprint(
   blueprint,
   initialItemTemplates,

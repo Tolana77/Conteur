@@ -1,6 +1,11 @@
-# Passerelle MJ IA sur Netlify
+# Passerelle MJ IA sur Netlify (transition)
 
-La fonction `netlify/functions/mj.mjs` expose `POST /api/mj`. La clé du
+Netlify est conservé temporairement comme solution de retour arrière pendant la
+migration vers Vercel. La procédure cible est décrite dans
+`docs/VERCEL_DEPLOYMENT.md`.
+
+L'adaptateur `netlify/functions/mj.mjs` expose `POST /api/mj`. La logique
+commune réside dans `server/ai/` et la clé du
 fournisseur reste uniquement dans les variables d'environnement Netlify, jamais
 dans React.
 
@@ -59,7 +64,18 @@ Dans la console admin, le bouton **Diagnostiquer Groq** appelle `/api/mj-health`
 Il indique seulement l'hôte configuré, la présence de la clé, le modèle et le
 statut de Groq. Il ne retourne jamais la valeur de la clé.
 
-Le journal affiche également une estimation des tokens d'entrée et de sortie.
+Le Journal API conserve les trente derniers appels et affiche leur coût en
+tokens. Lorsque le fournisseur renvoie `usage.prompt_tokens`,
+`usage.completion_tokens` et `usage.total_tokens`, ces mesures exactes sont
+utilisées. Les tokens mis en cache et de raisonnement sont également repris
+lorsqu'ils sont disponibles.
+
+Pour les anciennes traces, les erreurs réseau ou les fournisseurs qui ne
+renvoient pas `usage`, l'interface utilise une estimation locale clairement
+marquée comme telle. Chaque appel détaille la répartition entre instructions,
+contexte métier, scène, historique, résultats moteur, commandes et narration.
+La console affiche aussi les totaux du journal et une synthèse par agent.
+
 La boucle automatique utilise un routeur local gratuit, au plus deux agents
 métier, puis un Narrateur qui ne reçoit qu'un paquet de faits publics et de
 résultats moteur.

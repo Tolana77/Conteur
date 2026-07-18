@@ -1,6 +1,7 @@
 import type { GameState } from "../../store/useGameStore";
 import type { ItemInstance, ItemTemplate } from "../../app/types";
 import type { AiDirectorCommand, AiResolutionDraftPatch } from "./types";
+import { createManipulableObjectContext } from "../world/manipulableObjects";
 
 export interface AutomaticLocalResolution {
   handled: boolean;
@@ -262,7 +263,15 @@ function resolveInventoryQuery(state: GameState, text: string): AutomaticLocalRe
 }
 
 function resolvePickupRequest(playerInput: string, state: GameState): AutomaticLocalResolution {
-  const availableItems = state.itemInstances.filter((item) => item.location.type === "world");
+  const directlyAvailableIds = new Set(
+    createManipulableObjectContext(state, playerInput, 30)
+      .filter((object) =>
+        object.source === "itemInstance" &&
+        object.visibility === "visible" &&
+        object.affordances.includes("pickUp"))
+      .map((object) => object.id),
+  );
+  const availableItems = state.itemInstances.filter((item) => directlyAvailableIds.has(item.id));
   const ranked = availableItems
     .map((item) => ({ item, score: getPickupScore(playerInput, item, state.itemTemplates) }))
     .filter((candidate) => candidate.score > 0)

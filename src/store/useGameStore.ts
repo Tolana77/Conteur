@@ -1318,7 +1318,16 @@ function normalizeAiApiTraces(value: unknown): AiApiTrace[] {
     typeof trace.status === "number" &&
     typeof trace.prompt === "string" &&
     typeof trace.response === "string",
-  ).slice(0, 10);
+  ).map((trace) => {
+    const candidate = trace as AiApiTrace;
+    const usage = candidate.tokenUsage;
+    return {
+      ...candidate,
+      ...(usage && typeof usage.inputTokens === "number" && typeof usage.outputTokens === "number" && typeof usage.totalTokens === "number"
+        ? { tokenUsage: usage }
+        : { tokenUsage: undefined }),
+    };
+  }).slice(0, 30);
 }
 
 function normalizePendingGameDecision(value: unknown): PendingGameDecision | null {
@@ -7018,7 +7027,7 @@ export const useGameStore = create<GameState>()(
       },
       addAiApiTrace: (trace) => {
         set((state) => ({
-          aiApiTraces: [trace, ...state.aiApiTraces].slice(0, 10),
+          aiApiTraces: [trace, ...state.aiApiTraces].slice(0, 30),
         }));
       },
       clearAiApiTraces: () => set({ aiApiTraces: [] }),

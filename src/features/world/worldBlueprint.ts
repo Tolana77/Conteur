@@ -55,7 +55,19 @@ export interface GeneratedWorldEntity {
   attentionRule?: string;
   delegatesTo?: string[];
   knownFacts?: string[];
+  ownerId?: string;
+  /** Extensions libres produites par l'IA : géographie, coutumes, horaires,
+   * apparence, services, ressources, relations détaillées, etc. */
+  data?: Record<string, WorldBlueprintDataValue>;
 }
+
+export type WorldBlueprintDataValue =
+  | string
+  | number
+  | boolean
+  | null
+  | WorldBlueprintDataValue[]
+  | { [key: string]: WorldBlueprintDataValue };
 
 export interface GeneratedStartingCharacter {
   id: string;
@@ -182,10 +194,10 @@ export function buildWorldCreationPrompt(
   brief: WorldCreationBrief,
 ): string {
   const counts = brief.complexity === "compact"
-    ? { factions: 2, locations: 4, npcs: 5, conflicts: 2, hooks: 3, secrets: 3 }
+    ? { factions: 2, locations: 4, npcs: 5, items: 6, conflicts: 2, hooks: 3, secrets: 3 }
     : brief.complexity === "dense"
-      ? { factions: 5, locations: 10, npcs: 12, conflicts: 5, hooks: 8, secrets: 8 }
-      : { factions: 3, locations: 6, npcs: 8, conflicts: 3, hooks: 5, secrets: 5 };
+      ? { factions: 5, locations: 10, npcs: 12, items: 16, conflicts: 5, hooks: 8, secrets: 8 }
+      : { factions: 3, locations: 6, npcs: 8, items: 10, conflicts: 3, hooks: 5, secrets: 5 };
 
   return [
     "Tu es concepteur senior de campagnes de jeu de rôle sandbox.",
@@ -207,6 +219,10 @@ export function buildWorldCreationPrompt(
     "- Chaque secret possède au moins deux indices concrets situés dans des lieux, PNJ ou objets existants.",
     "- Chaque PNJ veut quelque chose maintenant, craint une conséquence et entretient au moins une connexion utile.",
     "- Pour chaque PNJ, précise socialRank, access, disposition, protocol et attentionRule. Son rang doit réellement limiter qui obtient son attention; un souverain délègue les demandes ordinaires.",
+    "- Pour chaque objet narratif détenu par un PNJ, renseigne ownerId avec l'id de ce PNJ. Sinon relie-le à son lieu par connections. Cela détermine qui peut réellement le manipuler ou le dérober.",
+    "- Modélise aussi quelques possessions ordinaires susceptibles d'être manipulées (bourse, lettre, clé, outil, arme portée). Elles restent sobres et cohérentes avec le rang du PNJ; elles ne sont pas toutes des récompenses magiques.",
+    "- PNJ, lieux et objets peuvent recevoir tous les champs JSON supplémentaires utiles : apparence, habitudes, horaires, géographie, climat, services, ressources, dangers, coutumes, habitants, architecture, etc. Ils seront conservés comme données narratives libres.",
+    "- Les champs role, desire, fear, secret et importance sont surtout pertinents pour les PNJ. Pour un lieu ou un objet, adapte-les, laisse-les vides ou remplace leur intention par des champs libres plus précis.",
     "- Les accroches proposent une décision ou une urgence, jamais une simple mission linéaire.",
     "- La scène d'ouverture commence au milieu d'une situation active et se termine sur un choix clair.",
     "- Ne crée aucun personnage ni équipement dans cette réponse : la création du personnage est une étape séparée.",
@@ -215,9 +231,9 @@ export function buildWorldCreationPrompt(
     "- Évite les noms génériques, les prophéties de l'élu et les factions entièrement bonnes ou mauvaises.",
     "- Les ids sont uniques, courts, en kebab-case et les relatedIds/connections/participants utilisent uniquement ces ids.",
     "",
-    `VOLUMES: ${counts.factions} factions, ${counts.locations} lieux, ${counts.npcs} PNJ, 2 objets narratifs, ${counts.conflicts} conflits, ${counts.hooks} accroches, ${counts.secrets} secrets, 5 événements de timeline.`,
+    `VOLUME INDICATIF: environ ${counts.factions} factions, ${counts.locations} lieux, ${counts.npcs} PNJ, ${counts.items} objets manipulables, ${counts.conflicts} conflits, ${counts.hooks} accroches, ${counts.secrets} secrets et 5 événements. Ajoute ou retire librement des éléments selon les besoins du concept.`,
     "",
-    "FORMAT JSON EXACT",
+    "SOCLE JSON RECOMMANDÉ (les champs supplémentaires sont autorisés)",
     JSON.stringify(createBlueprintSkeleton(), null, 2),
     "",
     "Remplace toutes les valeurs d'exemple. Retourne uniquement un objet JSON valide, sans bloc Markdown.",
@@ -237,17 +253,22 @@ export function buildWorldRepairPrompt(rawResponse: string, errors: string[]): s
 export function parseWorldBlueprint(raw: string): WorldBlueprintParseResult {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/iu, "").replace(/\s*```$/u, "");
+  const cleaned = extractJsonObject(raw);
   let value: unknown;
 
   try {
-    value = JSON.parse(cleaned);
-  } catch (error) {
-    return {
-      blueprint: null,
-      errors: [`JSON invalide: ${error instanceof Error ? error.message : "syntaxe inconnue"}`],
-      warnings,
-    };
+    value = normalizeWorldBlueprintInput(JSON.parse(cleaned), warnings);
+  } catch (initialError) {
+    try {
+      value = normalizeWorldBlueprintInput(JSON.parse(removeTrailingJsonCommas(cleaned)), warnings);
+      warnings.push("Des virgules finales invalides ont été retirées automatiquement.");
+    } catch {
+      return {
+        blueprint: null,
+        errors: [`JSON invalide: ${initialError instanceof Error ? initialError.message : "syntaxe inconnue"}`],
+        warnings,
+      };
+    }
   }
 
   const root = asRecord(value, "racine", errors);
@@ -323,9 +344,11 @@ export function parseWorldBlueprint(raw: string): WorldBlueprintParseResult {
   };
 
   if (![1, 2, WORLD_BLUEPRINT_SCHEMA_VERSION].includes(Number(root.schemaVersion))) {
-    errors.push(`schemaVersion doit valoir ${WORLD_BLUEPRINT_SCHEMA_VERSION} (les versions 1 et 2 restent migrables).`);
+    warnings.push(`schemaVersion inconnue normalisée vers ${WORLD_BLUEPRINT_SCHEMA_VERSION}.`);
   }
 
+  ensureUniqueBlueprintIds(blueprint, warnings);
+  resolveBlueprintReferences(blueprint, warnings);
   validateBlueprintQuality(blueprint, errors, warnings);
   return { blueprint: errors.length ? null : blueprint, errors, warnings };
 }
@@ -358,6 +381,8 @@ export function createCampaignFromBlueprint(
       attentionRule: entity.attentionRule,
       delegatesTo: entity.delegatesTo,
       knownFacts: entity.knownFacts,
+      ownerId: entity.ownerId,
+      data: entity.data,
     },
   });
   const world: World = {
@@ -507,6 +532,10 @@ function createBlueprintSkeleton(): WorldBlueprint {
     attentionRule: "Répond seulement aux demandes relevant de sa charge",
     delegatesTo: ["autre-id"],
     knownFacts: ["Information que ce PNJ connaît réellement"],
+    ownerId: "autre-id",
+    data: {
+      detailLibre: "Tout autre élément utile propre à ce PNJ, ce lieu ou cet objet",
+    },
   };
   return {
     schemaVersion: WORLD_BLUEPRINT_SCHEMA_VERSION,
@@ -673,49 +702,44 @@ function isEquipableTemplate(template: ItemTemplate): boolean {
 }
 
 function parseEntities(value: unknown, path: string, errors: string[]): GeneratedWorldEntity[] {
-  return objectArray(value, path, errors).map((item, index) => ({
-    id: requiredId(item.id, `${path}[${index}].id`, errors),
-    name: requiredString(item.name, `${path}[${index}].name`, errors),
-    description: requiredString(item.description, `${path}[${index}].description`, errors),
-    role: requiredString(item.role, `${path}[${index}].role`, errors),
-    desire: requiredString(item.desire, `${path}[${index}].desire`, errors),
-    fear: requiredString(item.fear, `${path}[${index}].fear`, errors),
-    secret: requiredString(item.secret, `${path}[${index}].secret`, errors),
-    importance: requiredString(item.importance, `${path}[${index}].importance`, errors),
-    connections: stringArray(item.connections, `${path}[${index}].connections`, errors),
-    tags: stringArray(item.tags, `${path}[${index}].tags`, errors),
-    aliases: item.aliases === undefined ? undefined : stringArray(item.aliases, `${path}[${index}].aliases`, errors),
-    socialRank: parseOptionalSocialRank(item.socialRank, `${path}[${index}].socialRank`, errors),
-    access: parseOptionalAccess(item.access, `${path}[${index}].access`, errors),
-    disposition: optionalString(item.disposition),
-    protocol: optionalString(item.protocol),
-    attentionRule: optionalString(item.attentionRule),
-    delegatesTo: item.delegatesTo === undefined ? undefined : stringArray(item.delegatesTo, `${path}[${index}].delegatesTo`, errors),
-    knownFacts: item.knownFacts === undefined ? undefined : stringArray(item.knownFacts, `${path}[${index}].knownFacts`, errors),
-  }));
+  return objectArray(value, path, errors).map((item, index) => {
+    const name = requiredString(item.name, `${path}[${index}].name`, errors);
+    return {
+      id: requiredId(item.id, `${path}[${index}].id`, errors),
+      name,
+      description: optionalString(item.description) ?? `Aucune description détaillée n'a encore été établie pour ${name}.`,
+      role: optionalString(item.role) ?? "",
+      desire: optionalString(item.desire) ?? "",
+      fear: optionalString(item.fear) ?? "",
+      secret: optionalString(item.secret) ?? "",
+      importance: optionalString(item.importance) ?? "",
+      connections: optionalStringArray(item.connections),
+      tags: optionalStringArray(item.tags),
+      aliases: item.aliases === undefined ? undefined : optionalStringArray(item.aliases),
+      socialRank: parseOptionalSocialRank(item.socialRank),
+      access: parseOptionalAccess(item.access),
+      disposition: optionalString(item.disposition),
+      protocol: optionalString(item.protocol),
+      attentionRule: optionalString(item.attentionRule),
+      delegatesTo: item.delegatesTo === undefined ? undefined : optionalStringArray(item.delegatesTo),
+      knownFacts: item.knownFacts === undefined ? undefined : optionalStringArray(item.knownFacts),
+      ownerId: optionalString(item.ownerId),
+      data: collectEntityData(item),
+    };
+  });
 }
 
-function parseOptionalSocialRank(
-  value: unknown,
-  path: string,
-  errors: string[],
-): GeneratedWorldEntity["socialRank"] {
+function parseOptionalSocialRank(value: unknown): GeneratedWorldEntity["socialRank"] {
   if (value === undefined) return undefined;
   if (value === "outsider" || value === "commoner" || value === "notable" || value === "noble" || value === "highNoble" || value === "sovereign") {
     return value;
   }
-  errors.push(`${path} doit être outsider, commoner, notable, noble, highNoble ou sovereign.`);
   return undefined;
 }
 
-function parseOptionalAccess(
-  value: unknown,
-  path: string,
-  errors: string[],
-): GeneratedWorldEntity["access"] {
+function parseOptionalAccess(value: unknown): GeneratedWorldEntity["access"] {
   if (value === undefined) return undefined;
   if (value === "open" || value === "guarded" || value === "restricted") return value;
-  errors.push(`${path} doit être open, guarded ou restricted.`);
   return undefined;
 }
 
@@ -732,14 +756,12 @@ function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], w
     ...blueprint.world.hooks.map((item) => item.id),
     ...blueprint.world.timeline.map((item) => item.id),
   ];
-  const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
-  if (duplicates.length) errors.push(`Ids dupliqués: ${[...new Set(duplicates)].join(", ")}.`);
-  if (blueprint.world.factions.length < 2) errors.push("Au moins deux factions sont nécessaires.");
-  if (blueprint.world.locations.length < 3) errors.push("Au moins trois lieux sont nécessaires.");
-  if (blueprint.world.npcs.length < 3) errors.push("Au moins trois PNJ sont nécessaires.");
-  if (blueprint.world.hooks.length < 3) errors.push("Au moins trois accroches sont nécessaires.");
-  if (blueprint.world.secrets.length < 2) errors.push("Au moins deux secrets sont nécessaires.");
-  if (blueprint.world.facts.length < 3) errors.push("Au moins trois faits publics sont nécessaires.");
+  if (blueprint.world.factions.length < 2) warnings.push("Le monde gagnerait à posséder au moins deux factions.");
+  if (blueprint.world.locations.length < 3) warnings.push("Le monde gagnerait à posséder au moins trois lieux.");
+  if (blueprint.world.npcs.length < 3) warnings.push("Le monde gagnerait à posséder au moins trois PNJ.");
+  if (blueprint.world.hooks.length < 3) warnings.push("La campagne gagnerait à posséder au moins trois accroches.");
+  if (blueprint.world.secrets.length < 2) warnings.push("La campagne gagnerait à posséder au moins deux secrets.");
+  if (blueprint.world.facts.length < 3) warnings.push("Le monde gagnerait à posséder au moins trois faits publics.");
   if (blueprint.world.timeline.length < 3) warnings.push("La chronologie devrait posséder au moins trois évolutions.");
   const knownIds = new Set(ids);
   const characterIds = new Set(blueprint.party.characters.map((character) => character.id));
@@ -755,7 +777,7 @@ function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], w
   });
   const validateReferences = (references: string[], path: string) => {
     const unknown = references.filter((id) => !knownIds.has(id));
-    if (unknown.length) errors.push(`${path} contient des ids inconnus: ${unknown.join(", ")}.`);
+    if (unknown.length) warnings.push(`${path} conserve des références non résolues: ${unknown.join(", ")}.`);
   };
   blueprint.world.conflicts.forEach((conflict) => validateReferences(conflict.participants, `${conflict.id}.participants`));
   blueprint.world.secrets.forEach((secret) => validateReferences(secret.relatedIds, `${secret.id}.relatedIds`));
@@ -764,6 +786,7 @@ function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], w
     .forEach((entity) => {
       validateReferences(entity.connections, `${entity.id}.connections`);
       validateReferences(entity.delegatesTo ?? [], `${entity.id}.delegatesTo`);
+      validateReferences(entity.ownerId ? [entity.ownerId] : [], `${entity.id}.ownerId`);
     });
   blueprint.world.secrets.forEach((secret) => {
     if (secret.clues.length < 2) warnings.push(`${secret.id} devrait posséder au moins deux indices.`);
@@ -771,6 +794,379 @@ function validateBlueprintQuality(blueprint: WorldBlueprint, errors: string[], w
   blueprint.world.conflicts.forEach((conflict) => {
     if (conflict.escalation.length < 2) warnings.push(`${conflict.id} devrait posséder plusieurs étapes d'escalade.`);
   });
+}
+
+function extractJsonObject(raw: string): string {
+  const withoutFence = raw.trim().replace(/^```(?:json)?\s*/iu, "").replace(/\s*```\s*$/u, "");
+  const start = withoutFence.indexOf("{");
+  const end = withoutFence.lastIndexOf("}");
+  return start >= 0 && end > start ? withoutFence.slice(start, end + 1) : withoutFence;
+}
+
+function removeTrailingJsonCommas(value: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (inString) {
+      result += character;
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      result += character;
+      continue;
+    }
+    if (character === ",") {
+      let cursor = index + 1;
+      while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
+      if (value[cursor] === "}" || value[cursor] === "]") continue;
+    }
+    result += character;
+  }
+  return result;
+}
+
+/** Accepte les variantes de clés courantes produites par les modèles tout en
+ * ramenant les données vers le contrat stable attendu par le moteur. */
+function normalizeWorldBlueprintInput(value: unknown, warnings: string[]): unknown {
+  const source = looseRecord(value);
+  if (!source) return value;
+  const worldSource = pickRecord(source, ["world", "monde", "univers"])
+    ?? (hasAnyKey(source, ["npcs", "pnjs", "locations", "lieux"]) ? source : {});
+  const entitySource = pickRecord(worldSource, ["entities", "entites", "entités"]) ?? worldSource;
+  const campaignSource = pickRecord(source, ["campaign", "campagne"])
+    ?? source;
+  const partySource = pickRecord(source, ["party", "groupe", "group"]);
+  const campaignName = looseText(pick(campaignSource, ["name", "nom", "title", "titre"]))
+    ?? looseText(pick(worldSource, ["name", "nom"]))
+    ?? "Campagne sans titre";
+  const worldName = looseText(pick(worldSource, ["name", "nom", "title", "titre"])) ?? campaignName;
+  const rawVersion = looseInteger(pick(source, ["schemaVersion", "version"]));
+  if (rawVersion === undefined) warnings.push("schemaVersion absente : format courant appliqué automatiquement.");
+
+  return {
+    schemaVersion: rawVersion ?? WORLD_BLUEPRINT_SCHEMA_VERSION,
+    campaign: {
+      name: campaignName,
+      style: looseText(pick(campaignSource, ["style", "genre", "ambiance"])) ?? "Jeu de rôle sandbox",
+      level: clamp(looseInteger(pick(campaignSource, ["level", "niveau"])) ?? 1, 1, 20),
+      elevatorPitch: looseText(pick(campaignSource, ["elevatorPitch", "pitch", "resume", "résumé", "concept"]))
+        ?? `Une aventure ouverte dans ${worldName}.`,
+      centralQuestion: looseText(pick(campaignSource, ["centralQuestion", "questionCentrale", "question_centrale", "enjeuCentral"]))
+        ?? "Que feront les personnages face aux tensions de ce monde ?",
+      openingScene: looseText(pick(campaignSource, ["openingScene", "sceneOuverture", "scèneOuverture", "introduction", "depart"]))
+        ?? looseText(pick(worldSource, ["openingScene", "sceneOuverture", "introduction"]))
+        ?? `L'aventure commence dans ${worldName}, alors qu'une situation réclame une décision.`,
+    },
+    party: partySource ? {
+      characters: pick(partySource, ["characters", "personnages"]) ?? [],
+      startingItems: pick(partySource, ["startingItems", "objetsDepart", "équipement", "equipement"]) ?? [],
+    } : { characters: [], startingItems: [] },
+    world: {
+      name: worldName,
+      lore: looseText(pick(worldSource, ["lore", "histoire", "contexte", "background"]))
+        ?? `L'histoire détaillée de ${worldName} reste à découvrir en jeu.`,
+      tone: looseText(pick(worldSource, ["tone", "ton", "ambiance"]))
+        ?? looseText(pick(campaignSource, ["style", "genre"]))
+        ?? "Aventure",
+      themes: looseStringArray(pick(worldSource, ["themes", "thèmes"])),
+      rules: looseStringArray(pick(worldSource, ["rules", "regles", "règles", "verites", "vérités"])),
+      facts: looseStringArray(pick(worldSource, ["facts", "faits", "faitsPublics", "informations"])),
+      factions: normalizeFactions(pick(worldSource, ["factions", "groupes", "organisations"])),
+      locations: normalizeEntities(pick(entitySource, ["locations", "lieux", "places", "endroits"]), "lieu"),
+      npcs: normalizeEntities(pick(entitySource, ["npcs", "pnjs", "pnj", "personnagesNonJoueurs"]), "pnj"),
+      items: normalizeEntities(pick(entitySource, ["items", "objets", "artefacts"]), "objet"),
+      conflicts: normalizeConflicts(pick(worldSource, ["conflicts", "conflits", "tensions"])),
+      secrets: normalizeSecrets(pick(worldSource, ["secrets", "mysteres", "mystères"])),
+      hooks: normalizeHooks(pick(worldSource, ["hooks", "accroches", "quetes", "quêtes", "pistes"])),
+      timeline: normalizeTimeline(pick(worldSource, ["timeline", "chronologie", "evenements", "événements"])),
+    },
+  };
+}
+
+function normalizeEntities(value: unknown, prefix: string): Array<Record<string, unknown>> {
+  return looseObjectArray(value).map((item, index) => {
+    const name = looseText(pick(item, ["name", "nom", "title", "titre"])) ?? `${prefix} ${index + 1}`;
+    return {
+      ...item,
+      id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `${prefix}-${name}`, index),
+      name,
+      description: looseText(pick(item, ["description", "details", "détails", "apparence"])) ?? "",
+      role: looseText(pick(item, ["role", "rôle", "fonction", "purpose"])) ?? "",
+      desire: looseText(pick(item, ["desire", "désir", "objectif", "goal", "motivation"])) ?? "",
+      fear: looseText(pick(item, ["fear", "peur", "crainte"])) ?? "",
+      secret: looseText(pick(item, ["secret", "secrets"])) ?? "",
+      importance: looseText(pick(item, ["importance", "interet", "intérêt", "usage", "enjeu"])) ?? "",
+      connections: looseStringArray(pick(item, ["connections", "connexions", "relations", "relatedIds"])),
+      tags: looseStringArray(pick(item, ["tags", "motsCles", "mots-clés", "categories", "catégories"])),
+      aliases: looseStringArray(pick(item, ["aliases", "alias", "surnoms", "autresNoms"])),
+      socialRank: normalizeSocialRank(pick(item, ["socialRank", "rangSocial", "rang"])),
+      access: normalizeAccess(pick(item, ["access", "acces", "accès", "accessibilite", "accessibilité"])),
+      disposition: looseText(pick(item, ["disposition", "attitude", "humeur"])),
+      protocol: looseText(pick(item, ["protocol", "protocole", "etiquette", "étiquette"])),
+      attentionRule: looseText(pick(item, ["attentionRule", "regleAttention", "règleAttention"])),
+      delegatesTo: looseStringArray(pick(item, ["delegatesTo", "delegueA", "délègueÀ"])),
+      knownFacts: looseStringArray(pick(item, ["knownFacts", "faitsConnus", "connaissances"])),
+      ownerId: looseText(pick(item, ["ownerId", "proprietaireId", "propriétaireId", "detenteurId", "détenteurId"])),
+    };
+  });
+}
+
+function normalizeFactions(value: unknown): Array<Record<string, unknown>> {
+  return looseObjectArray(value).map((item, index) => {
+    const name = looseText(pick(item, ["name", "nom", "title", "titre"])) ?? `Faction ${index + 1}`;
+    return {
+      id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `faction-${name}`, index),
+      name,
+      goal: looseText(pick(item, ["goal", "but", "objectif"])) ?? "Objectif encore incertain",
+      method: looseText(pick(item, ["method", "methode", "méthode", "moyens"])) ?? "Méthodes variables",
+      resource: looseText(pick(item, ["resource", "ressource", "levier"])) ?? "Influence limitée",
+      relationship: looseText(pick(item, ["relationship", "relations", "position"])) ?? "Relations à établir",
+    };
+  });
+}
+
+function normalizeConflicts(value: unknown): Array<Record<string, unknown>> {
+  return looseObjectArray(value).map((item, index) => {
+    const title = looseText(pick(item, ["title", "titre", "name", "nom"])) ?? `Conflit ${index + 1}`;
+    return {
+      id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `conflit-${title}`, index),
+      title,
+      description: looseText(pick(item, ["description", "situation", "contexte"])) ?? title,
+      stakes: looseText(pick(item, ["stakes", "enjeux", "risques"])) ?? "Les équilibres du monde peuvent changer.",
+      participants: looseStringArray(pick(item, ["participants", "relatedIds", "acteurs"])),
+      escalation: looseStringArray(pick(item, ["escalation", "escalade", "etapes", "étapes"])),
+    };
+  });
+}
+
+function normalizeSecrets(value: unknown): Array<Record<string, unknown>> {
+  return looseObjectArray(value).map((item, index) => {
+    const truth = looseText(pick(item, ["truth", "verite", "vérité", "secret", "description"])) ?? `Secret ${index + 1}`;
+    return {
+      id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `secret-${truth}`, index),
+      truth,
+      clues: looseStringArray(pick(item, ["clues", "indices", "preuves"])),
+      relatedIds: looseStringArray(pick(item, ["relatedIds", "liens", "connections", "connexions"])),
+    };
+  });
+}
+
+function normalizeHooks(value: unknown): Array<Record<string, unknown>> {
+  return looseObjectArray(value).map((item, index) => {
+    const title = looseText(pick(item, ["title", "titre", "name", "nom"])) ?? `Accroche ${index + 1}`;
+    return {
+      id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `accroche-${title}`, index),
+      title,
+      premise: looseText(pick(item, ["premise", "prémisse", "description", "situation", "objectif"])) ?? title,
+      urgency: looseText(pick(item, ["urgency", "urgence", "evolution", "évolution"])) ?? "La situation évoluera avec le temps.",
+      relatedIds: looseStringArray(pick(item, ["relatedIds", "liens", "connections", "connexions"])),
+    };
+  });
+}
+
+function normalizeTimeline(value: unknown): Array<Record<string, unknown>> {
+  return looseObjectArray(value).map((item, index) => {
+    const event = looseText(pick(item, ["event", "evenement", "événement", "description", "name", "nom"])) ?? `Événement ${index + 1}`;
+    return {
+      id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `evenement-${event}`, index),
+      event,
+      trigger: looseText(pick(item, ["trigger", "declencheur", "déclencheur", "condition", "date"])) ?? "Lorsque la fiction le justifie",
+    };
+  });
+}
+
+function ensureUniqueBlueprintIds(blueprint: WorldBlueprint, warnings: string[]): void {
+  const used = new Set<string>();
+  const groups: Array<Array<{ id: string }>> = [
+    blueprint.party.characters,
+    blueprint.party.startingItems,
+    blueprint.world.factions,
+    blueprint.world.locations,
+    blueprint.world.npcs,
+    blueprint.world.items,
+    blueprint.world.conflicts,
+    blueprint.world.secrets,
+    blueprint.world.hooks,
+    blueprint.world.timeline,
+  ];
+  groups.flat().forEach((entry) => {
+    const original = entry.id;
+    let next = original;
+    let suffix = 2;
+    while (used.has(next)) next = `${original}-${suffix++}`;
+    if (next !== original) warnings.push(`Id dupliqué « ${original} » renommé automatiquement en « ${next} ».`);
+    entry.id = next;
+    used.add(next);
+  });
+}
+
+function resolveBlueprintReferences(blueprint: WorldBlueprint, warnings: string[]): void {
+  const named = [
+    ...blueprint.world.factions,
+    ...blueprint.world.locations,
+    ...blueprint.world.npcs,
+    ...blueprint.world.items,
+  ];
+  const lookup = new Map<string, string>();
+  named.forEach((entry) => {
+    lookup.set(normalizeLookup(entry.id), entry.id);
+    if ("name" in entry) lookup.set(normalizeLookup(entry.name), entry.id);
+  });
+  let resolvedCount = 0;
+  const resolve = (reference: string) => {
+    const resolved = lookup.get(normalizeLookup(reference)) ?? reference;
+    if (resolved !== reference) resolvedCount += 1;
+    return resolved;
+  };
+  blueprint.world.conflicts.forEach((entry) => { entry.participants = entry.participants.map(resolve); });
+  blueprint.world.secrets.forEach((entry) => { entry.relatedIds = entry.relatedIds.map(resolve); });
+  blueprint.world.hooks.forEach((entry) => { entry.relatedIds = entry.relatedIds.map(resolve); });
+  [...blueprint.world.locations, ...blueprint.world.npcs, ...blueprint.world.items].forEach((entry) => {
+    entry.connections = entry.connections.map(resolve);
+    if (entry.delegatesTo) entry.delegatesTo = entry.delegatesTo.map(resolve);
+    if (entry.ownerId) entry.ownerId = resolve(entry.ownerId);
+  });
+  if (resolvedCount > 0) warnings.push(`${resolvedCount} référence(s) écrite(s) avec des noms ont été reliées automatiquement.`);
+}
+
+const ENTITY_CANONICAL_KEYS = new Set([
+  "id", "identifiant", "name", "nom", "title", "titre", "description", "details", "détails", "apparence",
+  "role", "rôle", "fonction", "purpose", "desire", "désir", "objectif", "goal", "motivation", "fear", "peur", "crainte",
+  "secret", "secrets", "importance", "interet", "intérêt", "usage", "enjeu", "connections", "connexions", "relations", "relatedIds",
+  "tags", "motsCles", "mots-clés", "categories", "catégories", "aliases", "alias", "surnoms", "autresNoms", "socialRank",
+  "rangSocial", "rang", "access", "acces", "accès", "accessibilite", "accessibilité", "disposition", "attitude", "humeur",
+  "protocol", "protocole", "etiquette", "étiquette", "attentionRule", "regleAttention", "règleAttention", "delegatesTo", "delegueA",
+  "délègueÀ", "knownFacts", "faitsConnus", "connaissances", "ownerId", "proprietaireId", "propriétaireId", "detenteurId", "détenteurId", "data",
+]);
+
+function collectEntityData(item: Record<string, unknown>): Record<string, WorldBlueprintDataValue> | undefined {
+  const data: Record<string, WorldBlueprintDataValue> = {};
+  const explicitSources = [looseRecord(item.details), looseRecord(item.data)].filter((source): source is Record<string, unknown> => Boolean(source));
+  explicitSources.forEach((source) => {
+    Object.entries(source).forEach(([key, value]) => {
+      const parsed = toBlueprintDataValue(value);
+      if (parsed !== undefined) data[key] = parsed;
+    });
+  });
+  Object.entries(item).forEach(([key, value]) => {
+    if (ENTITY_CANONICAL_KEYS.has(key)) return;
+    const parsed = toBlueprintDataValue(value);
+    if (parsed !== undefined) data[key] = parsed;
+  });
+  return Object.keys(data).length ? data : undefined;
+}
+
+function toBlueprintDataValue(value: unknown, depth = 0): WorldBlueprintDataValue | undefined {
+  if (depth > 6 || value === undefined || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") return undefined;
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.slice(0, 100).flatMap((entry) => {
+    const parsed = toBlueprintDataValue(entry, depth + 1);
+    return parsed === undefined ? [] : [parsed];
+  });
+  const record = looseRecord(value);
+  if (!record) return undefined;
+  const result: Record<string, WorldBlueprintDataValue> = {};
+  Object.entries(record).slice(0, 100).forEach(([key, entry]) => {
+    const parsed = toBlueprintDataValue(entry, depth + 1);
+    if (parsed !== undefined) result[key] = parsed;
+  });
+  return result;
+}
+
+function pick(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) if (record[key] !== undefined) return record[key];
+  return undefined;
+}
+
+function pickRecord(record: Record<string, unknown>, keys: string[]): Record<string, unknown> | undefined {
+  return looseRecord(pick(record, keys)) ?? undefined;
+}
+
+function hasAnyKey(record: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some((key) => record[key] !== undefined);
+}
+
+function looseRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function looseObjectArray(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.reduce<Array<Record<string, unknown>>>((items, entry) => {
+    const record = looseRecord(entry);
+    if (record) items.push(record);
+    else {
+      const name = looseText(entry);
+      if (name) items.push({ name });
+    }
+    return items;
+  }, []);
+  const record = looseRecord(value);
+  if (!record) return [];
+  return Object.entries(record).flatMap(([key, entry]) => {
+    const child = looseRecord(entry);
+    if (child) return [{ name: key, ...child }];
+    const description = looseText(entry);
+    return description ? [{ name: key, description }] : [];
+  });
+}
+
+function looseText(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
+function looseInteger(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function looseStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((entry) => looseText(entry) ?? []);
+  const text = looseText(value);
+  return text ? text.split(/[;,\n]/u).map((entry) => entry.trim()).filter(Boolean) : [];
+}
+
+function optionalStringArray(value: unknown): string[] {
+  return looseStringArray(value);
+}
+
+function normalizeIdentifier(value: unknown, fallback: string, index: number): string {
+  const source = looseText(value) ?? `${fallback}-${index + 1}`;
+  const slug = normalizeLookup(source).replace(/\s+/gu, "-").replace(/[^a-z0-9-]/gu, "").replace(/-+/gu, "-").replace(/^-|-$/gu, "");
+  return slug || `element-${index + 1}`;
+}
+
+function normalizeLookup(value: string): string {
+  return value.toLocaleLowerCase("fr-FR").normalize("NFD").replace(/[\u0300-\u036f]/gu, "").replace(/[’']/gu, " ").replace(/[^a-z0-9]+/gu, " ").trim();
+}
+
+function normalizeSocialRank(value: unknown): GeneratedWorldEntity["socialRank"] {
+  const normalized = normalizeLookup(looseText(value) ?? "");
+  const ranks: Record<string, GeneratedWorldEntity["socialRank"]> = {
+    outsider: "outsider", etranger: "outsider", commoner: "commoner", roturier: "commoner", notable: "notable",
+    noble: "noble", highnoble: "highNoble", "haute noblesse": "highNoble", sovereign: "sovereign", souverain: "sovereign",
+  };
+  return ranks[normalized];
+}
+
+function normalizeAccess(value: unknown): GeneratedWorldEntity["access"] {
+  const normalized = normalizeLookup(looseText(value) ?? "");
+  const access: Record<string, GeneratedWorldEntity["access"]> = {
+    open: "open", ouvert: "open", libre: "open", guarded: "guarded", garde: "guarded", surveille: "guarded",
+    restricted: "restricted", restreint: "restricted", prive: "restricted", interdit: "restricted",
+  };
+  return access[normalized];
 }
 
 function asRecord(value: unknown, path: string, errors: string[]): Record<string, unknown> | null {

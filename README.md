@@ -29,3 +29,10 @@ npm run test:objects
 - `src/actions.js` : actions fermées et mutantes.
 - `src/engine.js` : déclenchement des effets par événement.
 - `src/location.js` : déplacement et contenu.
+
+## Déploiement web
+
+La passerelle IA est indépendante de l'hébergeur. Le guide de migration et de
+déploiement sur Vercel se trouve dans
+[`docs/VERCEL_DEPLOYMENT.md`](docs/VERCEL_DEPLOYMENT.md). Netlify reste
+temporairement disponible comme solution de retour arrière.

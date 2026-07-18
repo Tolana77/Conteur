@@ -1,4 +1,4 @@
-import type { AiAgentId } from "./types";
+import type { AiAgentId, AiApiTrace } from "./types";
 import { useGameStore } from "../../store/useGameStore";
 import { fitAgentPromptToBudget } from "../../../shared/aiGatewayPolicy.js";
 
@@ -13,6 +13,8 @@ interface AiGatewayResponse {
   content?: unknown;
   error?: unknown;
   message?: unknown;
+  model?: unknown;
+  usage?: unknown;
 }
 
 export interface AiGatewayHealth {
@@ -64,6 +66,8 @@ export async function runAgentOverHttp(agentId: AiAgentId, prompt: string): Prom
       response: rawResponse,
       status: response.status,
       error: errorMessage,
+      model: typeof payload.model === "string" ? payload.model : undefined,
+      tokenUsage: parseProviderTokenUsage(payload.usage),
     });
 
     if (!response.ok) {
@@ -110,6 +114,8 @@ function addTrace({
   response,
   status,
   error,
+  model,
+  tokenUsage,
 }: {
   agentId: AiAgentId;
   startedAt: number;
@@ -117,6 +123,8 @@ function addTrace({
   response: string;
   status: number;
   error?: string;
+  model?: string;
+  tokenUsage?: AiApiTrace["tokenUsage"];
 }) {
   useGameStore.getState().addAiApiTrace({
     id: crypto.randomUUID(),
@@ -126,6 +134,39 @@ function addTrace({
     status,
     prompt,
     response,
+    model,
+    tokenUsage,
     error,
   });
+}
+
+function parseProviderTokenUsage(value: unknown): AiApiTrace["tokenUsage"] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const usage = value as Record<string, unknown>;
+  const inputTokens = readTokenCount(usage.inputTokens ?? usage.prompt_tokens ?? usage.input_tokens);
+  const outputTokens = readTokenCount(usage.outputTokens ?? usage.completion_tokens ?? usage.output_tokens);
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  const totalTokens = readTokenCount(usage.totalTokens ?? usage.total_tokens) ?? inputTokens + outputTokens;
+  const promptDetails = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === "object"
+    ? usage.prompt_tokens_details as Record<string, unknown>
+    : {};
+  const completionDetails = usage.completion_tokens_details && typeof usage.completion_tokens_details === "object"
+    ? usage.completion_tokens_details as Record<string, unknown>
+    : {};
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    source: "provider",
+    ...(readTokenCount(usage.cachedInputTokens ?? promptDetails.cached_tokens) !== undefined
+      ? { cachedInputTokens: readTokenCount(usage.cachedInputTokens ?? promptDetails.cached_tokens) }
+      : {}),
+    ...(readTokenCount(usage.reasoningTokens ?? completionDetails.reasoning_tokens) !== undefined
+      ? { reasoningTokens: readTokenCount(usage.reasoningTokens ?? completionDetails.reasoning_tokens) }
+      : {}),
+  };
+}
+
+function readTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
 }

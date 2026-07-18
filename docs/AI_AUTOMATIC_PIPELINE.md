@@ -18,6 +18,8 @@
 - Chaque commande conserve son agent d'origine jusqu'à l'exécution et produit un reçu typé `success`, `error` ou `info`.
 - Chaque action structurée conserve un reçu avant/après : source, cible, PV, quantités, charges, états, positions, ressources et jets visibles.
 - Un objet doit exister comme instance `world` avant de pouvoir être ramassé.
+- Les objets manipulables de la scène possèdent une vue canonique compacte :
+  identité, description, quantité, détenteur, visibilité et actions possibles.
 - Les agents de jeu ordinaires ne peuvent ni créer ni donner arbitrairement un objet.
 - Une clarification suspend la résolution; la réponse suivante complète l'intention originale.
 - Les tests improvisés utilisent toujours les scores dérivés stockés par le moteur.
@@ -115,9 +117,21 @@ conservés séparément afin de tenir compte du plafond de PV.
 
 ## Autorité sur les objets
 
+- `manipulableObjects.ts` fusionne les instances au sol ou détenues et les
+  objets narratifs du monde. Il exclut les objets distants et ne révèle jamais
+  un objet caché au Narrateur.
+- Une simple mention ne crée rien. Un objet établi peut être décrit ou inspecté,
+  mais son déplacement exige une commande moteur.
 - `giveItem` est une commande d'administration ou de préparation, pas une action joueur.
 - `pickupItem` transfère une instance existante de `world` vers `inventory`; elle ne clone rien.
 - Une seconde tentative de ramassage échoue puisque l'instance n'est plus dans `world`.
+- Après un test d'acquisition réussi, Monde choisit un id établi, Personnage
+  demande son transfert, puis le moteur publie `inventoryMutation` avec les ids
+  réellement présents dans le sac avant que Narration ne réponde.
+- Pour une fouille générique réussie sans contenu préétabli, Monde peut autoriser
+  un seul butin ordinaire plausible. Création de contenu l'instancie alors à
+  partir d'un template existant. Cette exception ne peut jamais matérialiser
+  l'objet précis affirmé par le joueur.
 - Les noms alternatifs sont déclarés dans `ItemTemplate.aliases`. Le résolveur ne contient pas d'exception liée à un objet précis.
 - Les questions de contenu du sac lisent directement le store et produisent un instantané exhaustif.
 
@@ -129,7 +143,8 @@ conservés séparément afin de tenir compte du plafond de PV.
 - Combat : douze combattants, seize obstacles et dix éléments de terrain au maximum.
 - Monde : scène stable, trois faits, six entités au maximum, dossiers des seuls
   PNJ concernés et trois entrées d'historique.
-- Narration : action, paquet public, scène stable, dossiers concernés, cadre très court et trois messages récents.
+- Narration : action, paquet public, scène stable, jusqu'à cinq objets
+  manipulables visibles, dossiers concernés, cadre très court et trois messages récents.
 
 Les prompts et réponses sont visibles avec une estimation de tokens dans le
 Journal API de la console admin.

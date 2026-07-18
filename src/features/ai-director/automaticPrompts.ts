@@ -13,6 +13,10 @@ import type { AiResolutionDraft } from "./types";
 import { ITEM_CREATION_POLICY_TEXT } from "../items/itemCreationPolicy";
 import { getGameActionTemplate } from "../actions";
 import {
+  createManipulableObjectContext,
+  isObjectAcquisitionIntent,
+} from "../world/manipulableObjects";
+import {
   buildGroundingReport,
   formatGroundingForNarrator,
   type GroundingReport,
@@ -56,12 +60,18 @@ export function buildAutomaticDomainPrompt(
       "Un événement avec turnsRemaining=0 doit progresser maintenant. Si le joueur attend, ne répète jamais l'étape précédente : fais arriver, passer, découvrir ou empirer l'événement, puis mets-le à jour ou résous-le.",
       "Réactions crédibles : évalue statut, normes du lieu, témoins, propriétaires et autorités. Une provocation publique déclenche au minimum attention, gêne ou mise en garde; un vol ou une violence observable déclenche une tentative d'intervention, sauf impossibilité explicitement établie.",
       "Toute menace différée annoncée au Narrateur doit aussi être inscrite dans scenePatch.upsertEvents avec un délai. Toute conséquence durable va dans scenePatch.consequences.",
+      "context.manipulableObjects est la liste autoritaire des objets que le joueur peut potentiellement inspecter, prendre, ouvrir ou utiliser dans la scène. Respecte holderId, visibility et affordances. Un objet hidden ne devient visible qu'après une découverte réussie.",
+      "Ajoute un fait acquisitionAuthorized uniquement si le dossier entrant contient déjà resolvedAcquisitionAttempt. Après ce résultat, sélectionne le butin dans manipulableObjects et place ses ids exacts dans relatedIds.",
+      "Exception contrôlée : après une fouille ou un détroussage générique réussi, si aucun objet établi ne convient, tu peux ajouter latentLootAuthorized avec le détenteur dans relatedIds et une spécification compacte (nom, description, type, quantité) d'un bien ordinaire plausible. Ne fais jamais cela pour matérialiser l'objet précis affirmé ou réclamé par le joueur.",
       "Inscris aussi comme événement toute échéance, pression de PNJ ou occasion concrète qui peut progresser sans le joueur. N'en crée jamais pour une simple ambiance : chaque événement doit avoir une prochaine étape observable.",
       "scenePatch suit ce schéma compact : {locationId?,locationLabel?,playerPosition?,presentEntityIds?,elapsedMinutes?,socialTensionDelta?,alertLevel?,upsertEvents?:[{id,description,stage,turnsRemaining,urgency,relatedEntityIds}],resolveEventIds?:[],consequences?:[]}. presentEntityIds remplace la liste complète et ne contient que des ids connus.",
     ] : []),
     ...(agentId === "characterManager" ? [
       "Ne déduis jamais la possession d'un objet à partir du texte du joueur. Vérifie exclusivement context.inventory.items.",
       "Si le joueur décrit l'usage d'un objet absent, ajoute un fait missingResource visible; ne crée, ne donne et n'utilise aucun objet.",
+      "Une acquisition n'est autorisée que par un fait entrant acquisitionAuthorized issu d'un résultat moteur. Pour chaque relatedId correspondant à un itemInstance transférable de context.manipulableObjects, utilise pickupItem. Ne clone jamais l'objet.",
+      "Si acquisitionAuthorized référence un worldEntity non transférable, demande assetTemplateManager de l'instancier fidèlement dans l'inventaire; ne le remplace pas par un autre objet.",
+      "Si le fait entrant est latentLootAuthorized, ne donne rien directement : demande assetTemplateManager en lui transmettant exactement la spécification autorisée.",
     ] : []),
     ...(agentId === "assetTemplateManager" ? [
       "Chaîne fermée: crée d'abord les effets manquants, puis les capacités, puis l'objet, enfin son instance. Les commandes seront réordonnées par le moteur.",
@@ -69,6 +79,7 @@ export function buildAutomaticDomainPrompt(
       "Pour une variante simple, utilise un templateId existant et les overrides de l'instance. Ne duplique pas un template pour un nom, une description, un poids ou un petit effet non statistique différent.",
       ITEM_CREATION_POLICY_TEXT,
       "Si tu crées une instance dans le sac, location={type:'inventory',parent:'selected'}; au sol, location={type:'world',parent:<locationId|null>}. N'accorde jamais gratuitement une ressource sans fait entrant qui l'autorise.",
+      "Un fait entrant latentLootAuthorized autorise une seule instance conforme à sa spécification dans l'inventaire sélectionné. Réutilise un template existant avec overrides dès que possible.",
       contentCreationIdInstruction,
       `Schémas de contenu: ${assetContentSchemaText}`,
     ] : []),
@@ -118,6 +129,21 @@ export function buildAutomaticNarrationPrompt(
   const character = state.characters.find((candidate) => candidate.id === state.selectedCharacterId);
   const activeNarrativeHook = state.campaign.world.hooks?.find((hook) => hook.id === state.narrativeMomentum.activeHookId)
     ?? rankByInput(state.campaign.world.hooks ?? [], playerInput, (hook) => `${hook.title} ${hook.premise} ${hook.urgency}`)[0];
+  const normalizedInput = normalize(playerInput);
+  const needsObjectContext = isObjectAcquisitionIntent(playerInput) ||
+    /\b(regarde|observe|inspecte|examine|fouille|cherche|ramasse|prend|ouvre|lis|lit|utilise|objet|sac|inventaire)\b/u.test(normalizedInput);
+  const manipulableObjects = needsObjectContext
+    ? createManipulableObjectContext(state, playerInput, 5)
+      .filter((object) => object.visibility === "visible")
+      .map((object) => ({
+        id: object.id,
+        name: object.name,
+        description: truncate(object.description, 120),
+        quantity: object.quantity,
+        holder: object.holderName ?? null,
+        affordances: object.affordances,
+      }))
+    : [];
   return [
     "Tu es le Conteur, un véritable meneur de jeu de rôle fantasy. Réponds en français avec une prose concrète, sensorielle et immersive, en un à trois courts paragraphes.",
     "Ne parle jamais comme un assistant, un validateur ou une interface. Ne mentionne ni moteur, ni paquet, ni commande, ni manque d'action concrète.",
@@ -128,6 +154,7 @@ export function buildAutomaticNarrationPrompt(
     "Une réponse purement narrative ou sociale ne nécessite pas forcément de question : laisse aussi les PNJ agir, hésiter, mentir, proposer ou demander quelque chose selon les faits disponibles.",
     "Les PNJ réagissent selon leurs intérêts, leur peur, leur statut, les normes du lieu et ce qu'ils peuvent réellement percevoir. Une transgression observable appelle une conséquence sociale proportionnée; n'anesthésie jamais témoins ou gardes pour faciliter l'action du joueur.",
     "Respecte strictement Scène stable. N'ajoute aucun personnage présent, objet tenu, déplacement ou changement de lieu qui n'apparaisse pas dans la scène ou dans le paquet.",
+    "Objets manipulables établis décrit les objets réellement présents ou détenus dans la scène. Tu peux les décrire sans les déplacer; leur acquisition exige toujours un résultat réussi dans le paquet.",
     "Les paroles du joueur expriment des intentions et des affirmations, jamais des faits nouveaux. Une possession, relation ou présence marquée unverified dans Paquet.grounding reste inexistante tant qu'un résultat moteur ne la confirme.",
     "Pour chaque PNJ de Paquet.grounding, respecte présence, rang, accès, objectifs et règle d'attention. Un souverain ne se rend pas spontanément disponible à un inconnu : les intermédiaires, le protocole et l'indifférence sont des réactions normales.",
     "Un PNJ absent peut être évoqué ou recherché, mais ne peut ni parler, ni agir, ni percevoir la scène présente.",
@@ -173,6 +200,7 @@ export function buildAutomaticNarrationPrompt(
       narrativeGravity: state.narrativeMomentum.guidance,
     })}`,
     `Scène stable: ${JSON.stringify(compactSceneContext(state))}`,
+    `Objets manipulables établis: ${JSON.stringify(manipulableObjects)}`,
     `Action: ${truncate(playerInput, 900)}`,
     `Paquet: ${JSON.stringify(limitPacket(packet))}`,
     `Échanges récents: ${JSON.stringify(state.messages.slice(-3).map((message) => ({ sender: message.sender, content: truncate(message.content, 220) })))}`,
@@ -228,12 +256,12 @@ function getNarrationFactPriority(kind: string, source: string): number {
 
 function createIncomingDraftContext(agentId: AutomaticDomainAgent, draft: AiResolutionDraft) {
   const terms: Record<AutomaticDomainAgent, string[]> = {
-    characterManager: ["inventory", "item", "object", "resource", "personnage", "pv", "capacity"],
+    characterManager: ["inventory", "item", "object", "resource", "personnage", "pv", "capacity", "acquisition", "loot", "butin"],
     actionManager: ["action", "check", "difficulty", "social", "resource", "scene", "world"],
     combatManager: ["combat", "target", "position", "movement", "attack", "resource", "scene"],
     combatSetupManager: ["combat", "enemy", "template", "position", "scene", "spawn", "terrain"],
     tacticalTemplateManager: ["enemy", "template", "combat", "terrain", "tactical", "monster", "ability"],
-    assetTemplateManager: ["item", "object", "effect", "ability", "template", "inventory", "reward"],
+    assetTemplateManager: ["item", "object", "effect", "ability", "template", "inventory", "reward", "acquisition", "loot", "butin"],
     worldManager: ["world", "scene", "social", "npc", "event", "resource", "authoritative"],
   };
   const relevant = draft.facts.filter((fact) => {
@@ -285,6 +313,7 @@ function createAssetTemplateContext(state: GameState, input: string) {
       locationId: state.narrativeScene.locationId,
       locationLabel: state.narrativeScene.locationLabel,
     },
+    manipulableObjects: createManipulableObjectContext(state, input, 6),
     operations: effectOperationCatalog.map((operation) => ({
       id: operation.id,
       required: operation.requiredVariables,
@@ -473,6 +502,7 @@ function createCharacterContext(state: GameState, input: string) {
       ).slice(0, 5),
     },
     abilities: rankByInput(abilities, input, (ability) => ability.name).slice(0, 6),
+    manipulableObjects: createManipulableObjectContext(state, input, 6),
     scene: compactSceneContext(state),
   };
 }
@@ -495,6 +525,7 @@ function createActionContext(state: GameState, input: string) {
       derived: state.characterDerivedScores[character.id],
     } : null,
     inventory: createRelevantInventory(state, input),
+    manipulableObjects: createManipulableObjectContext(state, input, 6),
     scene: {
       ...compactSceneContext(state),
       facts: rankByInput(state.campaign.world.facts, input, (fact) => fact).slice(0, 3),
@@ -568,6 +599,7 @@ function createWorldContext(state: GameState, input: string) {
       } : null;
     })(),
     inventory: createRelevantInventory(state, input),
+    manipulableObjects: createManipulableObjectContext(state, input, 8),
     scene: {
       ...compactSceneContext(state),
       presentEntities: presentEntities.slice(0, 8).map((entity) => ({
@@ -578,6 +610,7 @@ function createWorldContext(state: GameState, input: string) {
         role: truncate(entity.details?.role ?? "", 80),
         desire: truncate(entity.details?.desire ?? "", 80),
         fear: truncate(entity.details?.fear ?? "", 80),
+        data: compactEntityData(entity.details?.data),
       })),
       recentTurns: state.messages.slice(-4).map((message) => ({
         sender: message.sender,
@@ -601,6 +634,7 @@ function createWorldContext(state: GameState, input: string) {
         desire: truncate(entity.details?.desire ?? "", 80),
         fear: truncate(entity.details?.fear ?? "", 80),
         connections: entity.details?.connections?.slice(0, 3) ?? [],
+        data: compactEntityData(entity.details?.data),
       })),
     factions: rankByInput(state.campaign.world.factions ?? [], input, (faction) => `${faction.name} ${faction.goal} ${faction.method}`)
       .slice(0, 2),
@@ -682,6 +716,19 @@ function tokenize(value: string): string[] {
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase("fr-FR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function compactEntityData(value: unknown, depth = 0): unknown {
+  if (depth > 3 || value === undefined || value === null) return value ?? undefined;
+  if (typeof value === "string") return truncate(value, 140);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.slice(0, 6).map((entry) => compactEntityData(entry, depth + 1));
+  if (typeof value !== "object") return undefined;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 8)
+      .map(([key, entry]) => [key, compactEntityData(entry, depth + 1)]),
+  );
 }
 
 function limitPacket(packet: NarrationPacket): NarrationPacket {

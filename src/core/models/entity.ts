@@ -1,4 +1,5 @@
 export type EntityType = "npc" | "location" | "item";
+export type EntityDataValue = string | number | boolean | null | EntityDataValue[] | { [key: string]: EntityDataValue };
 
 export interface Entity {
   id: string;
@@ -23,5 +24,8 @@ export interface Entity {
     delegatesTo?: string[];
     knownFacts?: string[];
     enemyTemplateId?: string;
+    /** Données narratives libres conservées lors de l'import d'un monde. Le
+     * moteur ne leur attribue aucune sémantique implicite. */
+    data?: Record<string, EntityDataValue>;
   };
 }

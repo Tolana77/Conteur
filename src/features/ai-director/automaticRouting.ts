@@ -1,6 +1,10 @@
 import type { GameState } from "../../store/useGameStore";
 import type { AiAgentId } from "./types";
 import type { GroundingReport } from "./grounding";
+import {
+  createManipulableObjectContext,
+  isObjectAcquisitionIntent,
+} from "../world/manipulableObjects";
 
 export type AutomaticDomainAgent = Extract<
   AiAgentId,
@@ -44,9 +48,8 @@ export function routePlayerInput(
   const worldIntent = matches(text, /\b(regarde|observe|fouille|cherche|inspecte|examine|ecoute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|salue|reponds|dis|lieu|pnj|rumeur|qui est|qu est ce|ou est|pourquoi)\b/u);
   const itemClaimIntent = matches(text, /\b(avec|utilise|brandis|sors|degaine|tiens|manie|bois|mange|porte|enfile)\b/u)
     && matches(text, /\b(arme|epee|sabre|dague|couteau|lame|arc|bouclier|corde|torche|lanterne|cle|potion|fiole|outil)\b/u);
-  const itemSubject = matches(text, /\b(objet|arme|epee|sabre|dague|couteau|lame|arc|bouclier|couronne|sceau|cle|potion|fiole)\b/u);
   const socialDisruption = matches(text, /\b(crie|hurle|insulte|provoque|scandale|ivrogne|ivre|menace|agresse|frappe|vole|derobe|subtilise)\b/u);
-  const uncertainTransgression = matches(text, /\b(vole|derobe|subtilise|crochete|trompe|mens|intimide|menace|agresse)\b/u);
+  const uncertainTransgression = matches(text, /\b(arrache|detrousse|derobe|s empare|subtilise|crochete|trompe|mens|intimide|menace|agresse|vole)\b/u);
   const continuityIntent = matches(text, /\b(attends|attend|patiente|reste|ne fais rien|laisse venir|ecoute encore|continue)\b/u);
   const explicitAssetCreation = matches(text, /\b(cree|creer|invente|inventer|genere|generer|fabrique|concevoir)\b/u)
     && matches(text, /\b(objet|arme|armure|potion|effet|capacite)\b/u);
@@ -54,6 +57,10 @@ export function routePlayerInput(
     && matches(text, /\b(ennemi|monstre|creature|piege|terrain|obstacle|combat|embuscade)\b/u);
   const explicitWorldSubject = matches(text, /\b(lieu|pnj|rumeur|ville|village|foret|route|piece|salle|personne|homme|femme|creature|qui est|ou est)\b/u);
   const latestPlayerMessage = getLatestPlayerMessage(state);
+  const manipulableObjects = createManipulableObjectContext(state, playerInput, 8);
+  const mentionsManipulableObject = manipulableObjects.some((object) =>
+    text.includes(normalize(object.name)) || Boolean(object.holderName && text.includes(normalize(object.holderName))));
+  const acquisitionIntent = isObjectAcquisitionIntent(playerInput);
   const structuredActions = latestPlayerMessage?.actions ?? [];
   const executedKinds = new Set(latestPlayerMessage?.actionReceipt?.actions.map((action) => action.kind) ?? []);
   const hasExecutedCombatAction = executedKinds.has("attack");
@@ -81,9 +88,7 @@ export function routePlayerInput(
   if (itemClaimIntent && !hasExecutedCharacterAction) {
     add("characterManager", 9);
   }
-  if (uncertainTransgression && itemSubject && !hasExecutedCharacterAction) {
-    add("characterManager", 6);
-  }
+  if (mentionsManipulableObject) add("worldManager", 9);
 
   // Les jets explicitement tactiques restent dans Combat.
   if (actionIntent && !combatIntent) {
@@ -91,6 +96,10 @@ export function routePlayerInput(
   }
   if (uncertainTransgression && !combatIntent) {
     add("actionManager", 8);
+  }
+  if (acquisitionIntent && !combatIntent) {
+    add("worldManager", 10);
+    add("actionManager", 9);
   }
 
   // "Ouvre mon sac" ou "regarde mon inventaire" ne concerne pas le monde.
