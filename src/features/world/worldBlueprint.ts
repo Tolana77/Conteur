@@ -219,6 +219,8 @@ export function buildWorldCreationPrompt(
     "- Chaque secret possède au moins deux indices concrets situés dans des lieux, PNJ ou objets existants.",
     "- Chaque PNJ veut quelque chose maintenant, craint une conséquence et entretient au moins une connexion utile.",
     "- Pour chaque PNJ, précise socialRank, access, disposition, protocol et attentionRule. Son rang doit réellement limiter qui obtient son attention; un souverain délègue les demandes ordinaires.",
+    "- Valeurs fermées: socialRank vaut uniquement outsider, commoner, notable, noble, highNoble ou sovereign; access vaut uniquement open, guarded ou restricted. Ne traduis pas ces identifiants.",
+    "- socialRank concerne seulement les PNJ. access concerne les PNJ et les lieux lorsque l'accès est pertinent. Omet ces champs plutôt que de leur inventer une autre valeur.",
     "- Pour chaque objet narratif détenu par un PNJ, renseigne ownerId avec l'id de ce PNJ. Sinon relie-le à son lieu par connections. Cela détermine qui peut réellement le manipuler ou le dérober.",
     "- Modélise aussi quelques possessions ordinaires susceptibles d'être manipulées (bourse, lettre, clé, outil, arme portée). Elles restent sobres et cohérentes avec le rang du PNJ; elles ne sont pas toutes des récompenses magiques.",
     "- PNJ, lieux et objets peuvent recevoir tous les champs JSON supplémentaires utiles : apparence, habitudes, horaires, géographie, climat, services, ressources, dangers, coutumes, habitants, architecture, etc. Ils seront conservés comme données narratives libres.",
@@ -244,6 +246,7 @@ export function buildWorldRepairPrompt(rawResponse: string, errors: string[]): s
   return [
     "Corrige le JSON de monde ci-dessous sans changer ses idées créatives.",
     `Retourne uniquement le JSON complet corrigé, conforme à schemaVersion ${WORLD_BLUEPRINT_SCHEMA_VERSION}, sans Markdown.`,
+    "Valeurs fermées: socialRank = outsider | commoner | notable | noble | highNoble | sovereign; access = open | guarded | restricted. Omet un champ non pertinent.",
     `Erreurs détectées:\n- ${errors.join("\n- ")}`,
     "JSON À CORRIGER:",
     rawResponse.trim(),
@@ -513,7 +516,7 @@ export function createCampaignStartFromBlueprint(
 }
 
 function createBlueprintSkeleton(): WorldBlueprint {
-  const entity: GeneratedWorldEntity = {
+  const entityBase = {
     id: "id-unique",
     name: "Nom évocateur",
     description: "Description sensorielle et fonction de jeu",
@@ -525,6 +528,13 @@ function createBlueprintSkeleton(): WorldBlueprint {
     connections: ["autre-id"],
     tags: ["mot-cle"],
     aliases: ["titre ou surnom"],
+    data: {
+      detailLibre: "Tout autre élément utile propre à ce PNJ, ce lieu ou cet objet",
+    },
+  };
+  const npc: GeneratedWorldEntity = {
+    ...entityBase,
+    id: "npc-id",
     socialRank: "notable",
     access: "guarded",
     disposition: "Indifférent tant que ses intérêts ne sont pas concernés",
@@ -532,10 +542,16 @@ function createBlueprintSkeleton(): WorldBlueprint {
     attentionRule: "Répond seulement aux demandes relevant de sa charge",
     delegatesTo: ["autre-id"],
     knownFacts: ["Information que ce PNJ connaît réellement"],
-    ownerId: "autre-id",
-    data: {
-      detailLibre: "Tout autre élément utile propre à ce PNJ, ce lieu ou cet objet",
-    },
+  };
+  const location: GeneratedWorldEntity = {
+    ...entityBase,
+    id: "location-id",
+    access: "open",
+  };
+  const item: GeneratedWorldEntity = {
+    ...entityBase,
+    id: "item-id",
+    ownerId: "npc-id",
   };
   return {
     schemaVersion: WORLD_BLUEPRINT_SCHEMA_VERSION,
@@ -559,9 +575,9 @@ function createBlueprintSkeleton(): WorldBlueprint {
       rules: ["vérité ou règle propre à cet univers"],
       facts: ["fait public exploitable en jeu"],
       factions: [{ id: "faction-id", name: "Nom", goal: "But", method: "Méthode", resource: "Levier", relationship: "Rapport aux autres" }],
-      locations: [entity],
-      npcs: [{ ...entity, id: "npc-id" }],
-      items: [{ ...entity, id: "item-id" }],
+      locations: [location],
+      npcs: [npc],
+      items: [item],
       conflicts: [{ id: "conflict-id", title: "Titre", description: "Situation", stakes: "Enjeux", participants: ["faction-id"], escalation: ["étape 1", "étape 2"] }],
       secrets: [{ id: "secret-id", truth: "Vérité cachée", clues: ["indice concret 1", "indice concret 2"], relatedIds: ["npc-id"] }],
       hooks: [{ id: "hook-id", title: "Titre", premise: "Décision proposée", urgency: "Ce qui évolue", relatedIds: ["location-id"] }],
@@ -892,6 +908,7 @@ function normalizeWorldBlueprintInput(value: unknown, warnings: string[]): unkno
 function normalizeEntities(value: unknown, prefix: string): Array<Record<string, unknown>> {
   return looseObjectArray(value).map((item, index) => {
     const name = looseText(pick(item, ["name", "nom", "title", "titre"])) ?? `${prefix} ${index + 1}`;
+    const details = looseRecord(item.details) ?? {};
     return {
       ...item,
       id: normalizeIdentifier(pick(item, ["id", "identifiant"]), `${prefix}-${name}`, index),
@@ -905,8 +922,14 @@ function normalizeEntities(value: unknown, prefix: string): Array<Record<string,
       connections: looseStringArray(pick(item, ["connections", "connexions", "relations", "relatedIds"])),
       tags: looseStringArray(pick(item, ["tags", "motsCles", "mots-clés", "categories", "catégories"])),
       aliases: looseStringArray(pick(item, ["aliases", "alias", "surnoms", "autresNoms"])),
-      socialRank: normalizeSocialRank(pick(item, ["socialRank", "rangSocial", "rang"])),
-      access: normalizeAccess(pick(item, ["access", "acces", "accès", "accessibilite", "accessibilité"])),
+      socialRank: normalizeSocialRank(
+        pick(item, ["socialRank", "rangSocial", "rang"])
+          ?? pick(details, ["socialRank", "rangSocial", "rang"]),
+      ),
+      access: normalizeAccess(
+        pick(item, ["access", "acces", "accès", "accessibilite", "accessibilité"])
+          ?? pick(details, ["access", "acces", "accès", "accessibilite", "accessibilité"]),
+      ),
       disposition: looseText(pick(item, ["disposition", "attitude", "humeur"])),
       protocol: looseText(pick(item, ["protocol", "protocole", "etiquette", "étiquette"])),
       attentionRule: looseText(pick(item, ["attentionRule", "regleAttention", "règleAttention"])),
@@ -1154,19 +1177,39 @@ function normalizeLookup(value: string): string {
 function normalizeSocialRank(value: unknown): GeneratedWorldEntity["socialRank"] {
   const normalized = normalizeLookup(looseText(value) ?? "");
   const ranks: Record<string, GeneratedWorldEntity["socialRank"]> = {
-    outsider: "outsider", etranger: "outsider", commoner: "commoner", roturier: "commoner", notable: "notable",
-    noble: "noble", highnoble: "highNoble", "haute noblesse": "highNoble", sovereign: "sovereign", souverain: "sovereign",
+    outsider: "outsider", etranger: "outsider", marginal: "outsider",
+    commoner: "commoner", roturier: "commoner", commun: "commoner", peuple: "commoner",
+    notable: "notable", bourgeois: "notable", influent: "notable",
+    noble: "noble", aristocrate: "noble",
+    highnoble: "highNoble", "high noble": "highNoble", "haute noblesse": "highNoble", "grand noble": "highNoble",
+    sovereign: "sovereign", souverain: "sovereign", royal: "sovereign", monarque: "sovereign",
   };
-  return ranks[normalized];
+  const exact = ranks[normalized];
+  if (exact) return exact;
+  if (/\b(empereur|imperatrice|roi|reine|souverain|souveraine|monarque)\b/u.test(normalized)) return "sovereign";
+  if (/\b(haute noblesse|haut noble|grande noblesse|prince|princesse|duc|duchesse)\b/u.test(normalized)) return "highNoble";
+  if (/\b(noble|noblesse|aristocrate)\b/u.test(normalized)) return "noble";
+  if (/\b(notable|bourgeois|officier|influent)\b/u.test(normalized)) return "notable";
+  if (/\b(roturier|commun|villageois|citadin|peuple)\b/u.test(normalized)) return "commoner";
+  if (/\b(etranger|marginal|proscrit|hors la loi)\b/u.test(normalized)) return "outsider";
+  return undefined;
 }
 
 function normalizeAccess(value: unknown): GeneratedWorldEntity["access"] {
   const normalized = normalizeLookup(looseText(value) ?? "");
   const access: Record<string, GeneratedWorldEntity["access"]> = {
-    open: "open", ouvert: "open", libre: "open", guarded: "guarded", garde: "guarded", surveille: "guarded",
-    restricted: "restricted", restreint: "restricted", prive: "restricted", interdit: "restricted",
+    open: "open", ouvert: "open", libre: "open", public: "open", accessible: "open",
+    guarded: "guarded", garde: "guarded", surveille: "guarded", controle: "guarded", filtre: "guarded",
+    restricted: "restricted", restreint: "restricted", restreinte: "restricted", prive: "restricted", privee: "restricted",
+    interdit: "restricted", interdite: "restricted", reserve: "restricted", reservee: "restricted", secret: "restricted",
+    secrete: "restricted", ferme: "restricted", fermee: "restricted",
   };
-  return access[normalized];
+  const exact = access[normalized];
+  if (exact) return exact;
+  if (/\b(interdit|interdite|restreint|restreinte|reserve|reservee|prive|privee|secret|secrete|ferme|fermee|inaccessible)\b/u.test(normalized)) return "restricted";
+  if (/\b(garde|surveille|controle|filtre|escorte|autorisation)\b/u.test(normalized)) return "guarded";
+  if (/\b(ouvert|libre|public|accessible)\b/u.test(normalized)) return "open";
+  return undefined;
 }
 
 function asRecord(value: unknown, path: string, errors: string[]): Record<string, unknown> | null {

@@ -16,7 +16,9 @@ const {
   parseCharacterCreationPackage,
 } = await vite.ssrLoadModule("/src/features/character/characterCreation.ts");
 const {
+  buildWorldCreationPrompt,
   createCampaignStartFromBlueprint,
+  defaultWorldCreationBrief,
   parseWorldBlueprint,
 } = await vite.ssrLoadModule("/src/features/world/worldBlueprint.ts");
 const {
@@ -273,6 +275,28 @@ assert.equal(flexibleBlueprint.blueprint.world.npcs[0].connections[0], flexibleB
 assert.notEqual(flexibleBlueprint.blueprint.world.npcs[0].id, flexibleBlueprint.blueprint.world.npcs[1].id);
 assert.ok(flexibleBlueprint.warnings.some((warning) => warning.includes("schemaVersion absente")));
 assert.ok(flexibleBlueprint.warnings.some((warning) => warning.includes("renommé automatiquement")));
+
+const worldPrompt = buildWorldCreationPrompt(defaultWorldCreationBrief);
+assert.match(worldPrompt, /socialRank vaut uniquement outsider, commoner, notable, noble, highNoble ou sovereign/u);
+assert.match(worldPrompt, /access vaut uniquement open, guarded ou restricted/u);
+
+const localizedEnumsBlueprint = structuredClone(blueprint);
+localizedEnumsBlueprint.world.locations = [{
+  ...makeEntity("location-guarded"),
+  access: "Accès fortement surveillé par la garde",
+}];
+localizedEnumsBlueprint.world.npcs = [{
+  ...makeEntity("npc-duchess"),
+  details: {
+    socialRank: "Membre de la haute noblesse",
+    access: "Audience privée et réservée",
+  },
+}];
+const normalizedEnums = parseWorldBlueprint(JSON.stringify(localizedEnumsBlueprint));
+assert.equal(normalizedEnums.errors.length, 0);
+assert.equal(normalizedEnums.blueprint.world.locations[0].access, "guarded");
+assert.equal(normalizedEnums.blueprint.world.npcs[0].socialRank, "highNoble");
+assert.equal(normalizedEnums.blueprint.world.npcs[0].access, "restricted");
 
 const repairedTrailingCommas = parseWorldBlueprint(`{
   "campagne": { "nom": "Import réparé", },

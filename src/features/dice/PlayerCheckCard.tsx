@@ -3,13 +3,11 @@ import type { PlayerCheckRequest } from "../../app/types";
 import { useGameStore } from "../../store/useGameStore";
 import { HighlightedGameText } from "../../ui/gameTerms";
 import {
-  continueAfterPlayerCheck,
-} from "../ai-director/automatedDirector";
-import {
   formatCheckFormula,
   getPlayerCheckLabel,
-  resolvePlayerCheckRequest,
 } from "../ai-director/improvisedActions";
+import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import { resolveAndNarratePlayerCheck } from "./resolvePlayerCheck";
 
 export function PlayerCheckCard({
   request,
@@ -19,41 +17,33 @@ export function PlayerCheckCard({
   onBusyChange?: (busy: boolean) => void;
 }) {
   const [isResolving, setIsResolving] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const formula = formatCheckFormula(request.modifierPreview);
   const label = getPlayerCheckLabel(request.skill, request.stat);
+  const multiplayerRoom = useMultiplayerStore((state) => state.room);
+  const multiplayerSelf = useMultiplayerStore((state) => state.self);
+  const pendingMultiplayerTurn = useMultiplayerStore((state) => state.pendingTurn);
+  const submitPlayerCheck = useMultiplayerStore((state) => state.submitPlayerCheck);
+  const isRemotePlayer = Boolean(multiplayerRoom && multiplayerSelf?.role === "player");
 
   const handleRoll = async () => {
     if (isResolving || request.status !== "pending") return;
     setIsResolving(true);
+    setLocalError(null);
     onBusyChange?.(true);
 
     try {
-      const state = useGameStore.getState();
-      const liveRequest = state.playerCheckRequests.find((candidate) => candidate.id === request.id);
-      if (!liveRequest || liveRequest.status !== "pending") return;
-
-      const result = resolvePlayerCheckRequest(liveRequest, {
-        characters: state.characters,
-        derivedScores: state.characterDerivedScores,
-        itemInstances: state.itemInstances,
-        itemTemplates: state.itemTemplates,
-        rollFormula: state.rollFormula,
-        spendItemQuantity: state.spendItemQuantity,
-        recordCampaignEvent: state.recordCampaignEvent,
-      });
-
-      if (result.status === "success") {
-        const completed = useGameStore.getState().completePlayerCheck(request.id, result.resolution);
-        if (completed) await continueAfterPlayerCheck(request.id);
-      } else {
-        useGameStore.getState().failPlayerCheck(request.id, result.message);
-      }
+      if (isRemotePlayer) await submitPlayerCheck(request.id);
+      else await resolveAndNarratePlayerCheck(request.id);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "erreur inconnue";
-      useGameStore.getState().addGmMessage(
-        `Le résultat du jet est enregistré, mais le Conteur ne parvient pas encore à en poursuivre le récit : ${reason}`,
-        { kind: "checkResult", relatedCheckId: request.id },
-      );
+      if (isRemotePlayer) setLocalError(reason);
+      else {
+        useGameStore.getState().addGmMessage(
+          `Le résultat du jet est enregistré, mais le Conteur ne parvient pas encore à en poursuivre le récit : ${reason}`,
+          { kind: "checkResult", relatedCheckId: request.id },
+        );
+      }
     } finally {
       setIsResolving(false);
       onBusyChange?.(false);
@@ -83,13 +73,19 @@ export function PlayerCheckCard({
           <div className="mt-3">
             <button
               className="w-full border border-[#9C7A2E] bg-[#5A2233] px-3 py-2 text-sm font-semibold text-[#E4D8BE] transition-colors hover:bg-[#6B2B3E] disabled:cursor-wait disabled:opacity-60"
-              disabled={isResolving}
+              disabled={isResolving || Boolean(pendingMultiplayerTurn)}
               onClick={handleRoll}
               type="button"
             >
-              {isResolving ? "Lancer en cours…" : "Lancer le d20"}
+              {pendingMultiplayerTurn
+                ? "En attente du MJ"
+                : isResolving
+                  ? "Lancer en cours…"
+                  : "Lancer le d20"}
             </button>
-            {request.error ? <p className="mt-2 text-xs text-[#D78A82]">{request.error}</p> : null}
+            {request.error || localError ? (
+              <p className="mt-2 text-xs text-[#D78A82]">{request.error ?? localError}</p>
+            ) : null}
           </div>
         ) : isResolving ? (
           <p className="mt-3 border-t border-[#9C7A2E]/25 pt-2 text-sm text-[#D6C9AE]">

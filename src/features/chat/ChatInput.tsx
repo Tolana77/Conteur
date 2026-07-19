@@ -10,6 +10,7 @@ import {
 } from "../combat/targeting";
 import { runAutomatedDirector } from "../ai-director/automatedDirector";
 import { useGameStore } from "../../store/useGameStore";
+import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
 
 export function ChatInput({
   isExternalBusy = false,
@@ -24,6 +25,7 @@ export function ChatInput({
 }) {
   const [content, setContent] = useState("");
   const [isAwaitingNarration, setIsAwaitingNarration] = useState(false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   const sendPlayerMessage = useGameStore((state) => state.sendPlayerMessage);
   const addGmMessage = useGameStore((state) => state.addGmMessage);
   const pendingActionIntents = useGameStore((state) => state.pendingActionIntents);
@@ -37,6 +39,15 @@ export function ChatInput({
   const combat = useGameStore((state) => state.combat);
   const updateActionIntentTarget = useGameStore((state) => state.updateActionIntentTarget);
   const removeActionIntent = useGameStore((state) => state.removeActionIntent);
+  const clearActionIntents = useGameStore((state) => state.clearActionIntents);
+  const multiplayerRoom = useMultiplayerStore((state) => state.room);
+  const multiplayerSelf = useMultiplayerStore((state) => state.self);
+  const pendingMultiplayerTurn = useMultiplayerStore((state) => state.pendingTurn);
+  const awaitingHostState = useMultiplayerStore((state) => state.awaitingHostState);
+  const submitMultiplayerTurn = useMultiplayerStore((state) => state.submitTurn);
+  const isRemotePlayer = Boolean(multiplayerRoom && multiplayerSelf?.role === "player");
+  const isSpectator = Boolean(multiplayerRoom && multiplayerSelf?.role === "spectator");
+  const isMultiplayerBlocked = isSpectator || awaitingHostState || Boolean(pendingMultiplayerTurn);
 
   useEffect(() => {
     onBusyChange?.(isAwaitingNarration || Boolean(content.trim()));
@@ -44,7 +55,7 @@ export function ChatInput({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isExternalBusy || hasPendingPlayerCheck) return;
+    if (isExternalBusy || hasPendingPlayerCheck || isMultiplayerBlocked) return;
     const playerInput = content.trim();
 
     if (!playerInput && pendingActionIntents.length === 0) {
@@ -52,6 +63,22 @@ export function ChatInput({
     }
 
     onPlayerActivity?.();
+    setSubmissionError(null);
+
+    if (isRemotePlayer) {
+      setIsAwaitingNarration(true);
+      try {
+        await submitMultiplayerTurn(playerInput, pendingActionIntents);
+        clearActionIntents();
+        setContent("");
+      } catch (error) {
+        setSubmissionError(error instanceof Error ? error.message : "Intention impossible à transmettre.");
+      } finally {
+        setIsAwaitingNarration(false);
+      }
+      return;
+    }
+
     sendPlayerMessage(content);
     setContent("");
     setIsAwaitingNarration(true);
@@ -94,13 +121,19 @@ export function ChatInput({
         ))}
         <input
           className="min-w-[120px] flex-1 bg-transparent px-1 py-1 text-sm text-[#E4D8BE] outline-none placeholder:text-[#E4D8BE]/45"
-          disabled={isExternalBusy || hasPendingPlayerCheck || isAwaitingNarration}
+          disabled={isExternalBusy || hasPendingPlayerCheck || isAwaitingNarration || isMultiplayerBlocked}
           onChange={(event) => {
             setContent(event.target.value);
             onPlayerActivity?.();
           }}
           onFocus={onPlayerActivity}
-          placeholder={hasPendingPlayerCheck
+          placeholder={isSpectator
+            ? "Mode spectateur"
+            : awaitingHostState
+              ? "En attente de l'état du MJ..."
+              : pendingMultiplayerTurn
+                ? "Intention transmise au MJ..."
+                : hasPendingPlayerCheck
             ? "Lancez le dé pour poursuivre..."
             : isExternalBusy
               ? "Le Conteur interprète le résultat..."
@@ -110,10 +143,16 @@ export function ChatInput({
       </div>
       <button
         className="fantasy-button mt-2 w-full rounded px-4 py-2 text-sm font-semibold sm:w-auto"
-        disabled={isAwaitingNarration || isExternalBusy || hasPendingPlayerCheck}
+        disabled={isAwaitingNarration || isExternalBusy || hasPendingPlayerCheck || isMultiplayerBlocked}
         type="submit"
       >
-        {isExternalBusy
+        {isSpectator
+          ? "Spectateur"
+          : pendingMultiplayerTurn
+            ? "En attente du MJ"
+            : awaitingHostState
+              ? "Synchronisation..."
+              : isExternalBusy
           ? "Le Conteur interprète..."
           : hasPendingPlayerCheck
             ? "Jet en attente"
@@ -121,6 +160,9 @@ export function ChatInput({
               ? "Le Conteur écrit..."
               : "Envoyer"}
       </button>
+      {submissionError ? (
+        <p className="mt-2 text-xs text-[#D98A8A]">{submissionError}</p>
+      ) : null}
     </form>
   );
 }

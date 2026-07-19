@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CampaignConsole } from "../features/campaign/CampaignConsole";
 import { CharacterList } from "../features/character/CharacterList";
 import { CharacterSheet } from "../features/character/CharacterSheet";
@@ -7,6 +7,7 @@ import { CombatMap } from "../features/combat/CombatMap";
 import { DicePanel } from "../features/dice/DicePanel";
 import { GenreSelection } from "../features/world/GenreSelection";
 import { WorldStatus } from "../features/world/WorldStatus";
+import { MultiplayerPanel, useMultiplayerStore } from "../features/multiplayer";
 
 type PanelId = "left" | "center" | "right" | "combat" | "genre";
 
@@ -18,18 +19,34 @@ const panels: Array<{ id: PanelId; label: string; mobileLabel: string }> = [
   { id: "genre", label: "Univers", mobileLabel: "Univers" },
 ];
 
-function getNextPanel(currentPanel: PanelId, direction: 1 | -1): PanelId {
-  const currentIndex = panels.findIndex((panel) => panel.id === currentPanel);
-  const nextIndex = Math.max(0, Math.min(panels.length - 1, currentIndex + direction));
+function getNextPanel(
+  currentPanel: PanelId,
+  direction: 1 | -1,
+  availablePanels: typeof panels,
+): PanelId {
+  const currentIndex = availablePanels.findIndex((panel) => panel.id === currentPanel);
+  const nextIndex = Math.max(0, Math.min(availablePanels.length - 1, currentIndex + direction));
 
-  return panels[nextIndex]?.id ?? "center";
+  return availablePanels[nextIndex]?.id ?? "center";
 }
 
 export function GamePage() {
   const [consoleView, setConsoleView] = useState<"campaign" | "world" | null>(null);
+  const [isMultiplayerOpen, setIsMultiplayerOpen] = useState(false);
   const [activePanel, setActivePanel] = useState<PanelId>("center");
   const [mapTargetIntentId, setMapTargetIntentId] = useState<string | null>(null);
   const [touchStart, setTouchStart] = useState<number | null>(null);
+  const multiplayerRoom = useMultiplayerStore((state) => state.room);
+  const multiplayerSelf = useMultiplayerStore((state) => state.self);
+  const multiplayerPhase = useMultiplayerStore((state) => state.phase);
+  const isRemoteParticipant = Boolean(multiplayerRoom && multiplayerSelf?.role !== "host");
+  const visiblePanels = isRemoteParticipant
+    ? panels.filter((panel) => panel.id !== "genre")
+    : panels;
+
+  useEffect(() => {
+    if (isRemoteParticipant && activePanel === "genre") setActivePanel("center");
+  }, [activePanel, isRemoteParticipant]);
 
   function handleTouchEnd(clientX: number) {
     if (touchStart === null) {
@@ -43,7 +60,11 @@ export function GamePage() {
       return;
     }
 
-    setActivePanel((currentPanel) => getNextPanel(currentPanel, delta < 0 ? 1 : -1));
+    setActivePanel((currentPanel) => getNextPanel(
+      currentPanel,
+      delta < 0 ? 1 : -1,
+      visiblePanels,
+    ));
 
     setTouchStart(null);
   }
@@ -105,11 +126,12 @@ export function GamePage() {
         <header className="shrink-0 border-b border-[#9C7A2E]/25 bg-[#15121A] px-2 py-2 text-[#E4D8BE] sm:px-4">
           <div className="flex items-center gap-2">
           <nav
-            className="grid flex-1 touch-pan-x grid-cols-5 gap-1 rounded border border-[#9C7A2E]/20 bg-[#221E29] p-1"
+            className="grid flex-1 touch-pan-x gap-1 rounded border border-[#9C7A2E]/20 bg-[#221E29] p-1"
             onTouchEnd={(event) => handleTouchEnd(event.changedTouches[0]?.clientX ?? 0)}
             onTouchStart={(event) => setTouchStart(event.changedTouches[0]?.clientX ?? null)}
+            style={{ gridTemplateColumns: `repeat(${visiblePanels.length}, minmax(0, 1fr))` }}
           >
-            {panels.map((panel) => (
+            {visiblePanels.map((panel) => (
               <button
                 className={`min-w-0 rounded px-0.5 py-2 text-[10px] font-semibold sm:px-2 sm:text-sm ${
                   activePanel === panel.id
@@ -126,12 +148,29 @@ export function GamePage() {
             ))}
           </nav>
             <button
+              aria-label="Groupe multijoueur"
+              className={`h-full border px-2 py-2 text-xs font-semibold sm:px-3 sm:text-sm ${
+                multiplayerRoom
+                  ? "border-[#3F5641] bg-[#3F5641]/35 text-[#E4D8BE]"
+                  : "border-[#9C7A2E]/30 bg-[#221E29] text-[#E4D8BE]/75"
+              }`}
+              onClick={() => setIsMultiplayerOpen(true)}
+              type="button"
+            >
+              <span className="sm:hidden">Groupe</span>
+              <span className="hidden sm:inline">
+                {multiplayerRoom ? (multiplayerPhase === "connected" ? "En ligne" : "Connexion") : "Multijoueur"}
+              </span>
+            </button>
+            {!isRemoteParticipant ? (
+            <button
               className="h-full rounded border border-[#9C7A2E]/30 bg-[#221E29] px-2 py-2 text-sm font-bold text-[#E4D8BE] hover:bg-[#5A2233]/50 sm:px-3"
               onClick={() => setConsoleView("campaign")}
               type="button"
             >
               ...
             </button>
+            ) : null}
           </div>
         </header>
 
@@ -143,6 +182,7 @@ export function GamePage() {
       {consoleView ? (
         <CampaignConsole initialView={consoleView} onClose={() => setConsoleView(null)} />
       ) : null}
+      {isMultiplayerOpen ? <MultiplayerPanel onClose={() => setIsMultiplayerOpen(false)} /> : null}
     </main>
   );
 }

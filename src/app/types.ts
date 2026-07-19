@@ -9,6 +9,9 @@ export interface Message {
   sender: MessageSender;
   content: string;
   timestamp: number;
+  authorId?: string;
+  authorName?: string;
+  characterId?: string;
   kind?: ChatMessageKind;
   relatedCheckId?: string;
   actions?: ChatActionIntent[];

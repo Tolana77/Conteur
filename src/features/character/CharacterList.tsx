@@ -1,15 +1,22 @@
 import { useGameStore } from "../../store/useGameStore";
+import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
 
 export function CharacterList() {
   const characters = useGameStore((state) => state.characters);
   const selectedCharacterId = useGameStore((state) => state.selectedCharacterId);
   const selectCharacter = useGameStore((state) => state.selectCharacter);
+  const multiplayerRoom = useMultiplayerStore((state) => state.room);
+  const multiplayerSelf = useMultiplayerStore((state) => state.self);
+  const isAssignedPlayer = Boolean(multiplayerRoom && multiplayerSelf?.role === "player");
+  const visibleCharacters = isAssignedPlayer
+    ? characters.filter((character) => character.id === multiplayerSelf?.characterId)
+    : characters;
 
   return (
     <section className="space-y-3">
       <h2 className="rune-label text-sm">Personnages</h2>
       <div className="space-y-2">
-        {characters.map((character) => {
+        {visibleCharacters.map((character) => {
           const isSelected = character.id === selectedCharacterId;
 
           return (
@@ -20,7 +27,9 @@ export function CharacterList() {
                   : "manuscript-card hover:bg-[#2A2433]"
               }`}
               key={character.id}
-              onClick={() => selectCharacter(character.id)}
+              onClick={() => {
+                if (!isAssignedPlayer) selectCharacter(character.id);
+              }}
               type="button"
             >
               <span className="ink-heading block font-semibold">{character.name}</span>

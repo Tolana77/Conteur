@@ -36,3 +36,9 @@ La passerelle IA est indépendante de l'hébergeur. Le guide de migration et de
 déploiement sur Vercel se trouve dans
 [`docs/VERCEL_DEPLOYMENT.md`](docs/VERCEL_DEPLOYMENT.md). Netlify reste
 temporairement disponible comme solution de retour arrière.
+
+## Multijoueur
+
+La boucle MJ/joueurs distante utilise Supabase avec authentification anonyme,
+RLS et projections privées. La procédure complète se trouve dans
+[`docs/MULTIPLAYER_SETUP.md`](docs/MULTIPLAYER_SETUP.md).

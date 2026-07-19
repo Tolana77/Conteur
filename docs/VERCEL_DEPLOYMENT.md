@@ -42,6 +42,10 @@ Variables** :
 - `AI_ALLOWED_ORIGIN` : URL publique exacte, sans slash final
 - `AI_MAX_REQUESTS_PER_MINUTE` : `12`
 
+Pour activer les salons multijoueurs, ajoute également les deux variables
+publiques décrites dans [`MULTIPLAYER_SETUP.md`](MULTIPLAYER_SETUP.md) :
+`VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY`.
+
 Configure `AI_ALLOWED_ORIGIN` séparément pour **Preview** et **Production** si
 tu souhaites tester les déploiements de prévisualisation. Après toute
 modification des variables, relance un déploiement.

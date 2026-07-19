@@ -20,9 +20,11 @@
     "test:combat-narration": "node test/combat-narration.test.mjs",
     "test:targeting": "node test/targeting.test.mjs",
     "test:spells": "node test/spell-system.test.mjs",
-    "test:game-terms": "node test/game-terms.test.mjs"
+    "test:game-terms": "node test/game-terms.test.mjs",
+    "test:multiplayer": "node test/multiplayer-foundation.test.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
     "postcss": "^8.5.6",

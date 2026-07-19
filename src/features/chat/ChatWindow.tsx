@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
+import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
 import { IlluminatedInitial } from "../../ui/components/IlluminatedInitial";
 import { HighlightedGameText } from "../../ui/gameTerms";
 import { AnimatedDiceRollCard } from "../dice/DiceRollOverlay";
@@ -16,13 +17,16 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
   const storedMessages = useGameStore((state) => state.messages);
   const diceRolls = useGameStore((state) => state.diceRolls);
   const playerCheckRequests = useGameStore((state) => state.playerCheckRequests);
+  const multiplayerRoom = useMultiplayerStore((state) => state.room);
+  const multiplayerRole = useMultiplayerStore((state) => state.self?.role ?? null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [isComposerBusy, setIsComposerBusy] = useState(false);
   const [isCheckNarrationBusy, setIsCheckNarrationBusy] = useState(false);
   const hasPendingPlayerCheck = playerCheckRequests.some((request) => request.status === "pending");
+  const canRunGmAutomation = !multiplayerRoom || multiplayerRole === "host";
   const narrationIsSuspended = isComposerBusy || isCheckNarrationBusy || hasPendingPlayerCheck;
-  useCombatNarration(!narrationIsSuspended);
-  const { markPlayerActivity } = useScenePacing(!narrationIsSuspended);
+  useCombatNarration(canRunGmAutomation && !narrationIsSuspended);
+  const { markPlayerActivity } = useScenePacing(canRunGmAutomation && !narrationIsSuspended);
   const initializedRollsRef = useRef(false);
   const animatedRollIdsRef = useRef(new Set<string>());
   const messages = storedMessages.filter((message) => !isLegacyTechnicalCombatMessage(message));

@@ -251,7 +251,10 @@ export interface GameState {
     content: string,
     metadata?: Pick<Message, "kind" | "relatedCheckId">,
   ) => void;
-  sendPlayerMessage: (content: string) => void;
+  sendPlayerMessage: (
+    content: string,
+    author?: Pick<Message, "authorId" | "authorName" | "characterId">,
+  ) => void;
   setPendingGameDecision: (decision: PendingGameDecision | null) => void;
   setNarrativeMomentum: (momentum: NarrativeMomentum) => void;
   recordCampaignEvent: (entry: string) => void;
@@ -1712,12 +1715,14 @@ function createMessage(
   content: string,
   actions: ChatActionIntent[] = [],
   actionReceipt?: GameActionReceipt,
+  author?: Pick<Message, "authorId" | "authorName" | "characterId">,
 ): Message {
   return {
     id: `message-${crypto.randomUUID()}`,
     sender,
     content,
     timestamp: Date.now(),
+    ...author,
     ...(actions.length > 0 ? { actions } : {}),
     ...(actionReceipt ? { actionReceipt } : {}),
   };
@@ -6894,7 +6899,7 @@ export const useGameStore = create<GameState>()(
           payload: { content, ...metadata },
         }, "gm"));
       },
-      sendPlayerMessage: (content) => {
+      sendPlayerMessage: (content, author) => {
         const state = get();
         const trimmedContent = content.trim();
         const resolvedActions = executePlayerActionIntents(state, state.pendingActionIntents);
@@ -6904,7 +6909,13 @@ export const useGameStore = create<GameState>()(
         }
 
         const actionReceipt = createGameActionReceipt(state, resolvedActions);
-        const playerMessage = createMessage("player", trimmedContent, resolvedActions.executedIntents, actionReceipt);
+        const playerMessage = createMessage(
+          "player",
+          trimmedContent,
+          resolvedActions.executedIntents,
+          actionReceipt,
+          author,
+        );
 
         set({
           characters: resolvedActions.characters,
