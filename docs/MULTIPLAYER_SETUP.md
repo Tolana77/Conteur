@@ -9,8 +9,10 @@ l'autorité de jeu : lui seul exécute le moteur et appelle le narrateur.
 1. Crée un projet sur Supabase.
 2. Dans **Authentication > Providers > Anonymous**, active les connexions
    anonymes.
-3. Dans **SQL Editor**, exécute le fichier
-   `supabase/migrations/202607190001_multiplayer_foundation.sql`.
+3. Dans **SQL Editor**, exécute dans l'ordre
+   `supabase/migrations/202607190001_multiplayer_foundation.sql`, puis
+   `supabase/migrations/202607190002_multiplayer_character_onboarding.sql`, puis
+   `supabase/migrations/202607190003_multiplayer_perception.sql`.
 4. Dans **Project Settings > API**, relève l'URL du projet et la clé
    publishable. La clé `service_role` ne doit jamais être utilisée ici.
 
@@ -32,14 +34,31 @@ relance Vite. Ce fichier ne doit pas être commité.
 
 1. Le MJ ouvre la campagne locale et crée un salon.
 2. Les autres navigateurs rejoignent avec le code à six caractères.
-3. Chaque joueur reçoit un personnage encore libre.
-4. Une intention est écrite dans `multiplayer_turns` avec l'identité Supabase
+3. Chaque nouveau joueur choisit un préfabriqué ou crée une fiche équilibrée.
+4. Le navigateur du MJ valide la demande, installe la fiche dans la campagne et
+   l'attribue à son auteur.
+5. Une intention est écrite dans `multiplayer_turns` avec l'identité Supabase
    réelle du joueur.
-5. Le navigateur du MJ traite les intentions dans l'ordre, appelle le moteur et
+6. Le navigateur du MJ traite les intentions dans l'ordre, appelle le moteur et
    le narrateur, puis publie une projection filtrée par destinataire.
-6. Les joueurs ne reçoivent ni secrets du monde, ni traces IA, ni jets cachés,
+7. Les joueurs ne reçoivent ni secrets du monde, ni traces IA, ni jets cachés,
    ni inventaires privés des autres personnages.
+
+Les paroles et écrits cités sont projetés séparément pour chaque destinataire.
+Le moteur croise la maîtrise du locuteur et celle du destinataire, avec quatre
+niveaux (`none`, `fragments`, `limited`, `fluent`). L'oral dépend de la parole
+et de l'audition; l'écrit dépend de la maîtrise écrite et de la vision.
 
 Le MJ doit rester connecté pour résoudre de nouvelles intentions. La dernière
 projection reçue reste disponible côté Supabase, mais aucune règle n'est
 exécutée sans l'autorité du MJ.
+
+## 4. Administration et personnages de rechange
+
+- Le MJ peut promouvoir un participant au rôle **Admin** depuis **Groupe**.
+- Un admin peut jouer et accède à **Univers**, à la console et à l'Atelier des
+  mondes, sans devenir une seconde autorité du moteur.
+- Depuis **Univers** ou l'Atelier, le MJ et les admins peuvent publier des
+  personnages préfabriqués pour les prochaines arrivées.
+- Une couleur stable identifie chaque participant dans le chat et l'annuaire
+  **Personnages**.

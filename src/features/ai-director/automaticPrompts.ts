@@ -1,5 +1,13 @@
 import type { GameState } from "../../store/useGameStore";
-import type { GameActionReceipt, PlayerCheckNarrationContext } from "../../app/types";
+import type {
+  Character,
+  GameActionReceipt,
+  PlayerCheckNarrationContext,
+} from "../../app/types";
+import {
+  applyPerceptionConditions,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
 import { getAgentCommandSchemaText } from "./commandPermissions";
 import {
   assetContentSchemaText,
@@ -484,6 +492,7 @@ function createCharacterContext(state: GameState, input: string) {
       maxPv: character.maxPv,
       stats: character.stats,
       derived: state.characterDerivedScores[character.id],
+      perception: createRelevantPerceptionContext(state, character, input),
     } : null,
     inventory: {
       exhaustive: inventory.length <= 60,
@@ -523,6 +532,7 @@ function createActionContext(state: GameState, input: string) {
       stats: character.stats,
       competences: character.competences.slice(0, 12),
       derived: state.characterDerivedScores[character.id],
+      perception: createRelevantPerceptionContext(state, character, input),
     } : null,
     inventory: createRelevantInventory(state, input),
     manipulableObjects: createManipulableObjectContext(state, input, 6),
@@ -537,6 +547,36 @@ function createActionContext(state: GameState, input: string) {
         .map((hook) => ({ title: hook.title, premise: truncate(hook.premise, 120) })),
       recentConsequences: state.campaign.history.slice(-2).map((entry) => truncate(entry, 160)),
     },
+  };
+}
+
+function createRelevantPerceptionContext(
+  state: GameState,
+  character: Character,
+  input: string,
+) {
+  const normalizedInput = normalize(input);
+  if (!/\b(?:langue|parl[a-z]*|oral|voix|cri[a-z]*|ecout[a-z]*|entend[a-z]*|son|lis|lire|lit|ecri[a-z]*|texte|inscription|signe|aveug[a-z]*|vision|sourd[a-z]*|muet[a-z]*|silenc[a-z]*)\b/u.test(normalizedInput)) {
+    return undefined;
+  }
+  const combatant = state.combat.combatants.find((candidate) =>
+    candidate.sourceType === "character" && candidate.sourceId === character.id);
+  const perception = applyPerceptionConditions(
+    normalizeCharacterPerception(character.perception),
+    combatant?.conditions ?? [],
+  );
+  return {
+    vision: perception.vision,
+    hearing: perception.hearing,
+    speech: perception.speech,
+    languages: perception.languages
+      .filter((language) => language.oral !== "none" || language.written !== "none")
+      .map((language) => ({
+        id: language.languageId,
+        name: language.name,
+        oral: language.oral,
+        written: language.written,
+      })),
   };
 }
 
@@ -596,6 +636,7 @@ function createWorldContext(state: GameState, input: string) {
         niveau: character.niveau,
         competences: character.competences.slice(0, 10),
         derived: state.characterDerivedScores[character.id],
+        perception: createRelevantPerceptionContext(state, character, input),
       } : null;
     })(),
     inventory: createRelevantInventory(state, input),

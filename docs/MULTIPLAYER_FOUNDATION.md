@@ -37,6 +37,25 @@ Les jets demandés au joueur passent également par cette file : le navigateur d
 MJ effectue le tirage et poursuit la narration. Un joueur ne choisit donc pas
 son résultat localement.
 
+Chaque nouveau joueur passe désormais par une demande de personnage. Le paquet
+est validé par les mêmes règles que la création locale, puis installé et
+attribué par l'hôte. Les personnages préfabriqués, les couleurs de joueur et le
+rôle administrateur sont stockés au niveau du salon Supabase.
+
+Les intentions narratives sont privées entre leur auteur et le MJ. La
+projection des autres participants ne conserve que les paroles explicitement
+placées entre guillemets ; les conséquences confirmées restent transmises par
+la narration du MJ et les jets publics.
+
+Cette frontière applique désormais une perception propre à chaque personnage.
+Chaque langue possède deux maîtrises indépendantes, oral pour entendre/parler
+et écrit pour lire/écrire. Les niveaux sont aucune maîtrise, quelques mots,
+presque tout sauf certains mots et maîtrise complète. Le contenu partiellement
+compris est masqué de façon déterministe; un destinataire ne peut donc pas
+retrouver les mots cachés en resynchronisant. Mutisme, surdité et cécité
+bloquent respectivement l'émission orale, la réception orale et les
+informations visuelles exactes de la carte.
+
 ## Commandes déjà migrées
 
 - ajuster ou fixer les PV ; la résolution historique des résistances calcule

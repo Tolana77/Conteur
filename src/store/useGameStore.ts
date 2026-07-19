@@ -14,6 +14,7 @@ import {
 } from "../core/game-engine/narrativeScene";
 import {
   createLocalGameRuntimeAdapter,
+  normalizeCharacterPerception,
   type GameActorRole,
   type GameCommand,
   type GameCommandInput,
@@ -130,9 +131,18 @@ import type {
   CharacterStats,
 } from "../app/types";
 import type { AiApiTrace } from "../features/ai-director/types";
+import {
+  validateCharacterCreationPackage,
+  type CharacterCreationPackage,
+} from "../features/character/characterCreation";
+import {
+  createCharacterInstallBundle,
+  createMultiplayerCharacterContext,
+  rebaseCharacterCreationPackage,
+} from "../features/multiplayer/characterOnboarding";
 
 export const GAME_STORAGE_KEY = "le-conteur:game-state";
-export const GAME_STORAGE_VERSION = 37;
+export const GAME_STORAGE_VERSION = 38;
 export const LEGACY_CAMPAIGNS_STORAGE_KEY = "le-conteur:campaigns";
 export const MAX_PLAYER_ACTION_INTENTS = 2;
 
@@ -243,6 +253,7 @@ export interface GameState {
   clearCharacterPortraits: () => void;
   resetGameState: () => void;
   startCampaign: (snapshot: CampaignStartSnapshot) => void;
+  addCharacterFromPackage: (setup: CharacterCreationPackage) => Character | null;
   restartCampaign: () => void;
   advanceNarrativeScene: (playerAction: string) => void;
   applyNarrativeScenePatch: (patch: NarrativeScenePatch) => void;
@@ -253,7 +264,7 @@ export interface GameState {
   ) => void;
   sendPlayerMessage: (
     content: string,
-    author?: Pick<Message, "authorId" | "authorName" | "characterId">,
+    author?: Pick<Message, "authorId" | "authorName" | "authorColor" | "characterId" | "spokenContent" | "communication">,
   ) => void;
   setPendingGameDecision: (decision: PendingGameDecision | null) => void;
   setNarrativeMomentum: (momentum: NarrativeMomentum) => void;
@@ -915,6 +926,13 @@ function createCampaignRuntimeState(snapshot: CampaignStartSnapshot): Partial<Ga
   };
 }
 
+function hasConflictingTemplateIds<T extends { id: string }>(additions: T[], existing: T[]): boolean {
+  return additions.some((template) => {
+    const current = existing.find((candidate) => candidate.id === template.id);
+    return current !== undefined && JSON.stringify(current) !== JSON.stringify(template);
+  });
+}
+
 function normalizePendingActionIntents(value: unknown): ChatActionIntent[] {
   if (!Array.isArray(value)) {
     return [];
@@ -1048,6 +1066,7 @@ function normalizePersistedState(persistedState: unknown): ReturnType<typeof cre
   const characters = (candidate.characters ?? initialState.characters).map((character) => ({
     ...character,
     campaignId: campaignSource.id,
+    perception: normalizeCharacterPerception(character.perception),
   }));
   const selectedCharacterExists = characters.some(
     (character) => character.id === candidate.selectedCharacterId,
@@ -1715,7 +1734,7 @@ function createMessage(
   content: string,
   actions: ChatActionIntent[] = [],
   actionReceipt?: GameActionReceipt,
-  author?: Pick<Message, "authorId" | "authorName" | "characterId">,
+  author?: Pick<Message, "authorId" | "authorName" | "authorColor" | "characterId" | "spokenContent" | "communication">,
 ): Message {
   return {
     id: `message-${crypto.randomUUID()}`,
@@ -6859,6 +6878,77 @@ export const useGameStore = create<GameState>()(
         ...createCampaignRuntimeState(snapshot),
         characterPortraits: {},
       }),
+      addCharacterFromPackage: (sourceSetup) => {
+        let createdCharacter: Character | null = null;
+        set((state) => {
+          const setup = rebaseCharacterCreationPackage(sourceSetup);
+          const context = createMultiplayerCharacterContext(state);
+          const hasTemplateConflict =
+            hasConflictingTemplateIds(setup.abilityTemplates, state.abilityTemplates) ||
+            hasConflictingTemplateIds(setup.gameActionTemplates, state.gameActionTemplates) ||
+            hasConflictingTemplateIds(setup.effectTemplates, state.effectTemplates);
+          if (hasTemplateConflict) return state;
+          const reusableSetup = {
+            ...setup,
+            abilityTemplates: setup.abilityTemplates.filter((template) =>
+              !state.abilityTemplates.some((existing) => existing.id === template.id)),
+            gameActionTemplates: setup.gameActionTemplates.filter((template) =>
+              !state.gameActionTemplates.some((existing) => existing.id === template.id)),
+            effectTemplates: setup.effectTemplates.filter((template) =>
+              !state.effectTemplates.some((existing) => existing.id === template.id)),
+          };
+          const validation = validateCharacterCreationPackage(reusableSetup, context);
+          if (!validation.setup) return state;
+
+          const bundle = createCharacterInstallBundle(state, validation.setup);
+          const characters = [...state.characters, bundle.character];
+          const itemInstances = [...state.itemInstances, ...bundle.itemInstances];
+          const abilityInstances = [...state.abilityInstances, ...bundle.abilityInstances];
+          const spellbooks = synchronizeSpellbooks(
+            state.spellbooks,
+            characters,
+            state.spellTemplates,
+          );
+          const campaign = { ...state.campaign, characters };
+          const start = state.campaignStartSnapshot;
+          const startCharacters = [...start.characters, bundle.character];
+          const startItemInstances = [...start.itemInstances, ...bundle.itemInstances];
+          const startAbilityInstances = [...start.abilityInstances, ...bundle.abilityInstances];
+          const campaignStartSnapshot = createCampaignStartSnapshot({
+            ...start,
+            campaign: { ...start.campaign, characters: startCharacters },
+            characters: startCharacters,
+            itemTemplates: bundle.itemTemplates,
+            itemInstances: startItemInstances,
+            abilityTemplates: bundle.abilityTemplates,
+            abilityInstances: startAbilityInstances,
+            gameActionTemplates: bundle.gameActionTemplates,
+            effectTemplates: bundle.effectTemplates,
+            spellbooks: synchronizeSpellbooks(start.spellbooks, startCharacters, start.spellTemplates),
+          });
+          createdCharacter = bundle.character;
+
+          return {
+            campaign,
+            characters,
+            itemTemplates: bundle.itemTemplates,
+            itemInstances,
+            abilityTemplates: bundle.abilityTemplates,
+            abilityInstances,
+            gameActionTemplates: bundle.gameActionTemplates,
+            effectTemplates: bundle.effectTemplates,
+            spellbooks,
+            campaignStartSnapshot,
+            characterDerivedScores: createCharacterDerivedScores(
+              characters,
+              itemInstances,
+              bundle.itemTemplates,
+              bundle.effectTemplates,
+            ),
+          };
+        });
+        return createdCharacter;
+      },
       restartCampaign: () => {
         set((state) => {
           const runtime = createCampaignRuntimeState(state.campaignStartSnapshot);

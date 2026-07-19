@@ -91,6 +91,21 @@ const overpowered = createClassicCharacterPackage({
 assert.equal(overpowered.setup, null);
 assert.ok(overpowered.errors.some((error) => error.includes("Budget de caractéristiques dépassé")));
 
+const overlinguist = createClassicCharacterPackage({
+  ...draft,
+  perception: {
+    ...draft.perception,
+    languages: ["Commun", "Elfique", "Draconique"].map((name) => ({
+      languageId: name.toLowerCase(),
+      name,
+      oral: "fluent",
+      written: "fluent",
+    })),
+  },
+}, [], context);
+assert.equal(overlinguist.setup, null);
+assert.ok(overlinguist.errors.some((error) => error.includes("maîtrise linguistique")));
+
 const assistedJson = {
   schemaVersion: 1,
   character: {
@@ -150,6 +165,9 @@ const assisted = parseCharacterCreationPackage(JSON.stringify(assistedJson), con
 assert.equal(assisted.errors.length, 0);
 assert.ok(assisted.setup);
 assert.equal(assisted.setup.abilityTemplates[0].id, "ability-spark-thread");
+assert.equal(assisted.setup.characters[0].perception.languages[0].languageId, "commun");
+assert.equal(assisted.setup.characters[0].perception.languages[0].oral, "fluent");
+assert.equal(assisted.setup.characters[0].perception.languages[0].written, "fluent");
 
 const excessiveDamageJson = structuredClone(assistedJson);
 excessiveDamageJson.effectTemplates[0].actions[0].variables.value = "20d20";

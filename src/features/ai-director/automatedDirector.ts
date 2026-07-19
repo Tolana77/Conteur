@@ -11,6 +11,7 @@ import {
   buildAutomaticNarrationPrompt,
   createNarrationPacket,
 } from "./automaticPrompts";
+import { describeCommunicationForNarrator } from "../../core/game-engine/perception";
 import { routePlayerInput, type AutomaticDomainAgent } from "./automaticRouting";
 import { isCommandAllowedForAgent } from "./commandPermissions";
 import { runAgentOverHttp } from "./httpAiGateway";
@@ -88,6 +89,7 @@ export async function runAutomatedDirector(playerInput: string): Promise<Automat
 
   draft = mergeResolutionDraft(draft, localResolution.draftPatch);
   draft = mergeResolutionDraft(draft, createGroundingDraftPatch(grounding));
+  draft = mergeResolutionDraft(draft, createCommunicationNarrationPatch(routingState));
   draft = mergeResolutionDraft(draft, createPendingCombatNarrationPatch(pendingCombatCuesAtTurnStart));
   applyScenePatches(localResolution.draftPatch?.scenePatches);
 
@@ -520,6 +522,22 @@ function createPendingCombatNarrationPatch(
       kind: "resolvedCombatSequence",
       content: `Conséquences de combat déjà résolues à intégrer dans la narration présente : ${events.join(" | ")}`,
       visibility: "playerVisible",
+    }],
+  };
+}
+
+function createCommunicationNarrationPatch(
+  state: GameState,
+): AiResolutionDraftPatch | undefined {
+  const latestPlayerMessage = [...state.messages].reverse().find((message) => message.sender === "player");
+  const constraint = describeCommunicationForNarrator(latestPlayerMessage?.communication ?? null);
+  if (!constraint) return undefined;
+  return {
+    facts: [{
+      source: "localEngine",
+      kind: "communicationConstraint",
+      content: constraint,
+      visibility: "gmOnly",
     }],
   };
 }

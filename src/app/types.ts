@@ -1,5 +1,22 @@
-export type { Campaign, Character, CharacterStats, Entity, World } from "../core/models";
-import type { CharacterStats } from "../core/models";
+export type {
+  Campaign,
+  Character,
+  CharacterLanguageMastery,
+  CharacterPerception,
+  CharacterStats,
+  CommunicationPayload,
+  CommunicationPerception,
+  Entity,
+  LanguageChannel,
+  LanguageMasteryLevel,
+  SenseCapability,
+  World,
+} from "../core/models";
+import type {
+  CharacterStats,
+  CommunicationPayload,
+  CommunicationPerception,
+} from "../core/models";
 
 export type MessageSender = "player" | "gm";
 export type ChatMessageKind = "standard" | "checkSetup" | "checkResult";
@@ -11,7 +28,11 @@ export interface Message {
   timestamp: number;
   authorId?: string;
   authorName?: string;
+  authorColor?: string;
   characterId?: string;
+  spokenContent?: string;
+  communication?: CommunicationPayload;
+  communicationPerception?: CommunicationPerception;
   kind?: ChatMessageKind;
   relatedCheckId?: string;
   actions?: ChatActionIntent[];

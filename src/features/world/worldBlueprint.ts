@@ -3,6 +3,7 @@ import type {
   AbilityTemplate,
   Campaign,
   Character,
+  CharacterPerception,
   CharacterStats,
   Entity,
   ItemInstance,
@@ -12,6 +13,10 @@ import type {
   GameActionTemplate,
   World,
 } from "../../app/types";
+import {
+  cloneDefaultPerception,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
 import {
   createCampaignStartSnapshot,
   type CampaignStartSnapshot,
@@ -83,6 +88,7 @@ export interface GeneratedStartingCharacter {
   maxPv: number;
   competences: string[];
   abilityTemplateIds: string[];
+  perception: CharacterPerception;
   history?: string[];
 }
 
@@ -621,6 +627,7 @@ function parseStartingParty(
         `party.characters[${index}].abilityTemplateIds`,
         errors,
       ),
+      perception: normalizeCharacterPerception(item.perception),
       ...(item.history === undefined
         ? {}
         : { history: stringArray(item.history, `party.characters[${index}].history`, errors) }),
@@ -666,6 +673,7 @@ function createFallbackParty(level: number): WorldBlueprint["party"] {
       maxPv: 10,
       competences: [],
       abilityTemplateIds: [],
+      perception: cloneDefaultPerception(),
     }],
     startingItems: [],
   };
@@ -687,6 +695,7 @@ function toCharacter(character: GeneratedStartingCharacter, campaignId: string):
     maxPv: character.maxPv,
     inventaire: [],
     competences: [...character.competences],
+    perception: normalizeCharacterPerception(character.perception),
     ...(character.history?.length ? { history: [...character.history] } : {}),
   };
 }

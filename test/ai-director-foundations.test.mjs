@@ -83,7 +83,7 @@ const migratedStart = normalizeCampaignStartSnapshot({
   abilityTemplates: [],
   abilityInstances: [],
 });
-assert.equal(migratedStart?.version, 6);
+assert.equal(migratedStart?.version, 7);
 assert.equal(migratedStart?.narrativeScene.locationId, "loc-throne");
 
 const sceneWithApproach = applyNarrativeScenePatch(initialScene, {
@@ -325,6 +325,14 @@ assert.deepEqual(
 );
 assert.deepEqual(
   routePlayerInput("Je crie comme un ivrogne devant la dame de la cour.", { ...baseState, narrativeScene: initialScene }).agents,
+  ["worldManager"],
+);
+assert.deepEqual(
+  routePlayerInput("Quelles langues je maîtrise ?", { ...baseState, narrativeScene: initialScene }).agents,
+  ["characterManager"],
+);
+assert.deepEqual(
+  routePlayerInput("Je lis l'inscription sur la stèle.", baseState).agents,
   ["worldManager"],
 );
 assert.deepEqual(

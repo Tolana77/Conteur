@@ -28,6 +28,10 @@ import {
 } from "../content";
 import { ITEM_CREATION_POLICY_TEXT } from "../items/itemCreationPolicy";
 import { getGameActionTemplate } from "../actions";
+import {
+  applyPerceptionConditions,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
 import type {
   AiAgentId,
   AiAgentRequest,
@@ -480,6 +484,9 @@ function getRecentMessageLimit(agentId: AiAgentId, contextMode: AiContextMode): 
 
 function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, contextMode: AiContextMode, playerInput?: string) {
   const selectedCharacter = snapshot.characters.find((character) => character.id === snapshot.selectedCharacterId);
+  const perceptionContext = selectedCharacter
+    ? createRelevantPerceptionContext(snapshot, selectedCharacter, playerInput ?? "")
+    : undefined;
   const base = {
     campaign: {
       id: snapshot.campaign.id,
@@ -488,6 +495,7 @@ function createScopedContext(snapshot: AiPromptSnapshot, agentId: AiAgentId, con
       level: snapshot.campaign.level,
     },
     selectedCharacter: selectedCharacter ? createCharacterIdentity(selectedCharacter) : null,
+    ...(perceptionContext ? { selectedCharacterPerception: perceptionContext } : {}),
     playerInput: playerInput?.trim() || null,
   };
 
@@ -998,6 +1006,36 @@ function createCharacterIdentity(character: Character) {
     classe: character.classe,
     niveau: character.niveau,
     ...(character.origin ? { origine: truncateContextText(character.origin, 140) } : {}),
+  };
+}
+
+function createRelevantPerceptionContext(
+  snapshot: AiPromptSnapshot,
+  character: Character,
+  input: string,
+) {
+  const normalizedInput = normalizeSearchText(input);
+  if (!/\b(?:langue|parl[a-z]*|oral|voix|cri[a-z]*|ecout[a-z]*|entend[a-z]*|son|lis|lire|lit|ecri[a-z]*|texte|inscription|signe|aveug[a-z]*|vision|sourd[a-z]*|muet[a-z]*|silenc[a-z]*)\b/u.test(normalizedInput)) {
+    return undefined;
+  }
+  const combatant = snapshot.combat.combatants.find((candidate) =>
+    candidate.sourceType === "character" && candidate.sourceId === character.id);
+  const perception = applyPerceptionConditions(
+    normalizeCharacterPerception(character.perception),
+    combatant?.conditions ?? [],
+  );
+  return {
+    vision: perception.vision,
+    hearing: perception.hearing,
+    speech: perception.speech,
+    languages: perception.languages
+      .filter((language) => language.oral !== "none" || language.written !== "none")
+      .map((language) => ({
+        id: language.languageId,
+        name: language.name,
+        oral: language.oral,
+        written: language.written,
+      })),
   };
 }
 

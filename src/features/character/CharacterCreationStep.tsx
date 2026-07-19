@@ -1,5 +1,19 @@
 import { useMemo, useState } from "react";
-import type { CharacterStats } from "../../app/types";
+import type {
+  CharacterLanguageMastery,
+  CharacterStats,
+  LanguageMasteryLevel,
+  SenseCapability,
+} from "../../app/types";
+import {
+  defaultLanguageCatalog,
+  getLanguageMasteryPoints,
+  getMaximumLanguageMasteryPoints,
+  languageMasteryLabels,
+  languageMasteryLevels,
+  normalizeCharacterPerception,
+  normalizeLanguageId,
+} from "../../core/game-engine/perception";
 import type {
   GeneratedStartingCharacter,
   WorldBlueprint,
@@ -45,6 +59,7 @@ export function CharacterCreationStep({
     createInitialItemSelections(initialParty));
   const [description, setDescription] = useState("");
   const [rawResponse, setRawResponse] = useState("");
+  const [customLanguageName, setCustomLanguageName] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [isCommitted, setIsCommitted] = useState(false);
 
@@ -55,6 +70,8 @@ export function CharacterCreationStep({
   const pointCost = calculatePointBuyCost(character.stats);
   const skillLimit = getMaximumSkillCount(context.campaignLevel);
   const abilityLimit = getMaximumAbilityCount(context.campaignLevel);
+  const languagePoints = getLanguageMasteryPoints(character.perception);
+  const languagePointLimit = getMaximumLanguageMasteryPoints(context.campaignLevel);
   const assistedPrompt = useMemo(
     () => description.trim() ? buildCharacterCreationPrompt(description, context) : "",
     [context, description],
@@ -122,6 +139,52 @@ export function CharacterCreationStep({
         ? character.abilityTemplateIds.filter((id) => id !== templateId)
         : [...character.abilityTemplateIds, templateId],
     );
+  }
+
+  function changeSense(
+    key: "vision" | "hearing" | "speech",
+    value: SenseCapability,
+  ) {
+    patchCharacter("perception", { ...character.perception, [key]: value });
+  }
+
+  function changeLanguageMastery(
+    languageId: string,
+    channel: "oral" | "written",
+    value: LanguageMasteryLevel,
+  ) {
+    patchCharacter("perception", {
+      ...character.perception,
+      languages: character.perception.languages.map((language) => language.languageId === languageId
+        ? { ...language, [channel]: value }
+        : language),
+    });
+  }
+
+  function addLanguage(language: Pick<CharacterLanguageMastery, "languageId" | "name">) {
+    if (character.perception.languages.some((candidate) => candidate.languageId === language.languageId)) return;
+    patchCharacter("perception", {
+      ...character.perception,
+      languages: [...character.perception.languages, {
+        ...language,
+        oral: "none",
+        written: "none",
+      }],
+    });
+  }
+
+  function addCustomLanguage() {
+    const name = customLanguageName.trim().slice(0, 80);
+    if (!name) return;
+    addLanguage({ languageId: normalizeLanguageId(name), name });
+    setCustomLanguageName("");
+  }
+
+  function removeLanguage(languageId: string) {
+    patchCharacter("perception", {
+      ...character.perception,
+      languages: character.perception.languages.filter((language) => language.languageId !== languageId),
+    });
   }
 
   function changeItem(templateId: string, delta: number) {
@@ -241,6 +304,79 @@ export function CharacterCreationStep({
                 value={character.maxPv}
               />
             </label>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-end justify-between gap-3">
+              <SectionTitle>Perception et langues</SectionTitle>
+              <span className={`text-xs ${languagePoints > languagePointLimit ? "text-[#D78A82]" : "text-[#9C7A2E]"}`}>
+                {languagePoints}/{languagePointLimit} points
+              </span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <SenseField label="Vision" value={character.perception.vision} onChange={(value) => changeSense("vision", value)} />
+              <SenseField label="Audition" value={character.perception.hearing} onChange={(value) => changeSense("hearing", value)} />
+              <SenseField label="Parole" value={character.perception.speech} onChange={(value) => changeSense("speech", value)} />
+            </div>
+            <p className="mt-2 text-xs leading-5 text-[#E4D8BE]/50">
+              L’oral couvre entendre et parler. L’écrit couvre lire et écrire; les deux progressent séparément.
+            </p>
+            <div className="mt-2 space-y-2">
+              {character.perception.languages.map((language) => (
+                <div className="grid gap-2 border border-[#9C7A2E]/18 bg-[#15121A]/45 p-2 sm:grid-cols-[minmax(7rem,1fr)_minmax(10rem,1.4fr)_minmax(10rem,1.4fr)_2rem] sm:items-end" key={language.languageId}>
+                  <strong className="text-sm font-medium text-[#E4D8BE]">{language.name}</strong>
+                  <MasteryField
+                    label="Entendre / parler"
+                    onChange={(value) => changeLanguageMastery(language.languageId, "oral", value)}
+                    value={language.oral}
+                  />
+                  <MasteryField
+                    label="Lire / écrire"
+                    onChange={(value) => changeLanguageMastery(language.languageId, "written", value)}
+                    value={language.written}
+                  />
+                  <button
+                    aria-label={`Retirer ${language.name}`}
+                    className="h-8 border border-[#9C7A2E]/20 text-[#E4D8BE]/50 hover:border-[#8C0F00] hover:text-[#D78A82]"
+                    onClick={() => removeLanguage(language.languageId)}
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+              <select
+                className={fieldClass}
+                defaultValue=""
+                onChange={(event) => {
+                  const language = defaultLanguageCatalog.find((candidate) => candidate.id === event.target.value);
+                  if (language) addLanguage({ languageId: language.id, name: language.name });
+                  event.target.value = "";
+                }}
+              >
+                <option value="">Ajouter une langue du catalogue…</option>
+                {defaultLanguageCatalog
+                  .filter((language) => !character.perception.languages.some((known) => known.languageId === language.id))
+                  .map((language) => <option key={language.id} value={language.id}>{language.name}</option>)}
+              </select>
+              <input
+                className={fieldClass}
+                onChange={(event) => setCustomLanguageName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addCustomLanguage();
+                  }
+                }}
+                placeholder="Ou une langue propre à l’univers"
+                value={customLanguageName}
+              />
+              <button className="fantasy-button px-3 py-2 text-xs" onClick={addCustomLanguage} type="button">
+                Ajouter
+              </button>
+            </div>
           </section>
 
           <section>
@@ -414,6 +550,48 @@ function TextArea({ label, value, onChange }: { label: string; value: string; on
   );
 }
 
+function SenseField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: SenseCapability;
+  onChange: (value: SenseCapability) => void;
+}) {
+  return (
+    <label className="grid gap-1 text-xs text-[#E4D8BE]/65">
+      {label}
+      <select className={fieldClass} onChange={(event) => onChange(event.target.value as SenseCapability)} value={value}>
+        <option value="normal">Normale</option>
+        <option value="impaired">Altérée</option>
+        <option value="none">Absente</option>
+      </select>
+    </label>
+  );
+}
+
+function MasteryField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: LanguageMasteryLevel;
+  onChange: (value: LanguageMasteryLevel) => void;
+}) {
+  return (
+    <label className="grid gap-1 text-[10px] text-[#E4D8BE]/50">
+      {label}
+      <select className={`${fieldClass} py-1.5 text-xs`} onChange={(event) => onChange(event.target.value as LanguageMasteryLevel)} value={value}>
+        {languageMasteryLevels.map((level) => (
+          <option key={level} value={level}>{languageMasteryLabels[level]}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function ValidationMessages({ errors, warnings }: { errors: string[]; warnings: string[] }) {
   if (!errors.length && !warnings.length) {
     return <p className="border border-[#3F5641] bg-[#3F5641]/20 px-3 py-2 text-xs text-[#E4D8BE]">Fiche équilibrée et prête à être validée.</p>;
@@ -450,6 +628,7 @@ function createInitialCharacter(
     stats: { ...initial.stats },
     competences: [...initial.competences],
     abilityTemplateIds: [...initial.abilityTemplateIds],
+    perception: normalizeCharacterPerception(initial.perception),
     history: [...(initial.history ?? [])],
   };
 }

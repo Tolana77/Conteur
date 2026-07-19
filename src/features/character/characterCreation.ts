@@ -1,11 +1,18 @@
 import type {
   AbilityTemplate,
+  CharacterPerception,
   CharacterStats,
   EffectTemplate,
   EnemyTemplate,
   GameActionTemplate,
   ItemTemplate,
 } from "../../app/types";
+import {
+  cloneDefaultPerception,
+  getLanguageMasteryPoints,
+  getMaximumLanguageMasteryPoints,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
 import {
   assetContentSchemaText,
   parseAbilityTemplate,
@@ -121,6 +128,7 @@ export function createDefaultCharacterDraft(level = 1): GeneratedStartingCharact
     maxPv: getRecommendedStartingHp(level, 10),
     competences: [],
     abilityTemplateIds: [],
+    perception: cloneDefaultPerception(),
     history: [],
   };
 }
@@ -162,6 +170,7 @@ export function buildCharacterCreationPrompt(
 ): string {
   const skillLimit = getMaximumSkillCount(context.campaignLevel);
   const abilityLimit = getMaximumAbilityCount(context.campaignLevel);
+  const languageBudget = getMaximumLanguageMasteryPoints(context.campaignLevel);
   return [
     "Tu es concepteur de personnages pour un jeu de rôle sandbox.",
     "Transforme la description du joueur en un personnage jouable, cohérent avec la campagne et volontairement modeste. Retourne uniquement du JSON valide.",
@@ -182,6 +191,9 @@ export function buildCharacterCreationPrompt(
     "ÉQUILIBRAGE OBLIGATOIRE",
     `- Chaque caractéristique est un entier de 8 à 15. Budget de points maximal: ${CHARACTER_POINT_BUY_BUDGET}, avec coûts 8=0, 9=1, 10=2, 11=3, 12=4, 13=5, 14=7, 15=9.`,
     `- Le niveau vaut exactement ${context.campaignLevel}. Maximum ${skillLimit} compétences maîtrisées et ${abilityLimit} capacités au total.`,
+    `- Les langues ont deux maîtrises indépendantes: oral (entendre/parler) et written (lire/écrire). Valeurs: none, fragments, limited, fluent. Leur coût vaut respectivement 0, 1, 2 et 3 points par canal, pour un budget maximal de ${languageBudget}.`,
+    "- limited signifie presque tout sauf certains mots; fragments signifie seulement quelques mots.",
+    "- vision, hearing et speech valent normal, impaired ou none. N'ajoute une déficience que si la description du joueur la justifie.",
     `- Les PV max ne dépassent pas ${getMaximumStartingHp(context.campaignLevel, 15)}; le personnage commence avec tous ses PV.`,
     "- Traduis les forces de la description par des compromis. Aucun personnage ne maîtrise tout et aucune caractéristique ne dépasse 15.",
     "- Réutilise les capacités existantes avant d'en créer. Une nouvelle capacité doit être ciblée, limitée et compatible avec les effets fermés du moteur.",
@@ -347,6 +359,20 @@ export function validateCharacterCreationPackage(
     errors.push("Un nouveau personnage doit commencer avec tous ses PV.");
   }
 
+  character.perception = normalizeCharacterPerception(character.perception);
+  const languagePoints = getLanguageMasteryPoints(character.perception);
+  const languagePointLimit = getMaximumLanguageMasteryPoints(context.campaignLevel);
+  if (character.perception.languages.length > 12) {
+    errors.push("Un personnage ne peut pas référencer plus de 12 langues à sa création.");
+  }
+  if (languagePoints > languagePointLimit) {
+    errors.push(`Trop de maîtrise linguistique: ${languagePoints}/${languagePointLimit} points.`);
+  }
+  if (!character.perception.languages.some((language) =>
+    language.oral !== "none" || language.written !== "none")) {
+    warnings.push("Le personnage ne maîtrise aucune langue, ni à l'oral ni à l'écrit.");
+  }
+
   const canonicalSkills = canonicalizeSkills(character.competences, errors);
   character.competences = canonicalSkills;
   const skillLimit = getMaximumSkillCount(context.campaignLevel);
@@ -437,6 +463,7 @@ function parseGeneratedCharacter(
     integer(statsSource[key], `character.stats.${key}`, errors, 8, 15, 10),
   ])) as unknown as CharacterStats;
   const maxPv = integer(source.maxPv, "character.maxPv", errors, 1, 500, getRecommendedStartingHp(campaignLevel, stats.constitution));
+  const perception = normalizeCharacterPerception(source.perception);
   return {
     id: normalizeCharacterId(requiredString(source.id, "character.id", errors)),
     name: requiredString(source.name, "character.name", errors),
@@ -451,6 +478,7 @@ function parseGeneratedCharacter(
     maxPv,
     competences: stringArray(source.competences, "character.competences", errors),
     abilityTemplateIds: stringArray(source.abilityTemplateIds, "character.abilityTemplateIds", errors),
+    perception,
     ...(source.history === undefined ? {} : { history: stringArray(source.history, "character.history", errors) }),
   };
 }
@@ -731,6 +759,17 @@ function createCharacterResponseSkeleton(level: number) {
       maxPv: 10,
       competences: ["Perception", "Investigation"],
       abilityTemplateIds: [],
+      perception: {
+        vision: "normal",
+        hearing: "normal",
+        speech: "normal",
+        languages: [{
+          languageId: "commun",
+          name: "Commun",
+          oral: "fluent",
+          written: "fluent",
+        }],
+      } satisfies CharacterPerception,
       history: ["Une phrase factuelle sur son passé"],
     },
     startingItems: [{

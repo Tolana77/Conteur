@@ -19,8 +19,9 @@ import {
   createInitialNarrativeScene,
   normalizeNarrativeScene,
 } from "../../core/game-engine/narrativeScene";
+import { normalizeCharacterPerception } from "../../core/game-engine/perception";
 
-export const CAMPAIGN_START_VERSION = 6 as const;
+export const CAMPAIGN_START_VERSION = 7 as const;
 
 export interface CampaignStartSnapshot {
   version: typeof CAMPAIGN_START_VERSION;
@@ -46,6 +47,7 @@ export function createCampaignStartSnapshot(
   const characters = cloneSerializable(snapshot.characters).map((character) => ({
     ...character,
     campaignId: snapshot.campaign.id,
+    perception: normalizeCharacterPerception(character.perception),
   }));
   return cloneSerializable({
     ...snapshot,
@@ -74,6 +76,7 @@ export function normalizeCampaignStartSnapshot(value: unknown): CampaignStartSna
   const characters = value.characters.map((character) => ({
     ...character,
     campaignId: value.campaign.id,
+    perception: normalizeCharacterPerception(character.perception),
   }));
   const narrativeScene = value.narrativeScene && typeof value.narrativeScene === "object"
     ? normalizeNarrativeScene(value.narrativeScene, value.campaign)

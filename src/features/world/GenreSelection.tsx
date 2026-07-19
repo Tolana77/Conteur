@@ -1,4 +1,5 @@
 import { useGameStore } from "../../store/useGameStore";
+import { CharacterPresetManager } from "../multiplayer";
 
 export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: () => void }) {
   const campaign = useGameStore((state) => state.campaign);
@@ -109,6 +110,8 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
             </div>
           </section>
         ) : null}
+
+        <CharacterPresetManager />
       </div>
     </section>
   );

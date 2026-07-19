@@ -1,6 +1,8 @@
-import type { ChatActionIntent } from "../../app/types";
+import type { ChatActionIntent, LanguageChannel } from "../../app/types";
 
-export type MultiplayerRole = "host" | "player" | "spectator";
+import type { CharacterCreationPackage } from "../character/characterCreation";
+
+export type MultiplayerRole = "host" | "admin" | "player" | "spectator";
 export type MultiplayerRoomStatus = "lobby" | "active" | "closed";
 export type MultiplayerConnectionPhase =
   | "local"
@@ -24,9 +26,32 @@ export interface MultiplayerMember {
   userId: string;
   displayName: string;
   role: MultiplayerRole;
+  playerColor: string;
   characterId: string | null;
   joinedAt: string;
   online: boolean;
+}
+
+export interface MultiplayerCharacterPreset {
+  id: string;
+  roomId: string;
+  name: string;
+  summary: string;
+  characterPackage: CharacterCreationPackage;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface MultiplayerCharacterRequest {
+  id: string;
+  roomId: string;
+  userId: string;
+  kind: "preset" | "custom";
+  presetId: string | null;
+  characterPackage: CharacterCreationPackage;
+  status: "pending" | "processing" | "completed" | "rejected";
+  error: string | null;
+  createdAt: string;
 }
 
 export interface MultiplayerTurn {
@@ -34,10 +59,13 @@ export interface MultiplayerTurn {
   roomId: string;
   userId: string;
   displayName: string;
+  playerColor: string;
   characterId: string;
   kind: "narrative" | "playerCheck";
   checkRequestId: string | null;
   content: string;
+  communicationChannel: LanguageChannel;
+  communicationLanguageId: string;
   actions: ChatActionIntent[];
   status: "pending" | "processing" | "completed" | "rejected";
   error: string | null;

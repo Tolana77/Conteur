@@ -24,7 +24,13 @@ import type {
   SpellLevel,
   SpellTemplate,
 } from "../../app/types";
-import type { Character, CharacterStats, InventoryItem } from "../../core/models";
+import type {
+  Character,
+  CharacterPerception,
+  CharacterStats,
+  InventoryItem,
+} from "../../core/models";
+import { normalizeCharacterPerception } from "../../core/game-engine/perception";
 import { getAbilityCharges, getAbilityMaxCharges } from "../abilities";
 import { getGameActionTemplate, resolveGameActionEffects } from "../actions";
 import {
@@ -80,6 +86,7 @@ interface SafeCharacter {
   stats: CharacterStats;
   inventaire: InventoryItem[];
   competences: string[];
+  perception: CharacterPerception;
 }
 
 type LegacyStats = Partial<CharacterStats> & {
@@ -316,6 +323,7 @@ function normalizeCharacter(character: Character): SafeCharacter {
     competences: Array.isArray(legacyCharacter.competences)
       ? legacyCharacter.competences
       : legacyCharacter.abilities ?? [],
+    perception: normalizeCharacterPerception(legacyCharacter.perception),
   };
 }
 

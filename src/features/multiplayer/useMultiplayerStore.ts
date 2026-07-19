@@ -1,8 +1,15 @@
 import { create } from "zustand";
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import type { ActionTarget, ChatActionIntent, ChatActionIntentKind, SpellLevel } from "../../app/types";
+import type {
+  ActionTarget,
+  ChatActionIntent,
+  ChatActionIntentKind,
+  LanguageChannel,
+  SpellLevel,
+} from "../../app/types";
 import { useGameStore } from "../../store/useGameStore";
 import { normalizeActionTargeting } from "../combat/targeting";
+import type { CharacterCreationPackage } from "../character/characterCreation";
 import { getMultiplayerConfiguration } from "./config";
 import {
   applyMultiplayerProjection,
@@ -12,6 +19,8 @@ import {
 import { ensureMultiplayerIdentity, getMultiplayerClient } from "./supabaseClient";
 import type {
   MultiplayerConnectionPhase,
+  MultiplayerCharacterPreset,
+  MultiplayerCharacterRequest,
   MultiplayerMember,
   MultiplayerRole,
   MultiplayerRoom,
@@ -28,6 +37,9 @@ interface MultiplayerState {
   room: MultiplayerRoom | null;
   self: MultiplayerMember | null;
   members: MultiplayerMember[];
+  characterPresets: MultiplayerCharacterPreset[];
+  incomingCharacterRequests: MultiplayerCharacterRequest[];
+  pendingCharacterRequest: MultiplayerCharacterRequest | null;
   incomingTurns: MultiplayerTurn[];
   pendingTurn: MultiplayerTurn | null;
   awaitingHostState: boolean;
@@ -38,7 +50,21 @@ interface MultiplayerState {
   joinRoom: (joinCode: string, displayName: string, role: "player" | "spectator") => Promise<void>;
   leaveRoom: () => Promise<void>;
   assignCharacter: (userId: string, characterId: string | null) => Promise<void>;
-  submitTurn: (content: string, actions: ChatActionIntent[]) => Promise<void>;
+  setMemberRole: (userId: string, role: "admin" | "player" | "spectator") => Promise<void>;
+  createCharacterPreset: (name: string, summary: string, setup: CharacterCreationPackage) => Promise<void>;
+  deleteCharacterPreset: (presetId: string) => Promise<void>;
+  submitCharacterRequest: (
+    kind: "preset" | "custom",
+    setup?: CharacterCreationPackage,
+    presetId?: string,
+  ) => Promise<void>;
+  beginCharacterRequest: (requestId: string) => Promise<boolean>;
+  finishCharacterRequest: (requestId: string, error?: string) => Promise<void>;
+  submitTurn: (
+    content: string,
+    actions: ChatActionIntent[],
+    communication?: { channel: LanguageChannel; languageId: string },
+  ) => Promise<void>;
   submitPlayerCheck: (requestId: string) => Promise<void>;
   beginTurn: (turnId: string) => Promise<boolean>;
   finishTurn: (turnId: string, error?: string) => Promise<void>;
@@ -61,6 +87,9 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   room: null,
   self: null,
   members: [],
+  characterPresets: [],
+  incomingCharacterRequests: [],
+  pendingCharacterRequest: null,
   incomingTurns: [],
   pendingTurn: null,
   awaitingHostState: false,
@@ -155,11 +184,100 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
     if (get().self?.role === "host") await get().publishStateNow();
   },
 
-  submitTurn: async (content, actions) => {
+  setMemberRole: async (userId, role) => {
+    const client = requireClient();
+    const { room, self } = get();
+    if (!room || self?.role !== "host") throw new Error("Seul le MJ peut modifier les rôles.");
+    const { error } = await client.rpc("set_multiplayer_member_role", {
+      p_role: role,
+      p_room_id: room.id,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(readableError(error));
+    await refreshMembers(client, room.id, set, get);
+  },
+
+  createCharacterPreset: async (name, summary, setup) => {
+    const client = requireClient();
+    const { room, self } = get();
+    if (!room || (self?.role !== "host" && self?.role !== "admin")) {
+      throw new Error("Un rôle administrateur est requis.");
+    }
+    const { error } = await client.rpc("create_multiplayer_character_preset", {
+      p_character_package: cloneSerializable(setup),
+      p_name: name.trim(),
+      p_room_id: room.id,
+      p_summary: summary.trim(),
+    });
+    if (error) throw new Error(readableError(error));
+    await refreshCharacterPresets(client, room.id, set);
+  },
+
+  deleteCharacterPreset: async (presetId) => {
+    const client = requireClient();
+    const { error } = await client.rpc("delete_multiplayer_character_preset", {
+      p_preset_id: presetId,
+    });
+    if (error) throw new Error(readableError(error));
+    const roomId = get().room?.id;
+    if (roomId) await refreshCharacterPresets(client, roomId, set);
+  },
+
+  submitCharacterRequest: async (kind, setup, presetId) => {
+    const client = requireClient();
+    const { room, self, pendingCharacterRequest } = get();
+    if (!room || !self || (self.role !== "player" && self.role !== "admin")) {
+      throw new Error("Cette participation ne peut pas créer de personnage.");
+    }
+    if (self.characterId) throw new Error("Un personnage vous est déjà attribué.");
+    if (pendingCharacterRequest) throw new Error("Votre personnage attend déjà la validation du MJ.");
+    if (kind === "custom" && !setup) throw new Error("Le personnage créé est absent.");
+    if (kind === "preset" && !presetId) throw new Error("Choisissez un personnage préfabriqué.");
+    const { data, error } = await client.rpc("submit_multiplayer_character_request", {
+      p_character_package: kind === "custom" ? cloneSerializable(setup) : null,
+      p_kind: kind,
+      p_preset_id: kind === "preset" ? presetId : null,
+      p_room_id: room.id,
+    });
+    if (error) throw new Error(readableError(error));
+    set({ pendingCharacterRequest: mapCharacterRequestRow(firstRow(data)), error: null });
+  },
+
+  beginCharacterRequest: async (requestId) => {
+    const client = requireClient();
+    if (get().self?.role !== "host") return false;
+    const { data, error } = await client.rpc("set_multiplayer_character_request_status", {
+      p_error: null,
+      p_request_id: requestId,
+      p_status: "processing",
+    });
+    if (error) {
+      set({ error: readableError(error) });
+      return false;
+    }
+    return data === true;
+  },
+
+  finishCharacterRequest: async (requestId, errorMessage) => {
+    const client = requireClient();
+    const { error } = await client.rpc("set_multiplayer_character_request_status", {
+      p_error: errorMessage ?? null,
+      p_request_id: requestId,
+      p_status: errorMessage ? "rejected" : "completed",
+    });
+    if (error) set({ error: readableError(error) });
+    set((state) => ({
+      incomingCharacterRequests: state.incomingCharacterRequests.filter((request) => request.id !== requestId),
+    }));
+  },
+
+  submitTurn: async (content, actions, communication) => {
     const client = requireClient();
     const { room, self, pendingTurn } = get();
     if (!room || !self) throw new Error("Aucune partie connectée.");
-    if (self.role !== "player") throw new Error("Seul un joueur peut envoyer une intention.");
+    if (self.role !== "player" && self.role !== "admin") {
+      throw new Error("Seul un joueur peut envoyer une intention.");
+    }
     if (!self.characterId) throw new Error("Choisissez d'abord un personnage.");
     if (pendingTurn) throw new Error("Votre intention précédente attend encore le MJ.");
     if (!content.trim() && actions.length === 0) throw new Error("L'intention est vide.");
@@ -167,6 +285,8 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
     const { data, error } = await client.rpc("submit_multiplayer_turn", {
       p_actions: cloneSerializable(actions),
       p_check_request_id: null,
+      p_communication_channel: communication?.channel ?? "oral",
+      p_communication_language_id: communication?.languageId ?? "commun",
       p_content: content.trim(),
       p_kind: "narrative",
       p_room_id: room.id,
@@ -182,7 +302,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   submitPlayerCheck: async (requestId) => {
     const client = requireClient();
     const { room, self, pendingTurn } = get();
-    if (!room || !self || self.role !== "player" || !self.characterId) {
+    if (!room || !self || (self.role !== "player" && self.role !== "admin") || !self.characterId) {
       throw new Error("Un personnage joueur est requis pour lancer ce dé.");
     }
     if (pendingTurn) throw new Error("Votre intention précédente attend encore le MJ.");
@@ -196,6 +316,8 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
     const { data, error } = await client.rpc("submit_multiplayer_turn", {
       p_actions: [],
       p_check_request_id: requestId,
+      p_communication_channel: "oral",
+      p_communication_language_id: "commun",
       p_content: "",
       p_kind: "playerCheck",
       p_room_id: room.id,
@@ -335,6 +457,9 @@ async function connectToRoom(
     room,
     self,
     members: [self],
+    characterPresets: [],
+    incomingCharacterRequests: [],
+    pendingCharacterRequest: null,
     incomingTurns: [],
     pendingTurn: null,
     awaitingHostState: self.role !== "host",
@@ -362,6 +487,38 @@ async function connectToRoom(
         });
       } catch (error) {
         set({ error: readableError(error) });
+      }
+    })
+    .on("postgres_changes", {
+      event: "*",
+      schema: "public",
+      table: "multiplayer_character_presets",
+      filter: `room_id=eq.${room.id}`,
+    }, () => {
+      if (generation === connectionGeneration) void refreshCharacterPresets(client, room.id, set);
+    })
+    .on("postgres_changes", {
+      event: "*",
+      schema: "public",
+      table: "multiplayer_character_requests",
+      filter: `room_id=eq.${room.id}`,
+    }, (payload) => {
+      if (generation !== connectionGeneration) return;
+      if (get().self?.role === "host") {
+        void refreshIncomingCharacterRequests(client, room.id, set);
+      } else {
+        if (
+          isRecord(payload.new) &&
+          payload.new.user_id === self.userId &&
+          payload.new.status === "rejected"
+        ) {
+          set({
+            error: typeof payload.new.error === "string"
+              ? `Personnage refusé : ${payload.new.error}`
+              : "Le MJ n'a pas pu installer ce personnage.",
+          });
+        }
+        void refreshPendingCharacterRequest(client, room.id, self.userId, set);
       }
     })
     .on("postgres_changes", {
@@ -433,13 +590,76 @@ async function connectToRoom(
     });
 
   if (self.role === "host") {
-    await refreshIncomingTurns(client, room.id, set, get);
+    await Promise.all([
+      refreshIncomingTurns(client, room.id, set, get),
+      refreshIncomingCharacterRequests(client, room.id, set),
+      refreshCharacterPresets(client, room.id, set),
+    ]);
   } else {
     await Promise.all([
       fetchLatestProjection(client, room.id, self.userId, set, get),
       refreshPendingTurn(client, room.id, self.userId, set, get),
+      refreshPendingCharacterRequest(client, room.id, self.userId, set),
+      refreshCharacterPresets(client, room.id, set),
     ]);
   }
+}
+
+async function refreshCharacterPresets(
+  client: SupabaseClient,
+  roomId: string,
+  set: StoreSet,
+): Promise<void> {
+  const { data, error } = await client
+    .from("multiplayer_character_presets")
+    .select("*")
+    .eq("room_id", roomId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    set({ error: readableError(error) });
+    return;
+  }
+  set({ characterPresets: (data ?? []).map(mapCharacterPresetRow) });
+}
+
+async function refreshIncomingCharacterRequests(
+  client: SupabaseClient,
+  roomId: string,
+  set: StoreSet,
+): Promise<void> {
+  const { data, error } = await client
+    .from("multiplayer_character_requests")
+    .select("*")
+    .eq("room_id", roomId)
+    .in("status", ["pending", "processing"])
+    .order("created_at", { ascending: true });
+  if (error) {
+    set({ error: readableError(error) });
+    return;
+  }
+  set({ incomingCharacterRequests: (data ?? []).map(mapCharacterRequestRow) });
+}
+
+async function refreshPendingCharacterRequest(
+  client: SupabaseClient,
+  roomId: string,
+  userId: string,
+  set: StoreSet,
+): Promise<void> {
+  const { data, error } = await client
+    .from("multiplayer_character_requests")
+    .select("*")
+    .eq("room_id", roomId)
+    .eq("user_id", userId)
+    .in("status", ["pending", "processing"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    set({ error: readableError(error) });
+    return;
+  }
+  set({ pendingCharacterRequest: data ? mapCharacterRequestRow(data) : null });
 }
 
 async function refreshMembers(
@@ -598,7 +818,7 @@ function mapRoomRow(value: unknown): MultiplayerRoom {
 function mapMemberRow(value: unknown, onlineIds: Set<string>): MultiplayerMember {
   if (!isRecord(value)) throw new Error("Membre multijoueur invalide.");
   const role = value.role;
-  if (role !== "host" && role !== "player" && role !== "spectator") {
+  if (role !== "host" && role !== "admin" && role !== "player" && role !== "spectator") {
     throw new Error("Rôle multijoueur invalide.");
   }
   const userId = requireString(value.user_id, "user_id");
@@ -607,6 +827,7 @@ function mapMemberRow(value: unknown, onlineIds: Set<string>): MultiplayerMember
     userId,
     displayName: requireString(value.display_name, "display_name"),
     role,
+    playerColor: isHexColor(value.player_color) ? value.player_color : "#6B4A5C",
     characterId: typeof value.character_id === "string" ? value.character_id : null,
     joinedAt: requireString(value.joined_at, "joined_at"),
     online: onlineIds.has(userId),
@@ -620,18 +841,57 @@ function mapTurnRow(value: unknown, members: MultiplayerMember[]): MultiplayerTu
     throw new Error("Statut d'intention invalide.");
   }
   const userId = requireString(value.user_id, "user_id");
+  const member = members.find((candidate) => candidate.userId === userId);
   const actions = parseMultiplayerTurnActions(value.actions);
   const kind = value.kind === "playerCheck" ? "playerCheck" : "narrative";
   return {
     id: requireString(value.id, "id"),
     roomId: requireString(value.room_id, "room_id"),
     userId,
-    displayName: members.find((member) => member.userId === userId)?.displayName ?? "Joueur",
+    displayName: member?.displayName ?? "Joueur",
+    playerColor: member?.playerColor ?? "#6B4A5C",
     characterId: requireString(value.character_id, "character_id"),
     kind,
     checkRequestId: typeof value.check_request_id === "string" ? value.check_request_id : null,
     content: typeof value.content === "string" ? value.content : "",
+    communicationChannel: value.communication_channel === "written" ? "written" : "oral",
+    communicationLanguageId: typeof value.communication_language_id === "string"
+      ? value.communication_language_id
+      : "commun",
     actions,
+    status,
+    error: typeof value.error === "string" ? value.error : null,
+    createdAt: requireString(value.created_at, "created_at"),
+  };
+}
+
+function mapCharacterPresetRow(value: unknown): MultiplayerCharacterPreset {
+  if (!isRecord(value)) throw new Error("Personnage préfabriqué invalide.");
+  return {
+    id: requireString(value.id, "id"),
+    roomId: requireString(value.room_id, "room_id"),
+    name: requireString(value.name, "name"),
+    summary: typeof value.summary === "string" ? value.summary : "",
+    characterPackage: requireCharacterPackage(value.character_package),
+    createdBy: requireString(value.created_by, "created_by"),
+    createdAt: requireString(value.created_at, "created_at"),
+  };
+}
+
+function mapCharacterRequestRow(value: unknown): MultiplayerCharacterRequest {
+  if (!isRecord(value)) throw new Error("Demande de personnage invalide.");
+  const kind = value.kind === "preset" ? "preset" : "custom";
+  const status = value.status;
+  if (status !== "pending" && status !== "processing" && status !== "completed" && status !== "rejected") {
+    throw new Error("Statut de création de personnage invalide.");
+  }
+  return {
+    id: requireString(value.id, "id"),
+    roomId: requireString(value.room_id, "room_id"),
+    userId: requireString(value.user_id, "user_id"),
+    kind,
+    presetId: typeof value.preset_id === "string" ? value.preset_id : null,
+    characterPackage: requireCharacterPackage(value.character_package),
     status,
     error: typeof value.error === "string" ? value.error : null,
     createdAt: requireString(value.created_at, "created_at"),
@@ -719,6 +979,7 @@ function createMemberFromRoom(
     userId,
     displayName,
     role,
+    playerColor: "#9C7A2E",
     characterId: null,
     joinedAt: room.createdAt,
     online: true,
@@ -736,6 +997,9 @@ function createDisconnectedState(): Pick<
   | "room"
   | "self"
   | "members"
+  | "characterPresets"
+  | "incomingCharacterRequests"
+  | "pendingCharacterRequest"
   | "incomingTurns"
   | "pendingTurn"
   | "awaitingHostState"
@@ -747,6 +1011,9 @@ function createDisconnectedState(): Pick<
     room: null,
     self: null,
     members: [],
+    characterPresets: [],
+    incomingCharacterRequests: [],
+    pendingCharacterRequest: null,
     incomingTurns: [],
     pendingTurn: null,
     awaitingHostState: false,
@@ -782,6 +1049,17 @@ function clearSession(): void {
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} est absent.`);
   return value;
+}
+
+function requireCharacterPackage(value: unknown): CharacterCreationPackage {
+  if (!isRecord(value) || !Array.isArray(value.characters) || value.characters.length !== 1) {
+    throw new Error("Paquet de personnage invalide.");
+  }
+  return cloneSerializable(value) as unknown as CharacterCreationPackage;
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9A-Fa-f]{6}$/u.test(value);
 }
 
 function readableError(error: unknown): string {

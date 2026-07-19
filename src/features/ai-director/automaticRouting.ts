@@ -46,6 +46,8 @@ export function routePlayerInput(
   const characterIntent = matches(text, /\b(inventaire|sac|objet|potion|fiole|parchemin|equipe|desequipe|consomme|bois|utilise|lance|sort|capacite|charge|stat|pv|soigne|soin)\b/u);
   const actionIntent = matches(text, /\b(jet|d20|d4|d6|d8|d10|d12|test|sauvegarde|difficulte|forcer|escalader|convaincre|discretion|perception|athletisme)\b/u);
   const worldIntent = matches(text, /\b(regarde|observe|fouille|cherche|inspecte|examine|ecoute|explore|entre|ouvre|ramasse|prends|parle|discute|demande|interroge|approche|suis|salue|reponds|dis|lieu|pnj|rumeur|qui est|qu est ce|ou est|pourquoi)\b/u);
+  const languageIntent = matches(text, /\b(langues?|langages?|parler|oral|lire|lis|lit|ecrire|ecris|ecrit|inscriptions?|traduire|traduis|comprends|entends)\b/u);
+  const languageProfileIntent = languageIntent && matches(text, /\b(maitrise|maitrises|connais|connait|sais|mes langues?|quelle langue|quelles langues)\b/u);
   const itemClaimIntent = matches(text, /\b(avec|utilise|brandis|sors|degaine|tiens|manie|bois|mange|porte|enfile)\b/u)
     && matches(text, /\b(arme|epee|sabre|dague|couteau|lame|arc|bouclier|corde|torche|lanterne|cle|potion|fiole|outil)\b/u);
   const socialDisruption = matches(text, /\b(crie|hurle|insulte|provoque|scandale|ivrogne|ivre|menace|agresse|frappe|vole|derobe|subtilise)\b/u);
@@ -105,6 +107,11 @@ export function routePlayerInput(
   // "Ouvre mon sac" ou "regarde mon inventaire" ne concerne pas le monde.
   if (worldIntent && (!characterIntent || explicitWorldSubject)) {
     add("worldManager", 6);
+  }
+  if (languageProfileIntent) {
+    add("characterManager", 10);
+  } else if (languageIntent) {
+    add("worldManager", 8);
   }
   if (socialDisruption) {
     add("worldManager", 10);

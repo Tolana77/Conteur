@@ -1,5 +1,16 @@
-import { FormEvent, useEffect, useState } from "react";
-import type { ActionTarget, ActionTargetKind, ChatActionIntent, CombatScene } from "../../app/types";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import type {
+  ActionTarget,
+  ActionTargetKind,
+  ChatActionIntent,
+  CombatScene,
+  LanguageChannel,
+} from "../../app/types";
+import {
+  applyPerceptionConditions,
+  languageMasteryLabels,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
 import {
   getDistance,
   getSelectableTargetKinds,
@@ -24,6 +35,8 @@ export function ChatInput({
   onRequestMapTarget?: (intentId: string) => void;
 }) {
   const [content, setContent] = useState("");
+  const [communicationChannel, setCommunicationChannel] = useState<LanguageChannel>("oral");
+  const [communicationLanguageId, setCommunicationLanguageId] = useState("commun");
   const [isAwaitingNarration, setIsAwaitingNarration] = useState(false);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const sendPlayerMessage = useGameStore((state) => state.sendPlayerMessage);
@@ -45,9 +58,30 @@ export function ChatInput({
   const pendingMultiplayerTurn = useMultiplayerStore((state) => state.pendingTurn);
   const awaitingHostState = useMultiplayerStore((state) => state.awaitingHostState);
   const submitMultiplayerTurn = useMultiplayerStore((state) => state.submitTurn);
-  const isRemotePlayer = Boolean(multiplayerRoom && multiplayerSelf?.role === "player");
+  const isRemotePlayer = Boolean(
+    multiplayerRoom && (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin"),
+  );
   const isSpectator = Boolean(multiplayerRoom && multiplayerSelf?.role === "spectator");
   const isMultiplayerBlocked = isSpectator || awaitingHostState || Boolean(pendingMultiplayerTurn);
+  const selectedCharacter = characters.find((character) => character.id === selectedCharacterId);
+  const selectedCombatant = combat.combatants.find((combatant) =>
+    combatant.sourceType === "character" && combatant.sourceId === selectedCharacterId);
+  const selectedPerception = useMemo(
+    () => applyPerceptionConditions(
+      normalizeCharacterPerception(selectedCharacter?.perception),
+      selectedCombatant?.conditions ?? [],
+    ),
+    [selectedCharacter, selectedCombatant],
+  );
+  const communicationLanguages = useMemo(
+    () => selectedPerception.languages.filter((language) => language[communicationChannel] !== "none"),
+    [communicationChannel, selectedPerception],
+  );
+
+  useEffect(() => {
+    if (communicationLanguages.some((language) => language.languageId === communicationLanguageId)) return;
+    setCommunicationLanguageId(communicationLanguages[0]?.languageId ?? "commun");
+  }, [communicationLanguageId, communicationLanguages]);
 
   useEffect(() => {
     onBusyChange?.(isAwaitingNarration || Boolean(content.trim()));
@@ -68,7 +102,10 @@ export function ChatInput({
     if (isRemotePlayer) {
       setIsAwaitingNarration(true);
       try {
-        await submitMultiplayerTurn(playerInput, pendingActionIntents);
+        await submitMultiplayerTurn(playerInput, pendingActionIntents, {
+          channel: communicationChannel,
+          languageId: communicationLanguageId,
+        });
         clearActionIntents();
         setContent("");
       } catch (error) {
@@ -141,6 +178,40 @@ export function ChatInput({
           value={content}
         />
       </div>
+      {isRemotePlayer ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#E4D8BE]/60">
+          <label className="sr-only" htmlFor="communication-channel">Canal de communication</label>
+          <select
+            className="rounded border border-[#9C7A2E]/25 bg-[#15121A] px-2 py-1.5 text-[#E4D8BE] outline-none focus:border-[#9C7A2E]"
+            id="communication-channel"
+            onChange={(event) => setCommunicationChannel(event.target.value as LanguageChannel)}
+            value={communicationChannel}
+          >
+            <option value="oral">Parler</option>
+            <option value="written">Écrire</option>
+          </select>
+          <label className="sr-only" htmlFor="communication-language">Langue utilisée</label>
+          <select
+            className="min-w-0 max-w-full rounded border border-[#9C7A2E]/25 bg-[#15121A] px-2 py-1.5 text-[#E4D8BE] outline-none focus:border-[#9C7A2E] disabled:opacity-45"
+            disabled={communicationLanguages.length === 0}
+            id="communication-language"
+            onChange={(event) => setCommunicationLanguageId(event.target.value)}
+            value={communicationLanguageId}
+          >
+            {communicationLanguages.length ? communicationLanguages.map((language) => (
+              <option key={language.languageId} value={language.languageId}>
+                {language.name} · {languageMasteryLabels[language[communicationChannel]]}
+              </option>
+            )) : <option value="commun">Aucune langue maîtrisée</option>}
+          </select>
+          {communicationChannel === "oral" && selectedPerception.speech === "none" ? (
+            <span className="text-[#D78A82]">Aucun son ne sera émis.</span>
+          ) : null}
+          {communicationChannel === "written" && selectedPerception.vision === "none" ? (
+            <span className="text-[#D6B36A]">Le personnage ne pourra pas relire son texte.</span>
+          ) : null}
+        </div>
+      ) : null}
       <button
         className="fantasy-button mt-2 w-full rounded px-4 py-2 text-sm font-semibold sm:w-auto"
         disabled={isAwaitingNarration || isExternalBusy || hasPendingPlayerCheck || isMultiplayerBlocked}

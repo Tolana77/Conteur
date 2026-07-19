@@ -10,6 +10,9 @@ export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
   const self = useMultiplayerStore((state) => state.self);
   const members = useMultiplayerStore((state) => state.members);
   const incomingTurnCount = useMultiplayerStore((state) => state.incomingTurns.length);
+  const incomingCharacterRequestCount = useMultiplayerStore(
+    (state) => state.incomingCharacterRequests.length,
+  );
   const pendingTurn = useMultiplayerStore((state) => state.pendingTurn);
   const awaitingHostState = useMultiplayerStore((state) => state.awaitingHostState);
   const error = useMultiplayerStore((state) => state.error);
@@ -17,6 +20,7 @@ export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
   const joinRoom = useMultiplayerStore((state) => state.joinRoom);
   const leaveRoom = useMultiplayerStore((state) => state.leaveRoom);
   const assignCharacter = useMultiplayerStore((state) => state.assignCharacter);
+  const setMemberRole = useMultiplayerStore((state) => state.setMemberRole);
   const clearError = useMultiplayerStore((state) => state.clearError);
   const characters = useGameStore((state) => state.characters);
   const [displayName, setDisplayName] = useState(self?.displayName ?? "");
@@ -99,12 +103,14 @@ export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
               copyJoinCode={copyJoinCode}
               copyNotice={copyNotice}
               incomingTurnCount={incomingTurnCount}
+              incomingCharacterRequestCount={incomingCharacterRequestCount}
               leaveRoom={() => run("leave", leaveRoom)}
               members={members}
               pendingTurn={pendingTurn}
               phase={phase}
               room={room}
               self={self}
+              setMemberRole={(userId, role) => run(`role:${userId}`, () => setMemberRole(userId, role))}
             />
           ) : (
             <div className="grid gap-5 md:grid-cols-2">
@@ -186,12 +192,14 @@ type ConnectedRoomProps = {
   copyJoinCode: () => void;
   copyNotice: boolean;
   incomingTurnCount: number;
+  incomingCharacterRequestCount: number;
   leaveRoom: () => void;
   members: ReturnType<typeof useMultiplayerStore.getState>["members"];
   pendingTurn: ReturnType<typeof useMultiplayerStore.getState>["pendingTurn"];
   phase: ReturnType<typeof useMultiplayerStore.getState>["phase"];
   room: NonNullable<ReturnType<typeof useMultiplayerStore.getState>["room"]>;
   self: NonNullable<ReturnType<typeof useMultiplayerStore.getState>["self"]>;
+  setMemberRole: (userId: string, role: "admin" | "player" | "spectator") => void;
 };
 
 function ConnectedRoom(props: ConnectedRoomProps) {
@@ -215,6 +223,10 @@ function ConnectedRoom(props: ConnectedRoomProps) {
             <p className="mt-2 text-xs text-[#E4D8BE]/55">
               {props.incomingTurnCount} intention{props.incomingTurnCount > 1 ? "s" : ""} en attente.
             </p>
+          ) : props.self.role === "host" && props.incomingCharacterRequestCount > 0 ? (
+            <p className="mt-2 text-xs text-[#E4D8BE]/55">
+              {props.incomingCharacterRequestCount} personnage{props.incomingCharacterRequestCount > 1 ? "s" : ""} en préparation.
+            </p>
           ) : null}
         </div>
         <button
@@ -231,18 +243,36 @@ function ConnectedRoom(props: ConnectedRoomProps) {
         <h3 className="rune-label mb-2 text-sm">Participants</h3>
         <div className="space-y-2">
           {props.members.map((member) => {
-            const canAssign = member.role !== "spectator" && (canAssignOthers || member.userId === props.self.userId);
+            const canAssign = member.role !== "spectator" && canAssignOthers;
             return (
               <article className="grid gap-2 border border-[#9C7A2E]/20 bg-[#15121A]/55 px-3 py-2 sm:grid-cols-[1fr_minmax(170px,auto)] sm:items-center" key={member.userId}>
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-semibold text-[#E4D8BE]">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${member.online ? "bg-[#5FA85A]" : "bg-[#5C5566]"}`} />
-                    <span className="truncate">{member.displayName}</span>
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${member.online ? "" : "opacity-35"}`}
+                      style={{ backgroundColor: member.playerColor }}
+                    />
+                    <span className="truncate" style={{ color: member.playerColor }}>{member.displayName}</span>
                     {member.userId === props.self.userId ? <span className="text-[10px] text-[#9C7A2E]">VOUS</span> : null}
                   </p>
                   <p className="ml-4 text-[11px] text-[#E4D8BE]/45">
-                    {member.role === "host" ? "MJ" : member.role === "player" ? "Joueur" : "Spectateur"}
+                    {member.role === "host" ? "MJ" : member.role === "admin" ? "Admin" : member.role === "player" ? "Joueur" : "Spectateur"}
                   </p>
+                  {props.self.role === "host" && member.role !== "host" ? (
+                    <select
+                      className="ml-4 mt-1 border border-[#9C7A2E]/20 bg-[#221E29] px-1.5 py-1 text-[11px] text-[#E4D8BE]/70"
+                      disabled={props.busyAction === `role:${member.userId}`}
+                      onChange={(event) => props.setMemberRole(
+                        member.userId,
+                        event.target.value as "admin" | "player" | "spectator",
+                      )}
+                      value={member.role}
+                    >
+                      <option value="player">Joueur</option>
+                      <option value="admin">Admin</option>
+                      <option value="spectator">Spectateur</option>
+                    </select>
+                  ) : null}
                 </div>
                 {canAssign ? (
                   <select

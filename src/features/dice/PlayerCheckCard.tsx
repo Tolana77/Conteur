@@ -24,7 +24,9 @@ export function PlayerCheckCard({
   const multiplayerSelf = useMultiplayerStore((state) => state.self);
   const pendingMultiplayerTurn = useMultiplayerStore((state) => state.pendingTurn);
   const submitPlayerCheck = useMultiplayerStore((state) => state.submitPlayerCheck);
-  const isRemotePlayer = Boolean(multiplayerRoom && multiplayerSelf?.role === "player");
+  const isRemotePlayer = Boolean(
+    multiplayerRoom && (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin"),
+  );
 
   const handleRoll = async () => {
     if (isResolving || request.status !== "pending") return;

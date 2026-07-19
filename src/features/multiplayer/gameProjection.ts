@@ -12,6 +12,12 @@ import type {
   MultiplayerProjectionEnvelope,
   MultiplayerRole,
 } from "./types";
+import { projectMessagesForRecipient } from "./messageVisibility";
+import {
+  applyPerceptionConditions,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
+import type { CharacterPerception } from "../../core/models";
 
 export type MultiplayerSharedGameState = Pick<
   GameState,
@@ -43,8 +49,17 @@ export function createMultiplayerProjection(
   member: MultiplayerMember,
   sequence: number,
 ): MultiplayerProjectionEnvelope {
-  const canSeeGmState = member.role === "host";
+  const canSeeGmState = member.role === "host" || member.role === "admin";
   const characterId = member.characterId;
+  const viewerCharacter = state.characters.find((character) => character.id === characterId);
+  const viewerCombatant = characterId
+    ? state.combat.combatants.find((combatant) =>
+        combatant.sourceType === "character" && combatant.sourceId === characterId)
+    : undefined;
+  const viewerPerception = applyPerceptionConditions(
+    normalizeCharacterPerception(viewerCharacter?.perception),
+    viewerCombatant?.conditions ?? [],
+  );
   const projectedItems = canSeeGmState
     ? { instances: state.itemInstances, templates: state.itemTemplates }
     : projectItems(state.itemInstances, state.itemTemplates, characterId);
@@ -81,9 +96,13 @@ export function createMultiplayerProjection(
     inventaire: canSeeGmState || character.id === characterId ? character.inventaire : [],
     history: canSeeGmState || character.id === characterId ? character.history : undefined,
   }));
-  const combat = canSeeGmState ? state.combat : projectCombat(state.combat, characterId);
+  const combat = canSeeGmState
+    ? state.combat
+    : projectCombat(state.combat, characterId, viewerPerception);
   const visibleEntityIds = new Set([
-    ...state.narrativeScene.presentEntityIds,
+    ...(canSeeGmState || viewerPerception.vision !== "none"
+      ? state.narrativeScene.presentEntityIds
+      : []),
     ...(state.narrativeScene.locationId ? [state.narrativeScene.locationId] : []),
     ...combat.combatants.map((combatant) => combatant.sourceId),
   ]);
@@ -98,7 +117,14 @@ export function createMultiplayerProjection(
     gameRevision: state.gameRevision,
     campaign,
     characters: projectedCharacters,
-    messages: state.messages,
+    messages: projectMessagesForRecipient(
+      state.messages,
+      member.userId,
+      canSeeGmState,
+      state.characters,
+      characterId,
+      viewerPerception,
+    ),
     narrativeMomentum: state.narrativeMomentum,
     pendingGameDecision: state.pendingGameDecision,
     diceRolls: canSeeGmState
@@ -127,6 +153,9 @@ export function createMultiplayerProjection(
       ? state.narrativeScene
       : {
           ...state.narrativeScene,
+          presentEntityIds: viewerPerception.vision === "none"
+            ? []
+            : state.narrativeScene.presentEntityIds,
           recentConsequences: [],
           activeEvents: [],
         },
@@ -309,18 +338,22 @@ function getItemFieldState(
   return state === "hidden" || state === "unknown" ? state : "known";
 }
 
-function projectCombat(combat: CombatScene, characterId: string | null): CombatScene {
+function projectCombat(
+  combat: CombatScene,
+  characterId: string | null,
+  perception: CharacterPerception,
+): CombatScene {
   const viewer = characterId
     ? combat.combatants.find((combatant) =>
         combatant.sourceType === "character" && combatant.sourceId === characterId)
     : undefined;
-  const visibleCombatantIds = new Set(
-    combat.combatants
-      .filter((combatant) =>
-        combatant.side !== "enemies" ||
-        Boolean(viewer && hasLineOfSight(combat, viewer.position, combatant.position)))
-      .map((combatant) => combatant.id),
-  );
+  const visibleCombatantIds = new Set(perception.vision === "none"
+    ? viewer ? [viewer.id] : []
+    : combat.combatants
+        .filter((combatant) =>
+          combatant.side !== "enemies" ||
+          Boolean(viewer && hasLineOfSight(combat, viewer.position, combatant.position)))
+        .map((combatant) => combatant.id));
 
   return {
     ...combat,
@@ -348,7 +381,10 @@ function projectCombat(combat: CombatScene, characterId: string | null): CombatS
       !entry.targetIds || entry.targetIds.every((targetId) => visibleCombatantIds.has(targetId))),
     map: {
       ...combat.map,
-      details: combat.map.details?.filter((detail) => detail.visible === true),
+      obstacles: perception.vision === "none" ? [] : combat.map.obstacles,
+      details: perception.vision === "none"
+        ? []
+        : combat.map.details?.filter((detail) => detail.visible === true),
     },
   };
 }

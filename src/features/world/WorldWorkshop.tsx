@@ -5,6 +5,7 @@ import { initialGameActionTemplates } from "../actions";
 import { initialItemTemplates } from "../items";
 import { initialEffectTemplates, initialEnemyTemplates } from "../content";
 import { CharacterCreationStep } from "../character/CharacterCreationStep";
+import { CharacterPresetManager } from "../multiplayer";
 import type {
   CharacterCreationContext,
   CharacterCreationPackage,
@@ -151,6 +152,10 @@ export function WorldWorkshop() {
           {notice}
         </div>
       ) : null}
+
+      <div className="mb-5">
+        <CharacterPresetManager />
+      </div>
 
       <details className="mb-3 rounded border border-[#9C7A2E]/20 bg-[#221E29]" open>
         <summary className="cursor-pointer px-3 py-3 font-semibold text-[#E4D8BE]">1. Cadrage</summary>

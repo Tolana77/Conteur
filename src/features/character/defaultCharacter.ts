@@ -1,4 +1,5 @@
 import type { Character } from "../../core/models";
+import { cloneDefaultPerception } from "../../core/game-engine/perception";
 
 export const defaultCharacter: Character = {
   id: "character-player",
@@ -19,4 +20,5 @@ export const defaultCharacter: Character = {
   maxPv: 10,
   inventaire: [],
   competences: [],
+  perception: cloneDefaultPerception(),
 };

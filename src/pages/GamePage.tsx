@@ -4,10 +4,13 @@ import { CharacterList } from "../features/character/CharacterList";
 import { CharacterSheet } from "../features/character/CharacterSheet";
 import { ChatWindow } from "../features/chat/ChatWindow";
 import { CombatMap } from "../features/combat/CombatMap";
-import { DicePanel } from "../features/dice/DicePanel";
 import { GenreSelection } from "../features/world/GenreSelection";
 import { WorldStatus } from "../features/world/WorldStatus";
-import { MultiplayerPanel, useMultiplayerStore } from "../features/multiplayer";
+import {
+  CharacterOnboardingModal,
+  MultiplayerPanel,
+  useMultiplayerStore,
+} from "../features/multiplayer";
 
 type PanelId = "left" | "center" | "right" | "combat" | "genre";
 
@@ -39,14 +42,16 @@ export function GamePage() {
   const multiplayerRoom = useMultiplayerStore((state) => state.room);
   const multiplayerSelf = useMultiplayerStore((state) => state.self);
   const multiplayerPhase = useMultiplayerStore((state) => state.phase);
-  const isRemoteParticipant = Boolean(multiplayerRoom && multiplayerSelf?.role !== "host");
-  const visiblePanels = isRemoteParticipant
+  const isRestrictedParticipant = Boolean(
+    multiplayerRoom && multiplayerSelf?.role !== "host" && multiplayerSelf?.role !== "admin",
+  );
+  const visiblePanels = isRestrictedParticipant
     ? panels.filter((panel) => panel.id !== "genre")
     : panels;
 
   useEffect(() => {
-    if (isRemoteParticipant && activePanel === "genre") setActivePanel("center");
-  }, [activePanel, isRemoteParticipant]);
+    if (isRestrictedParticipant && activePanel === "genre") setActivePanel("center");
+  }, [activePanel, isRestrictedParticipant]);
 
   function handleTouchEnd(clientX: number) {
     if (touchStart === null) {
@@ -76,7 +81,6 @@ export function GamePage() {
           <div className="space-y-5">
             <WorldStatus />
             <CharacterList />
-            <DicePanel />
           </div>
         </aside>
       );
@@ -162,7 +166,7 @@ export function GamePage() {
                 {multiplayerRoom ? (multiplayerPhase === "connected" ? "En ligne" : "Connexion") : "Multijoueur"}
               </span>
             </button>
-            {!isRemoteParticipant ? (
+            {!isRestrictedParticipant ? (
             <button
               className="h-full rounded border border-[#9C7A2E]/30 bg-[#221E29] px-2 py-2 text-sm font-bold text-[#E4D8BE] hover:bg-[#5A2233]/50 sm:px-3"
               onClick={() => setConsoleView("campaign")}
@@ -183,6 +187,7 @@ export function GamePage() {
         <CampaignConsole initialView={consoleView} onClose={() => setConsoleView(null)} />
       ) : null}
       {isMultiplayerOpen ? <MultiplayerPanel onClose={() => setIsMultiplayerOpen(false)} /> : null}
+      <CharacterOnboardingModal />
     </main>
   );
 }

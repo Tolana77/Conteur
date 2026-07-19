@@ -1,4 +1,5 @@
 import type { InventoryItem } from "./inventory";
+import type { CharacterPerception } from "./perception";
 
 export interface CharacterStats {
   force: number;
@@ -24,5 +25,6 @@ export interface Character {
   maxPv: number;
   inventaire: InventoryItem[];
   competences: string[];
+  perception: CharacterPerception;
   history?: string[];
 }
