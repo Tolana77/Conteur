@@ -23,6 +23,27 @@ const {
   createManipulableObjectContext,
 } = await vite.ssrLoadModule("/src/features/world/manipulableObjects.ts");
 const { normalizeCampaignStartSnapshot } = await vite.ssrLoadModule("/src/features/campaign/campaignStart.ts");
+const { parseAiGatewayHealth } = await vite.ssrLoadModule("/src/features/ai-director/httpAiGateway.ts");
+
+const vercelStructuredError = parseAiGatewayHealth(JSON.stringify({
+  error: { code: "FUNCTION_INVOCATION_FAILED", message: "La fonction a échoué." },
+}), 500, false);
+assert.equal(vercelStructuredError.ok, false);
+assert.equal(vercelStructuredError.error, "FUNCTION_INVOCATION_FAILED : La fonction a échoué.");
+const nonJsonHealth = parseAiGatewayHealth("<!doctype html><title>Not found</title>", 404, false);
+assert.match(nonJsonHealth.error, /contrat attendu.*HTTP 404/u);
+const healthyGateway = parseAiGatewayHealth(JSON.stringify({
+  ok: true,
+  configuration: {
+    enabled: true,
+    providerUrlHost: "api.groq.com",
+    hasApiKey: true,
+    model: "modele-test",
+  },
+  providerStatus: 200,
+}), 200, true);
+assert.equal(healthyGateway.ok, true);
+assert.equal(healthyGateway.configuration?.providerUrlHost, "api.groq.com");
 
 const campaign = {
   id: "campaign-test",

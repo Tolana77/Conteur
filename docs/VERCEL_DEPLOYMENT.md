@@ -24,6 +24,9 @@ Ne mets jamais la clé du fournisseur dans une variable commençant par
 5. Ne modifie pas le dossier racine du projet.
 
 Vercel détecte automatiquement les fichiers de `api/` comme fonctions Node.js.
+Le fichier `vercel.json` du dépôt verrouille le framework, la commande de build
+et le dossier de sortie. Dans **Settings > Build and Deployment**, le champ
+**Root Directory** doit rester vide : il ne doit surtout pas contenir `dist`.
 
 ## Variables d'environnement
 
@@ -51,6 +54,27 @@ modification des variables, relance un déploiement.
 4. Vérifie le statut, le modèle et les tokens dans le Journal API de la console
    administrateur.
 5. Vérifie qu'une origine différente reçoit bien une erreur 403.
+
+## Diagnostic d'une route absente ou en erreur
+
+Teste directement `https://<deploiement-vercel>/api/mj-health` dans un nouvel
+onglet, sans passer par l'application :
+
+- une page HTML ou une erreur 404 signifie que Vercel n'a pas construit la
+  fonction. Vérifie le **Root Directory**, puis que le déploiement contient bien
+  `api/mj-health.mjs` dans l'onglet **Functions** ;
+- `FUNCTION_INVOCATION_FAILED` signifie que la fonction existe mais a levé une
+  erreur. Consulte **Observability > Runtime Logs** et filtre sur
+  `/api/mj-health` ;
+- un JSON avec `"ok": false` et une configuration incomplète signifie que la
+  fonction fonctionne, mais qu'une variable d'environnement manque ;
+- un JSON avec `providerStatus` différent de `200` signifie que Groq a répondu
+  avec une erreur : vérifie la clé, l'URL et le modèle indiqués dans le JSON.
+
+Le serveur lancé par `npm run dev` est Vite uniquement : sur
+`http://127.0.0.1:5175`, les routes Vercel `/api/*` ne sont pas disponibles.
+Pour tester l'API, utilise l'URL publique Vercel ou `vercel dev` avec les
+variables locales appropriées.
 
 ## Données locales et domaine
 
