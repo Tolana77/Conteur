@@ -8,6 +8,11 @@ import {
   handleAiGatewayRequest,
 } from "../server/ai/gateway.mjs";
 import { handleAiGatewayHealthRequest } from "../server/ai/health.mjs";
+import {
+  corsHeaders,
+  getAllowedOrigins,
+  isAllowedOrigin,
+} from "../server/ai/http.mjs";
 
 const longContext = `Contexte:${"x".repeat(12_000)}`;
 const prompt = [
@@ -74,6 +79,48 @@ const forbiddenResponse = await handleAiGatewayRequest(new Request("https://cont
   body: JSON.stringify({ agentId: "narrationManager", prompt: "Test" }),
 }), { environment });
 assert.equal(forbiddenResponse.status, 403);
+
+const deploymentEnvironment = {
+  AI_ALLOWED_ORIGIN: "https://conteur.example, https://jeu.example/",
+  VERCEL_URL: "conteur-git-42-tolana77.vercel.app",
+  VERCEL_BRANCH_URL: "conteur-git-main-tolana77.vercel.app",
+  VERCEL_PROJECT_PRODUCTION_URL: "conteur.vercel.app",
+};
+const allowedOrigins = getAllowedOrigins(deploymentEnvironment);
+assert.equal(allowedOrigins.has("https://jeu.example"), true);
+assert.equal(allowedOrigins.has("https://conteur-git-42-tolana77.vercel.app"), true);
+assert.equal(allowedOrigins.has("https://conteur-git-main-tolana77.vercel.app"), true);
+assert.equal(allowedOrigins.has("https://conteur.vercel.app"), true);
+
+for (const origin of allowedOrigins) {
+  const request = new Request("https://conteur.vercel.app/api/mj", {
+    headers: { origin },
+  });
+  assert.equal(isAllowedOrigin(request, deploymentEnvironment), true);
+  assert.equal(
+    corsHeaders(request, deploymentEnvironment, ["POST"])["access-control-allow-origin"],
+    origin,
+  );
+}
+
+const unrelatedPreviewRequest = new Request("https://conteur.vercel.app/api/mj", {
+  headers: { origin: "https://autre-projet-123.vercel.app" },
+});
+assert.equal(isAllowedOrigin(unrelatedPreviewRequest, deploymentEnvironment), false);
+assert.equal(
+  corsHeaders(unrelatedPreviewRequest, deploymentEnvironment, ["POST"])["access-control-allow-origin"],
+  "null",
+);
+
+const preflightResponse = await handleAiGatewayRequest(new Request("https://conteur.vercel.app/api/mj", {
+  method: "OPTIONS",
+  headers: { origin: "https://conteur-git-42-tolana77.vercel.app" },
+}), { environment: deploymentEnvironment });
+assert.equal(preflightResponse.status, 204);
+assert.equal(
+  preflightResponse.headers.get("access-control-allow-origin"),
+  "https://conteur-git-42-tolana77.vercel.app",
+);
 
 const healthResponse = await handleAiGatewayHealthRequest(new Request("https://conteur.example/api/mj-health", {
   headers: { origin: "https://conteur.example" },

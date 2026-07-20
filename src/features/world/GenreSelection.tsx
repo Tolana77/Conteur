@@ -1,10 +1,18 @@
+import { useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
-import { CharacterPresetManager } from "../multiplayer";
+import { CharacterPresetManager, useMultiplayerStore } from "../multiplayer";
+
+type UniverseSection = "world" | "character-presets";
 
 export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: () => void }) {
+  const [activeSection, setActiveSection] = useState<UniverseSection>("world");
   const campaign = useGameStore((state) => state.campaign);
   const restartCampaign = useGameStore((state) => state.restartCampaign);
+  const multiplayerRoom = useMultiplayerStore((state) => state.room);
+  const multiplayerSelf = useMultiplayerStore((state) => state.self);
   const world = campaign.world;
+  const canManageCharacterPresets = Boolean(multiplayerRoom && multiplayerSelf?.role === "admin");
+  const visibleSection = canManageCharacterPresets ? activeSection : "world";
 
   function confirmRestart() {
     const confirmed = window.confirm(
@@ -16,6 +24,40 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
   return (
     <section className="paper-surface h-full min-h-0 overflow-y-auto p-4">
       <div className="mx-auto max-w-[820px] space-y-5">
+        {canManageCharacterPresets ? (
+          <nav
+            aria-label="Sections de l’univers"
+            className="grid grid-cols-2 gap-1 border border-[#9C7A2E]/25 bg-[#15121A]/65 p-1"
+          >
+            <button
+              aria-current={visibleSection === "world" ? "page" : undefined}
+              className={`px-3 py-2 text-sm transition-colors ${
+                visibleSection === "world"
+                  ? "bg-[#5A2233] text-[#E4D8BE]"
+                  : "text-[#E4D8BE]/60 hover:bg-[#221E29] hover:text-[#E4D8BE]"
+              }`}
+              onClick={() => setActiveSection("world")}
+              type="button"
+            >
+              Univers
+            </button>
+            <button
+              aria-current={visibleSection === "character-presets" ? "page" : undefined}
+              className={`px-3 py-2 text-sm transition-colors ${
+                visibleSection === "character-presets"
+                  ? "bg-[#5A2233] text-[#E4D8BE]"
+                  : "text-[#E4D8BE]/60 hover:bg-[#221E29] hover:text-[#E4D8BE]"
+              }`}
+              onClick={() => setActiveSection("character-presets")}
+              type="button"
+            >
+              Persos préfabriqués
+            </button>
+          </nav>
+        ) : null}
+
+        {visibleSection === "world" ? (
+          <>
         <header className="border-b border-[#9C7A2E]/30 pb-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -111,7 +153,12 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
           </section>
         ) : null}
 
-        <CharacterPresetManager />
+          </>
+        ) : null}
+
+        {canManageCharacterPresets && visibleSection === "character-presets" ? (
+          <CharacterPresetManager />
+        ) : null}
       </div>
     </section>
   );

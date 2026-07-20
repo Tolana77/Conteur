@@ -39,16 +39,26 @@ Variables** :
 - `AI_PROVIDER_API_KEY` : clé secrète du fournisseur
 - `AI_PROVIDER_MODEL` : identifiant exact du modèle
 - `AI_PROVIDER_MAX_TOKENS` : `700`
-- `AI_ALLOWED_ORIGIN` : URL publique exacte, sans slash final
+- `AI_ALLOWED_ORIGIN` : origines supplémentaires exactes, séparées par des
+  virgules (facultatif sur Vercel si les variables système sont exposées)
 - `AI_MAX_REQUESTS_PER_MINUTE` : `12`
 
 Pour activer les salons multijoueurs, ajoute également les deux variables
 publiques décrites dans [`MULTIPLAYER_SETUP.md`](MULTIPLAYER_SETUP.md) :
 `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY`.
 
-Configure `AI_ALLOWED_ORIGIN` séparément pour **Preview** et **Production** si
-tu souhaites tester les déploiements de prévisualisation. Après toute
-modification des variables, relance un déploiement.
+Dans **Settings > Environment Variables**, active **Automatically expose
+System Environment Variables**. La passerelle autorise alors automatiquement
+les valeurs exactes de `VERCEL_URL`, `VERCEL_BRANCH_URL` et
+`VERCEL_PROJECT_PRODUCTION_URL` : un nouveau déploiement Preview fonctionne
+sans modifier `AI_ALLOWED_ORIGIN`. Garde dans cette dernière variable uniquement
+les domaines externes supplémentaires (par exemple
+`https://jeu.example,https://localhost.example`). Aucun joker
+`*.vercel.app` n'est accepté.
+
+Utilise de préférence l'alias de production stable affiché dans **Domains** pour
+les joueurs et les favoris. Après toute modification manuelle des variables,
+relance un déploiement.
 
 ## Validation avant bascule
 

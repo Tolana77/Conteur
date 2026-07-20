@@ -40,10 +40,10 @@ export function CharacterPresetManager() {
   }
 
   return (
-    <section className="border-t border-[#9C7A2E]/30 pt-5">
+    <section>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="rune-label text-xs">Réserves du groupe</p>
+          <p className="rune-label text-xs">Réserves de la campagne</p>
           <h3 className="ink-heading text-xl font-bold text-[#E4D8BE]">Personnages préfabriqués</h3>
           <p className="mt-1 text-sm text-[#E4D8BE]/60">Des fiches équilibrées que les nouveaux joueurs peuvent choisir immédiatement.</p>
         </div>
