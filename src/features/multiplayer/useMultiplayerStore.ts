@@ -17,6 +17,11 @@ import {
   parseMultiplayerProjection,
 } from "./gameProjection";
 import { ensureMultiplayerIdentity, getMultiplayerClient } from "./supabaseClient";
+import {
+  canPlayMultiplayerCharacter,
+  isMultiplayerAdmin,
+  isMultiplayerGm,
+} from "./permissions";
 import type {
   MultiplayerConnectionPhase,
   MultiplayerCharacterPreset,
@@ -50,7 +55,8 @@ interface MultiplayerState {
   joinRoom: (joinCode: string, displayName: string, role: "player" | "spectator") => Promise<void>;
   leaveRoom: () => Promise<void>;
   assignCharacter: (userId: string, characterId: string | null) => Promise<void>;
-  setMemberRole: (userId: string, role: "admin" | "player" | "spectator") => Promise<void>;
+  setMemberRole: (userId: string, role: MultiplayerRole) => Promise<void>;
+  setMemberAdmin: (userId: string, isAdmin: boolean) => Promise<void>;
   createCharacterPreset: (name: string, summary: string, setup: CharacterCreationPackage) => Promise<void>;
   deleteCharacterPreset: (presetId: string) => Promise<void>;
   submitCharacterRequest: (
@@ -119,7 +125,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
       });
       if (error) throw error;
       const room = mapRoomRow(firstRow(data));
-      const self = createMemberFromRoom(room, userId, normalizedName, "host");
+      const self = createMemberFromRoom(room, userId, normalizedName, "gm", true);
       saveSession({ roomId: room.id, displayName: normalizedName });
       await connectToRoom(client, room, self, set, get);
       await get().publishStateNow();
@@ -170,7 +176,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
     const client = requireClient();
     const { room, self } = get();
     if (!room) throw new Error("Aucune partie connectée.");
-    if (self?.role !== "host" && self?.role !== "admin") {
+    if (!isMultiplayerGm(self) && !isMultiplayerAdmin(self)) {
       throw new Error("Un rôle administrateur est requis pour attribuer un personnage.");
     }
     const { error } = await client.rpc("assign_multiplayer_character", {
@@ -184,26 +190,49 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
       throw new Error(message);
     }
     await refreshMembers(client, room.id, set, get);
-    if (get().self?.role === "host") await get().publishStateNow();
+    if (isMultiplayerGm(get().self)) await get().publishStateNow();
   },
 
   setMemberRole: async (userId, role) => {
     const client = requireClient();
     const { room, self } = get();
-    if (!room || self?.role !== "host") throw new Error("Seul le Conteur peut modifier les rôles.");
+    if (!room || !isMultiplayerAdmin(self)) throw new Error("Seul un administrateur peut modifier les rôles.");
     const { error } = await client.rpc("set_multiplayer_member_role", {
       p_role: role,
       p_room_id: room.id,
       p_user_id: userId,
     });
-    if (error) throw new Error(readableError(error));
+    if (error) {
+      const message = readableError(error);
+      set({ error: message });
+      throw new Error(message);
+    }
+    await refreshMembers(client, room.id, set, get);
+  },
+
+  setMemberAdmin: async (userId, isAdmin) => {
+    const client = requireClient();
+    const { room, self } = get();
+    if (!room || !isMultiplayerAdmin(self)) {
+      throw new Error("Seul un administrateur peut modifier les droits d’administration.");
+    }
+    const { error } = await client.rpc("set_multiplayer_member_admin", {
+      p_is_admin: isAdmin,
+      p_room_id: room.id,
+      p_user_id: userId,
+    });
+    if (error) {
+      const message = readableError(error);
+      set({ error: message });
+      throw new Error(message);
+    }
     await refreshMembers(client, room.id, set, get);
   },
 
   createCharacterPreset: async (name, summary, setup) => {
     const client = requireClient();
     const { room, self } = get();
-    if (!room || self?.role !== "admin") {
+    if (!room || !isMultiplayerAdmin(self)) {
       throw new Error("Un rôle administrateur est requis.");
     }
     const { error } = await client.rpc("create_multiplayer_character_preset", {
@@ -218,7 +247,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
 
   deleteCharacterPreset: async (presetId) => {
     const client = requireClient();
-    if (get().self?.role !== "admin") {
+    if (!isMultiplayerAdmin(get().self)) {
       throw new Error("Un rôle administrateur est requis.");
     }
     const { error } = await client.rpc("delete_multiplayer_character_preset", {
@@ -232,7 +261,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   submitCharacterRequest: async (kind, setup, presetId) => {
     const client = requireClient();
     const { room, self, pendingCharacterRequest } = get();
-    if (!room || !self || (self.role !== "player" && self.role !== "admin")) {
+    if (!room || !self || !canPlayMultiplayerCharacter(self)) {
       throw new Error("Cette participation ne peut pas créer de personnage.");
     }
     if (self.characterId) throw new Error("Un personnage vous est déjà attribué.");
@@ -251,7 +280,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
 
   beginCharacterRequest: async (requestId) => {
     const client = requireClient();
-    if (get().self?.role !== "host") return false;
+    if (!isMultiplayerGm(get().self)) return false;
     const { data, error } = await client.rpc("set_multiplayer_character_request_status", {
       p_error: null,
       p_request_id: requestId,
@@ -281,7 +310,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
     const client = requireClient();
     const { room, self, pendingTurn } = get();
     if (!room || !self) throw new Error("Aucune partie connectée.");
-    if (self.role !== "player" && self.role !== "admin") {
+    if (!canPlayMultiplayerCharacter(self)) {
       throw new Error("Seul un joueur peut envoyer une intention.");
     }
     if (!self.characterId) throw new Error("Choisissez d'abord un personnage.");
@@ -308,7 +337,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   submitPlayerCheck: async (requestId) => {
     const client = requireClient();
     const { room, self, pendingTurn } = get();
-    if (!room || !self || (self.role !== "player" && self.role !== "admin") || !self.characterId) {
+    if (!room || !self || !canPlayMultiplayerCharacter(self) || !self.characterId) {
       throw new Error("Un personnage joueur est requis pour lancer ce dé.");
     }
     if (pendingTurn) throw new Error("Votre intention précédente attend encore le Conteur.");
@@ -339,7 +368,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   beginTurn: async (turnId) => {
     const client = requireClient();
     const { room, self } = get();
-    if (!room || self?.role !== "host") return false;
+    if (!room || !isMultiplayerGm(self)) return false;
     const { data, error } = await client.rpc("set_multiplayer_turn_status", {
       p_error: null,
       p_status: "processing",
@@ -365,8 +394,8 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
 
   publishStateNow: () => {
     publicationQueue = publicationQueue.then(
-      () => publishHostState(set, get),
-      () => publishHostState(set, get),
+      () => publishGmState(set, get),
+      () => publishGmState(set, get),
     );
     return publicationQueue;
   },
@@ -374,11 +403,11 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   clearError: () => set({ error: null, phase: get().room ? "connected" : "local" }),
 }));
 
-async function publishHostState(set: StoreSet, get: StoreGet): Promise<void> {
+async function publishGmState(set: StoreSet, get: StoreGet): Promise<void> {
   const client = requireClient();
   const { room, self, members, latestSequence } = get();
-  if (!room || self?.role !== "host") return;
-  const recipients = members.filter((member) => member.role !== "host");
+  if (!room || !self || !isMultiplayerGm(self)) return;
+  const recipients = members.filter((member) => member.userId !== self.userId);
   if (recipients.length === 0) return;
 
   const sequence = Math.max(Date.now(), latestSequence + 1);
@@ -468,7 +497,7 @@ async function connectToRoom(
     pendingCharacterRequest: null,
     incomingTurns: [],
     pendingTurn: null,
-    awaitingHostState: self.role !== "host",
+    awaitingHostState: !isMultiplayerGm(self),
     latestSequence: 0,
     error: null,
   });
@@ -510,7 +539,7 @@ async function connectToRoom(
       filter: `room_id=eq.${room.id}`,
     }, (payload) => {
       if (generation !== connectionGeneration) return;
-      if (get().self?.role === "host") {
+      if (isMultiplayerGm(get().self)) {
         void refreshIncomingCharacterRequests(client, room.id, set);
       } else {
         if (
@@ -542,7 +571,7 @@ async function connectToRoom(
       filter: `room_id=eq.${room.id}`,
     }, (payload) => {
       if (generation !== connectionGeneration) return;
-      if (get().self?.role === "host") void refreshIncomingTurns(client, room.id, set, get);
+      if (isMultiplayerGm(get().self)) void refreshIncomingTurns(client, room.id, set, get);
       else {
         if (
           isRecord(payload.new) &&
@@ -564,7 +593,7 @@ async function connectToRoom(
       table: "multiplayer_projections",
       filter: `user_id=eq.${self.userId}`,
     }, (payload) => {
-      if (generation !== connectionGeneration || get().self?.role === "host") return;
+      if (generation !== connectionGeneration || isMultiplayerGm(get().self)) return;
       applyProjectionRow(payload.new, room.id, self.userId, set, get);
     })
     .subscribe();
@@ -586,6 +615,7 @@ async function connectToRoom(
         await presenceChannel?.track({
           characterId: self.characterId,
           displayName: self.displayName,
+          isAdmin: self.isAdmin,
           role: self.role,
           userId: self.userId,
         });
@@ -595,7 +625,7 @@ async function connectToRoom(
       }
     });
 
-  if (self.role === "host") {
+  if (isMultiplayerGm(self)) {
     await Promise.all([
       refreshIncomingTurns(client, room.id, set, get),
       refreshIncomingCharacterRequests(client, room.id, set),
@@ -687,11 +717,19 @@ async function refreshMembers(
   const members = (data ?? []).map((row) => mapMemberRow(row, onlineIds));
   const currentSelf = get().self;
   const self = members.find((member) => member.userId === currentSelf?.userId) ?? currentSelf;
-  set({ members, self });
   if (self?.characterId) {
     useGameStore.setState({ selectedCharacterId: self.characterId });
   }
-  if (self?.role === "host") void get().publishStateNow();
+  set({
+    members,
+    self,
+    awaitingHostState: !isMultiplayerGm(self),
+  });
+  if (isMultiplayerGm(self)) {
+    void refreshIncomingTurns(client, roomId, set, get);
+    void refreshIncomingCharacterRequests(client, roomId, set);
+    void get().publishStateNow();
+  }
 }
 
 async function refreshIncomingTurns(
@@ -823,8 +861,13 @@ function mapRoomRow(value: unknown): MultiplayerRoom {
 
 function mapMemberRow(value: unknown, onlineIds: Set<string>): MultiplayerMember {
   if (!isRecord(value)) throw new Error("Membre multijoueur invalide.");
-  const role = value.role;
-  if (role !== "host" && role !== "admin" && role !== "player" && role !== "spectator") {
+  const rawRole = value.role;
+  const role = rawRole === "host"
+    ? "gm"
+    : rawRole === "admin"
+      ? "player"
+      : rawRole;
+  if (role !== "gm" && role !== "player" && role !== "spectator") {
     throw new Error("Rôle multijoueur invalide.");
   }
   const userId = requireString(value.user_id, "user_id");
@@ -833,6 +876,9 @@ function mapMemberRow(value: unknown, onlineIds: Set<string>): MultiplayerMember
     userId,
     displayName: requireString(value.display_name, "display_name"),
     role,
+    isAdmin: typeof value.is_admin === "boolean"
+      ? value.is_admin
+      : rawRole === "host" || rawRole === "admin",
     playerColor: isHexColor(value.player_color) ? value.player_color : "#6B4A5C",
     characterId: typeof value.character_id === "string" ? value.character_id : null,
     joinedAt: requireString(value.joined_at, "joined_at"),
@@ -979,12 +1025,14 @@ function createMemberFromRoom(
   userId: string,
   displayName: string,
   role: MultiplayerRole,
+  isAdmin = false,
 ): MultiplayerMember {
   return {
     roomId: room.id,
     userId,
     displayName,
     role,
+    isAdmin,
     playerColor: "#9C7A2E",
     characterId: null,
     joinedAt: room.createdAt,
@@ -1075,7 +1123,12 @@ function readableError(error: unknown): string {
       ? error.message
       : null;
   if (message && /could not find the function|schema cache|PGRST202/iu.test(message)) {
-    return "Les fonctions multijoueur de Supabase ne sont pas à jour. Appliquez les migrations 002 à 004, puis rechargez le schéma PostgREST.";
+    return "Les fonctions multijoueur de Supabase ne sont pas à jour. Appliquez toutes les migrations jusqu’à 202607200001, puis rechargez le schéma PostgREST.";
+  }
+  if (message?.includes("LAST_ADMIN_REQUIRED")) return "Le salon doit conserver au moins un administrateur.";
+  if (message?.includes("GM_TRANSFER_REQUIRED")) return "Désignez d’abord un autre MJ pour transférer la partie.";
+  if (message?.includes("GM_MUST_BE_PREPARED_AS_ADMIN")) {
+    return "Accordez temporairement le statut Admin à ce participant avant de lui transférer le rôle de MJ.";
   }
   if (message) return message;
   return "Erreur multijoueur inconnue.";

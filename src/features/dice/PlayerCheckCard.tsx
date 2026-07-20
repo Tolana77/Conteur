@@ -7,6 +7,7 @@ import {
   getPlayerCheckLabel,
 } from "../ai-director/improvisedActions";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import { canPlayMultiplayerCharacter } from "../multiplayer/permissions";
 import { resolveAndNarratePlayerCheck } from "./resolvePlayerCheck";
 
 export function PlayerCheckCard({
@@ -25,7 +26,7 @@ export function PlayerCheckCard({
   const pendingMultiplayerTurn = useMultiplayerStore((state) => state.pendingTurn);
   const submitPlayerCheck = useMultiplayerStore((state) => state.submitPlayerCheck);
   const isRemotePlayer = Boolean(
-    multiplayerRoom && (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin"),
+    multiplayerRoom && canPlayMultiplayerCharacter(multiplayerSelf),
   );
 
   const handleRoll = async () => {

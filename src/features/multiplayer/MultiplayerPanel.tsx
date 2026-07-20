@@ -1,5 +1,11 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useGameStore } from "../../store/useGameStore";
+import type { MultiplayerRole } from "./types";
+import {
+  isMultiplayerAdmin,
+  isMultiplayerGm,
+  multiplayerRoleLabels,
+} from "./permissions";
 import { useMultiplayerStore } from "./useMultiplayerStore";
 
 export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
@@ -21,6 +27,7 @@ export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
   const leaveRoom = useMultiplayerStore((state) => state.leaveRoom);
   const assignCharacter = useMultiplayerStore((state) => state.assignCharacter);
   const setMemberRole = useMultiplayerStore((state) => state.setMemberRole);
+  const setMemberAdmin = useMultiplayerStore((state) => state.setMemberAdmin);
   const clearError = useMultiplayerStore((state) => state.clearError);
   const characters = useGameStore((state) => state.characters);
   const [displayName, setDisplayName] = useState(self?.displayName ?? "");
@@ -110,6 +117,7 @@ export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
               phase={phase}
               room={room}
               self={self}
+              setMemberAdmin={(userId, isAdmin) => run(`admin:${userId}`, () => setMemberAdmin(userId, isAdmin))}
               setMemberRole={(userId, role) => run(`role:${userId}`, () => setMemberRole(userId, role))}
             />
           ) : (
@@ -139,18 +147,25 @@ export function MultiplayerPanel({ onClose }: { onClose: () => void }) {
                     value={joinCode}
                   />
                 </label>
-                <div className="mt-3 grid grid-cols-2 border border-[#9C7A2E]/25 p-1">
-                  {(["player", "spectator"] as const).map((role) => (
+                <div className="mt-3 grid grid-cols-3 border border-[#9C7A2E]/25 p-1">
+                  {(["player", "gm", "spectator"] as const).map((role) => (
                     <button
-                      className={`px-2 py-1.5 text-sm ${joinRole === role ? "bg-[#5A2233] text-[#E4D8BE]" : "text-[#E4D8BE]/60"}`}
+                      className={`px-2 py-1.5 text-sm ${joinRole === role ? "bg-[#5A2233] text-[#E4D8BE]" : "text-[#E4D8BE]/60"} disabled:cursor-not-allowed disabled:opacity-35`}
+                      disabled={role === "gm"}
                       key={role}
-                      onClick={() => setJoinRole(role)}
+                      onClick={() => {
+                        if (role !== "gm") setJoinRole(role);
+                      }}
+                      title={role === "gm" ? "Le rôle de MJ est attribué par un administrateur après l’entrée." : undefined}
                       type="button"
                     >
-                      {role === "player" ? "Joueur" : "Spectateur"}
+                      {multiplayerRoleLabels[role]}
                     </button>
                   ))}
                 </div>
+                <p className="mt-1 text-[10px] text-[#E4D8BE]/42">
+                  Le rôle de MJ est attribué dans le salon par un administrateur.
+                </p>
                 <button
                   className="fantasy-button mt-4 w-full rounded px-3 py-2 text-sm font-semibold"
                   disabled={busyAction !== null}
@@ -199,11 +214,12 @@ type ConnectedRoomProps = {
   phase: ReturnType<typeof useMultiplayerStore.getState>["phase"];
   room: NonNullable<ReturnType<typeof useMultiplayerStore.getState>["room"]>;
   self: NonNullable<ReturnType<typeof useMultiplayerStore.getState>["self"]>;
-  setMemberRole: (userId: string, role: "admin" | "player" | "spectator") => void;
+  setMemberAdmin: (userId: string, isAdmin: boolean) => void;
+  setMemberRole: (userId: string, role: MultiplayerRole) => void;
 };
 
 function ConnectedRoom(props: ConnectedRoomProps) {
-  const canAssignOthers = props.self.role === "admin";
+  const canAdminister = isMultiplayerAdmin(props.self);
   return (
     <div className="space-y-4">
       <section className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -212,6 +228,14 @@ function ConnectedRoom(props: ConnectedRoomProps) {
             <div>
               <p className="text-xs uppercase text-[#9C7A2E]">{props.room.status === "lobby" ? "Salon" : "Partie"}</p>
               <h3 className="ink-heading text-xl font-semibold">{props.room.name}</h3>
+              <p className="mt-1 flex flex-wrap gap-1.5 text-[10px] uppercase">
+                <span className="border border-[#9C7A2E]/30 px-1.5 py-0.5 text-[#E4D8BE]/70">
+                  {multiplayerRoleLabels[props.self.role]}
+                </span>
+                <span className={`border px-1.5 py-0.5 ${props.self.isAdmin ? "border-[#9C7A2E]/55 text-[#9C7A2E]" : "border-[#E4D8BE]/15 text-[#E4D8BE]/38"}`}>
+                  {props.self.isAdmin ? "Admin" : "Non-admin"}
+                </span>
+              </p>
             </div>
             <span className={`mt-1 h-2.5 w-2.5 rounded-full ${props.phase === "connected" ? "bg-[#5FA85A]" : "bg-[#B5612A]"}`} />
           </div>
@@ -219,11 +243,11 @@ function ConnectedRoom(props: ConnectedRoomProps) {
             <p className="mt-2 text-xs text-[#E4D8BE]/55">En attente de la synchronisation du Conteur.</p>
           ) : props.pendingTurn ? (
             <p className="mt-2 text-xs text-[#E4D8BE]/55">Votre intention attend la résolution du Conteur.</p>
-          ) : props.self.role === "host" && props.incomingTurnCount > 0 ? (
+          ) : isMultiplayerGm(props.self) && props.incomingTurnCount > 0 ? (
             <p className="mt-2 text-xs text-[#E4D8BE]/55">
               {props.incomingTurnCount} intention{props.incomingTurnCount > 1 ? "s" : ""} en attente.
             </p>
-          ) : props.self.role === "host" && props.incomingCharacterRequestCount > 0 ? (
+          ) : isMultiplayerGm(props.self) && props.incomingCharacterRequestCount > 0 ? (
             <p className="mt-2 text-xs text-[#E4D8BE]/55">
               {props.incomingCharacterRequestCount} personnage{props.incomingCharacterRequestCount > 1 ? "s" : ""} en préparation.
             </p>
@@ -243,9 +267,9 @@ function ConnectedRoom(props: ConnectedRoomProps) {
         <h3 className="rune-label mb-2 text-sm">Participants</h3>
         <div className="space-y-2">
           {props.members.map((member) => {
-            const canAssign = member.role !== "spectator" && canAssignOthers;
+            const canAssign = member.role === "player" && canAdminister;
             return (
-              <article className="grid gap-2 border border-[#9C7A2E]/20 bg-[#15121A]/55 px-3 py-2 sm:grid-cols-[1fr_minmax(170px,auto)] sm:items-center" key={member.userId}>
+              <article className="grid gap-2 border border-[#9C7A2E]/20 bg-[#15121A]/55 px-3 py-2 sm:grid-cols-[1fr_minmax(220px,auto)] sm:items-center" key={member.userId}>
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-semibold text-[#E4D8BE]">
                     <span
@@ -255,23 +279,39 @@ function ConnectedRoom(props: ConnectedRoomProps) {
                     <span className="truncate" style={{ color: member.playerColor }}>{member.displayName}</span>
                     {member.userId === props.self.userId ? <span className="text-[10px] text-[#9C7A2E]">VOUS</span> : null}
                   </p>
-                  <p className="ml-4 text-[11px] text-[#E4D8BE]/45">
-                    {member.role === "host" ? "Conteur" : member.role === "admin" ? "Admin" : member.role === "player" ? "Joueur" : "Spectateur"}
+                  <p className="ml-4 mt-1 flex flex-wrap gap-1.5 text-[10px] uppercase">
+                    <span className="border border-[#E4D8BE]/15 px-1.5 py-0.5 text-[#E4D8BE]/55">
+                      {multiplayerRoleLabels[member.role]}
+                    </span>
+                    <span className={`border px-1.5 py-0.5 ${member.isAdmin ? "border-[#9C7A2E]/50 text-[#9C7A2E]" : "border-[#E4D8BE]/10 text-[#E4D8BE]/32"}`}>
+                      {member.isAdmin ? "Admin" : "Non-admin"}
+                    </span>
                   </p>
-                  {props.self.role === "host" && member.role !== "host" ? (
-                    <select
-                      className="ml-4 mt-1 border border-[#9C7A2E]/20 bg-[#221E29] px-1.5 py-1 text-[11px] text-[#E4D8BE]/70"
-                      disabled={props.busyAction === `role:${member.userId}`}
-                      onChange={(event) => props.setMemberRole(
-                        member.userId,
-                        event.target.value as "admin" | "player" | "spectator",
-                      )}
-                      value={member.role}
-                    >
-                      <option value="player">Joueur</option>
-                      <option value="admin">Admin</option>
-                      <option value="spectator">Spectateur</option>
-                    </select>
+                  {canAdminister ? (
+                    <div className="ml-4 mt-2 flex flex-wrap items-center gap-2">
+                      <label className="grid gap-1 text-[10px] uppercase text-[#9C7A2E]/75">
+                        Rôle
+                        <select
+                          className="border border-[#9C7A2E]/20 bg-[#221E29] px-2 py-1 text-xs normal-case text-[#E4D8BE]/80"
+                          disabled={props.busyAction === `role:${member.userId}`}
+                          onChange={(event) => props.setMemberRole(member.userId, event.target.value as MultiplayerRole)}
+                          value={member.role}
+                        >
+                          <option value="player">Joueur</option>
+                          <option disabled={!member.isAdmin} value="gm">MJ{member.isAdmin ? "" : " · rendre admin d’abord"}</option>
+                          <option value="spectator">Spectateur</option>
+                        </select>
+                      </label>
+                      <label className="mt-4 inline-flex cursor-pointer items-center gap-2 text-xs text-[#E4D8BE]/70">
+                        <input
+                          checked={member.isAdmin}
+                          disabled={props.busyAction === `admin:${member.userId}`}
+                          onChange={(event) => props.setMemberAdmin(member.userId, event.target.checked)}
+                          type="checkbox"
+                        />
+                        Admin
+                      </label>
+                    </div>
                   ) : null}
                 </div>
                 {canAssign ? (
@@ -312,7 +352,7 @@ function ConnectedRoom(props: ConnectedRoomProps) {
           onClick={props.leaveRoom}
           type="button"
         >
-          {props.self.role === "host" ? "Fermer la partie" : "Quitter la partie"}
+          {isMultiplayerGm(props.self) ? "Fermer la partie" : "Quitter la partie"}
         </button>
       </div>
     </div>

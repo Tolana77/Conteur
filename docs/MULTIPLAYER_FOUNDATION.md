@@ -39,8 +39,9 @@ son résultat localement.
 
 Chaque nouveau joueur passe désormais par une demande de personnage. Le paquet
 est validé par les mêmes règles que la création locale, puis installé et
-attribué par l'hôte. Les personnages préfabriqués, les couleurs de joueur et le
-rôle administrateur sont stockés au niveau du salon Supabase.
+attribué par le MJ. Les personnages préfabriqués, les couleurs de joueur, le
+rôle de table (`player`, `gm`, `spectator`) et le statut `is_admin` sont stockés
+séparément au niveau du salon Supabase.
 
 Les intentions narratives sont privées entre leur auteur et le MJ. La
 projection des autres participants ne conserve que les paroles explicitement

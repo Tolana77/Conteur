@@ -8,6 +8,8 @@ import { CombatMap } from "../features/combat/CombatMap";
 import { GenreSelection } from "../features/world/GenreSelection";
 import { WorldStatus } from "../features/world/WorldStatus";
 import {
+  canPlayMultiplayerCharacter,
+  isMultiplayerAdmin,
   MultiplayerPanel,
   useMultiplayerStore,
 } from "../features/multiplayer";
@@ -48,11 +50,11 @@ export function GamePage() {
   const isCampaignConfigured = campaignId !== "campaign-empty";
   const needsCharacterCreation = isCampaignConfigured && (
     multiplayerRoom
-      ? (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin") && !multiplayerSelf.characterId
+      ? canPlayMultiplayerCharacter(multiplayerSelf) && !multiplayerSelf?.characterId
       : characterCount === 0
   );
   const isRestrictedParticipant = Boolean(
-    multiplayerRoom && multiplayerSelf?.role !== "host" && multiplayerSelf?.role !== "admin",
+    multiplayerRoom && !isMultiplayerAdmin(multiplayerSelf),
   );
   const visiblePanels = (isRestrictedParticipant
     ? panels.filter((panel) => panel.id !== "genre")

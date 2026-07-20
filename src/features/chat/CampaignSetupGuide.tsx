@@ -1,6 +1,11 @@
 import { useGameStore } from "../../store/useGameStore";
 import { IlluminatedInitial } from "../../ui/components/IlluminatedInitial";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import {
+  canPlayMultiplayerCharacter,
+  isMultiplayerAdmin,
+  isMultiplayerGm,
+} from "../multiplayer/permissions";
 
 interface CampaignSetupGuideProps {
   onOpenCharacterCreation?: () => void;
@@ -18,11 +23,11 @@ export function CampaignSetupGuide({
   const awaitingHostState = useMultiplayerStore((state) => state.awaitingHostState);
   const pendingCharacterRequest = useMultiplayerStore((state) => state.pendingCharacterRequest);
   const campaignIsConfigured = campaign.id !== "campaign-empty";
-  const isPlayerParticipant = self?.role === "player" || self?.role === "admin";
+  const isPlayerParticipant = canPlayMultiplayerCharacter(self);
   const needsCharacter = campaignIsConfigured && (
     room ? Boolean(isPlayerParticipant && !self?.characterId) : characterCount === 0
   );
-  const canCreateCampaign = !room || self?.role === "host" || self?.role === "admin";
+  const canCreateCampaign = !room || isMultiplayerAdmin(self);
 
   let initial = "V";
   let title = "Vous êtes maintenant prêts à commencer";
@@ -57,7 +62,7 @@ export function CampaignSetupGuide({
     initial = "L";
     title = "La partie est prête";
     description = "Vous observez la campagne. Les paroles et les événements visibles apparaîtront dans ce fil.";
-  } else if (room && self?.role === "host") {
+  } else if (room && isMultiplayerGm(self)) {
     initial = "L";
     title = "La campagne est prête";
     description = "Les participants peuvent maintenant créer leur personnage et rejoindre la scène d’ouverture.";

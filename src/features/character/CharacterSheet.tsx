@@ -30,7 +30,10 @@ import type {
   CharacterStats,
   InventoryItem,
 } from "../../core/models";
-import { normalizeCharacterPerception } from "../../core/game-engine/perception";
+import {
+  languageMasteryLabels,
+  normalizeCharacterPerception,
+} from "../../core/game-engine/perception";
 import { getAbilityCharges, getAbilityMaxCharges } from "../abilities";
 import { getGameActionTemplate, resolveGameActionEffects } from "../actions";
 import {
@@ -2474,6 +2477,29 @@ function HistoryJournalModule({ character }: { character: SafeCharacter }) {
           {!character.origin && !character.description ? (
             <p>Le journal personnel recueillera ici les origines, serments, cicatrices narratives et choix importants du personnage.</p>
           ) : null}
+        </div>
+        <div className="relative z-[2] mt-5 border-t border-[#9C7A2E]/22 pt-4">
+          <h4 className="rune-label text-xs">Langues</h4>
+          <div className="mt-2 space-y-2">
+            {character.perception.languages.map((language) => (
+              <article className="border border-[#9C7A2E]/18 bg-[#15121A]/38 px-3 py-2" key={language.languageId}>
+                <strong className="block text-sm font-medium text-[#E4D8BE]">{language.name}</strong>
+                <dl className="mt-1 grid grid-cols-2 gap-2 text-xs text-[#E4D8BE]/60">
+                  <div>
+                    <dt className="text-[10px] uppercase text-[#9C7A2E]/75">Entendre / parler</dt>
+                    <dd>{languageMasteryLabels[language.oral]}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase text-[#9C7A2E]/75">Lire / écrire</dt>
+                    <dd>{languageMasteryLabels[language.written]}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+            {character.perception.languages.length === 0 ? (
+              <p className="text-sm text-[#E4D8BE]/50">Aucune langue connue.</p>
+            ) : null}
+          </div>
         </div>
       </section>
 

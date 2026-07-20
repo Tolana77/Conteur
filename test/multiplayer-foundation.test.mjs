@@ -15,6 +15,10 @@ const onboardingRepairMigration = readFileSync(
   new URL("../supabase/migrations/202607190004_multiplayer_onboarding_repair.sql", import.meta.url),
   "utf8",
 );
+const rolesAndAdminMigration = readFileSync(
+  new URL("../supabase/migrations/202607200001_multiplayer_roles_and_admin.sql", import.meta.url),
+  "utf8",
+);
 const gamePageSource = readFileSync(
   new URL("../src/pages/GamePage.tsx", import.meta.url),
   "utf8",
@@ -25,6 +29,14 @@ const presetManagerSource = readFileSync(
 );
 const multiplayerPanelSource = readFileSync(
   new URL("../src/features/multiplayer/MultiplayerPanel.tsx", import.meta.url),
+  "utf8",
+);
+const chatInputSource = readFileSync(
+  new URL("../src/features/chat/ChatInput.tsx", import.meta.url),
+  "utf8",
+);
+const characterSheetSource = readFileSync(
+  new URL("../src/features/character/CharacterSheet.tsx", import.meta.url),
   "utf8",
 );
 assert.match(onboardingMigration, /role in \('host', 'admin', 'player', 'spectator'\)/u);
@@ -38,10 +50,19 @@ assert.match(onboardingRepairMigration, /create or replace function public\.crea
 assert.match(onboardingRepairMigration, /member\.role = 'admin'/u);
 assert.match(onboardingRepairMigration, /not public\.is_multiplayer_admin\(p_room_id\)/u);
 assert.match(onboardingRepairMigration, /notify pgrst, 'reload schema'/u);
+assert.match(rolesAndAdminMigration, /check \(role in \('player', 'gm', 'spectator'\)\)/u);
+assert.match(rolesAndAdminMigration, /add column if not exists is_admin boolean/u);
+assert.match(rolesAndAdminMigration, /set is_admin = true/u);
+assert.match(rolesAndAdminMigration, /create or replace function public\.set_multiplayer_member_admin/u);
+assert.match(rolesAndAdminMigration, /member\.is_admin = true/u);
 assert.match(gamePageSource, /<CharacterCreationPage/u);
 assert.doesNotMatch(gamePageSource, /CharacterOnboardingModal/u);
-assert.match(presetManagerSource, /self\?\.role !== "admin"/u);
-assert.match(multiplayerPanelSource, /canAssignOthers = props\.self\.role === "admin"/u);
+assert.match(presetManagerSource, /isMultiplayerAdmin\(self\)/u);
+assert.match(multiplayerPanelSource, /setMemberAdmin/u);
+assert.match(multiplayerPanelSource, /multiplayerRoleLabels/u);
+assert.doesNotMatch(chatInputSource, /languageMasteryLabels/u);
+assert.match(characterSheetSource, /languageMasteryLabels\[language\.oral\]/u);
+assert.match(characterSheetSource, /languageMasteryLabels\[language\.written\]/u);
 globalThis.localStorage = {
   getItem: (key) => localStorageData.get(key) ?? null,
   setItem: (key, value) => localStorageData.set(key, String(value)),
@@ -71,6 +92,11 @@ try {
     createMultiplayerCharacterContext,
   } = await vite.ssrLoadModule("/src/features/multiplayer/characterOnboarding.ts");
   const {
+    canPlayMultiplayerCharacter,
+    isMultiplayerAdmin,
+    isMultiplayerGm,
+  } = await vite.ssrLoadModule("/src/features/multiplayer/permissions.ts");
+  const {
     extractSpokenDialogue,
     projectMessagesForRecipient,
   } = await vite.ssrLoadModule("/src/features/multiplayer/messageVisibility.ts");
@@ -99,6 +125,11 @@ try {
   assert.equal(parsedActions.length, 1);
   assert.equal(parsedActions[0].command, "attack weapon-1");
   assert.deepEqual(parsedActions[0].target.position, { x: 2, y: 3 });
+  assert.equal(canPlayMultiplayerCharacter({ role: "player" }), true);
+  assert.equal(canPlayMultiplayerCharacter({ role: "gm" }), false);
+  assert.equal(isMultiplayerGm({ role: "gm" }), true);
+  assert.equal(isMultiplayerAdmin({ isAdmin: true }), true);
+  assert.equal(isMultiplayerAdmin({ isAdmin: false }), false);
   assert.equal(
     extractSpokenDialogue('Je frappe le rat et je crie « Mort au rat ! » puis "Recule !"'),
     "Mort au rat ! Recule !",
@@ -266,6 +297,7 @@ try {
     userId: "user-player",
     displayName: "Ariane",
     role: "player",
+    isAdmin: false,
     playerColor: "#5689B8",
     characterId: playerCharacter.id,
     joinedAt: new Date(0).toISOString(),
@@ -340,7 +372,8 @@ try {
     ...member,
     userId: "user-admin",
     displayName: "Mélisande",
-    role: "admin",
+    role: "player",
+    isAdmin: true,
     characterId: null,
     playerColor: "#A263B0",
   }, 8);

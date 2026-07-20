@@ -4,6 +4,7 @@ import { useGameStore } from "../../store/useGameStore";
 import { useMultiplayerStore } from "./useMultiplayerStore";
 import { resolveAndNarratePlayerCheck } from "../dice/resolvePlayerCheck";
 import { extractQuotedCommunication } from "./messageVisibility";
+import { isMultiplayerGm } from "./permissions";
 import {
   applyPerceptionConditions,
   createCommunicationPayload,
@@ -36,7 +37,7 @@ export function MultiplayerBridge() {
   }, [initialize]);
 
   useEffect(() => {
-    if (!room || self?.role !== "host") return undefined;
+    if (!room || !isMultiplayerGm(self)) return undefined;
     let timer: number | null = null;
     const unsubscribe = useGameStore.subscribe(() => {
       if (timer !== null) window.clearTimeout(timer);
@@ -56,7 +57,7 @@ export function MultiplayerBridge() {
   useEffect(() => {
     if (
       !incomingCharacterRequest ||
-      self?.role !== "host" ||
+      !isMultiplayerGm(self) ||
       processingCharacterRequestIdRef.current
     ) return;
     processingCharacterRequestIdRef.current = incomingCharacterRequest.id;
@@ -92,7 +93,7 @@ export function MultiplayerBridge() {
   ]);
 
   useEffect(() => {
-    if (!incomingTurn || self?.role !== "host" || processingTurnIdRef.current) return;
+    if (!incomingTurn || !isMultiplayerGm(self) || processingTurnIdRef.current) return;
     processingTurnIdRef.current = incomingTurn.id;
 
     void (async () => {

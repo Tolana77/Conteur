@@ -8,7 +8,6 @@ import type {
 } from "../../app/types";
 import {
   applyPerceptionConditions,
-  languageMasteryLabels,
   normalizeCharacterPerception,
 } from "../../core/game-engine/perception";
 import {
@@ -22,6 +21,7 @@ import {
 import { runAutomatedDirector } from "../ai-director/automatedDirector";
 import { useGameStore } from "../../store/useGameStore";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import { canPlayMultiplayerCharacter } from "../multiplayer/permissions";
 
 export function ChatInput({
   isExternalBusy = false,
@@ -59,7 +59,7 @@ export function ChatInput({
   const awaitingHostState = useMultiplayerStore((state) => state.awaitingHostState);
   const submitMultiplayerTurn = useMultiplayerStore((state) => state.submitTurn);
   const isRemotePlayer = Boolean(
-    multiplayerRoom && (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin"),
+    multiplayerRoom && canPlayMultiplayerCharacter(multiplayerSelf),
   );
   const isSpectator = Boolean(multiplayerRoom && multiplayerSelf?.role === "spectator");
   const isSetupBlocked = campaign.id === "campaign-empty" || (
@@ -210,7 +210,7 @@ export function ChatInput({
           >
             {communicationLanguages.length ? communicationLanguages.map((language) => (
               <option key={language.languageId} value={language.languageId}>
-                {language.name} · {languageMasteryLabels[language[communicationChannel]]}
+                {language.name}
               </option>
             )) : <option value="commun">Aucune langue maîtrisée</option>}
           </select>

@@ -49,7 +49,7 @@ export function createMultiplayerProjection(
   member: MultiplayerMember,
   sequence: number,
 ): MultiplayerProjectionEnvelope {
-  const canSeeGmState = member.role === "host" || member.role === "admin";
+  const canSeeGmState = member.role === "gm" || member.isAdmin;
   const characterId = member.characterId;
   const viewerCharacter = state.characters.find((character) => character.id === characterId);
   const viewerCombatant = characterId
@@ -415,5 +415,5 @@ function cloneSerializable<T>(value: T): T {
 }
 
 export function canRoleControlGame(role: MultiplayerRole | null): boolean {
-  return role === null || role === "host";
+  return role === null || role === "gm";
 }

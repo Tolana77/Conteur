@@ -1,5 +1,10 @@
 import { useGameStore } from "../../store/useGameStore";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import {
+  isMultiplayerAdmin,
+  isMultiplayerGm,
+  multiplayerRoleLabels,
+} from "../multiplayer/permissions";
 
 export function CharacterList() {
   const characters = useGameStore((state) => state.characters);
@@ -8,7 +13,7 @@ export function CharacterList() {
   const room = useMultiplayerStore((state) => state.room);
   const self = useMultiplayerStore((state) => state.self);
   const members = useMultiplayerStore((state) => state.members);
-  const canInspectAll = !room || self?.role === "host" || self?.role === "admin";
+  const canInspectAll = !room || isMultiplayerGm(self) || isMultiplayerAdmin(self);
   const claimedCharacterIds = new Set(members.flatMap((member) =>
     member.characterId ? [member.characterId] : []));
 
@@ -38,7 +43,7 @@ export function CharacterList() {
                     </strong>
                   </span>
                   <span className="text-[10px] uppercase text-[#E4D8BE]/40">
-                    {member.role === "host" ? "Conteur" : member.role === "admin" ? "Admin" : member.role === "spectator" ? "Spectateur" : "Joueur"}
+                    {multiplayerRoleLabels[member.role]}{member.isAdmin ? " · Admin" : ""}
                   </span>
                 </span>
                 {character ? (

@@ -13,9 +13,10 @@ l'autorité de jeu : lui seul exécute le moteur et appelle le narrateur.
    `supabase/migrations/202607190001_multiplayer_foundation.sql`, puis
    `supabase/migrations/202607190002_multiplayer_character_onboarding.sql`, puis
    `supabase/migrations/202607190003_multiplayer_perception.sql`, puis
-   `supabase/migrations/202607190004_multiplayer_onboarding_repair.sql`.
-   La dernière migration recrée les RPC d'accueil de façon idempotente et force
-   le rechargement du cache PostgREST. Elle corrige notamment l'erreur
+   `supabase/migrations/202607190004_multiplayer_onboarding_repair.sql`, puis
+   `supabase/migrations/202607200001_multiplayer_roles_and_admin.sql`.
+   Les dernières migrations recréent les RPC d'accueil de façon idempotente et forcent
+   le rechargement du cache PostgREST. Elles corrigent notamment l'erreur
    `Could not find the function create_multiplayer_character_preset`.
 4. Dans **Project Settings > API**, relève l'URL du projet et la clé
    publishable. La clé `service_role` ne doit jamais être utilisée ici.
@@ -59,12 +60,18 @@ Le MJ doit rester connecté pour résoudre de nouvelles intentions. La dernière
 projection reçue reste disponible côté Supabase, mais aucune règle n'est
 exécutée sans l'autorité du MJ.
 
-## 4. Administration et personnages de rechange
+## 4. Rôles, administration et personnages de rechange
 
-- Le MJ peut promouvoir un participant au rôle **Admin** depuis **Groupe**.
-- Un admin peut jouer et accède à **Univers**, à la console et à l'Atelier des
-  mondes, sans devenir une seconde autorité du moteur.
-- Seul un joueur **Admin** peut publier ou supprimer les personnages
-  préfabriqués et choisir les attributions manuelles.
+- Chaque participant possède un rôle de table : **Joueur**, **MJ** ou
+  **Spectateur**.
+- Le statut **Admin** est indépendant de ce rôle. Le créateur du salon commence
+  comme **MJ + Admin**.
+- Un admin accède à **Univers**, à la console et à l'Atelier des mondes. La
+  section **Persos préfabriqués** de l'onglet Univers permet de publier ou
+  supprimer les personnages de rechange.
+- Un admin peut modifier séparément le rôle et le statut Admin de chaque
+  participant depuis **Groupe**, ainsi que les attributions de personnages.
+- Pour transférer le rôle de MJ sans perdre l'état complet de la campagne, le
+  futur MJ doit d'abord recevoir temporairement le statut Admin.
 - Une couleur stable identifie chaque participant dans le chat et l'annuaire
   **Personnages**.

@@ -2,7 +2,7 @@ import type { ChatActionIntent, LanguageChannel } from "../../app/types";
 
 import type { CharacterCreationPackage } from "../character/characterCreation";
 
-export type MultiplayerRole = "host" | "admin" | "player" | "spectator";
+export type MultiplayerRole = "player" | "gm" | "spectator";
 export type MultiplayerRoomStatus = "lobby" | "active" | "closed";
 export type MultiplayerConnectionPhase =
   | "local"
@@ -26,6 +26,7 @@ export interface MultiplayerMember {
   userId: string;
   displayName: string;
   role: MultiplayerRole;
+  isAdmin: boolean;
   playerColor: string;
   characterId: string | null;
   joinedAt: string;

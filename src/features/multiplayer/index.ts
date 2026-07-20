@@ -2,6 +2,12 @@ export { MultiplayerPanel } from "./MultiplayerPanel";
 export { MultiplayerBridge } from "./MultiplayerBridge";
 export { CharacterPresetManager } from "./CharacterPresetManager";
 export { getMultiplayerConfiguration } from "./config";
+export {
+  canPlayMultiplayerCharacter,
+  isMultiplayerAdmin,
+  isMultiplayerGm,
+  multiplayerRoleLabels,
+} from "./permissions";
 export { useMultiplayerStore } from "./useMultiplayerStore";
 export type {
   MultiplayerConnectionPhase,

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import { isMultiplayerGm } from "../multiplayer/permissions";
 import { AnimatedDiceRollCard } from "../dice/DiceRollOverlay";
 import { PlayerCheckCard } from "../dice/PlayerCheckCard";
 import { isLegacyTechnicalCombatMessage } from "../combat/combatNarration";
@@ -25,12 +26,12 @@ export function ChatWindow({
   const diceRolls = useGameStore((state) => state.diceRolls);
   const playerCheckRequests = useGameStore((state) => state.playerCheckRequests);
   const multiplayerRoom = useMultiplayerStore((state) => state.room);
-  const multiplayerRole = useMultiplayerStore((state) => state.self?.role ?? null);
+  const multiplayerSelf = useMultiplayerStore((state) => state.self);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [isComposerBusy, setIsComposerBusy] = useState(false);
   const [isCheckNarrationBusy, setIsCheckNarrationBusy] = useState(false);
   const hasPendingPlayerCheck = playerCheckRequests.some((request) => request.status === "pending");
-  const canRunGmAutomation = !multiplayerRoom || multiplayerRole === "host";
+  const canRunGmAutomation = !multiplayerRoom || isMultiplayerGm(multiplayerSelf);
   const narrationIsSuspended = isComposerBusy || isCheckNarrationBusy || hasPendingPlayerCheck;
   useCombatNarration(canRunGmAutomation && !narrationIsSuspended);
   const { markPlayerActivity } = useScenePacing(canRunGmAutomation && !narrationIsSuspended);

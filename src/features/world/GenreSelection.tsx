@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
-import { CharacterPresetManager, useMultiplayerStore } from "../multiplayer";
+import {
+  CharacterPresetManager,
+  isMultiplayerAdmin,
+  useMultiplayerStore,
+} from "../multiplayer";
 
 type UniverseSection = "world" | "character-presets";
 
@@ -11,7 +15,7 @@ export function GenreSelection({ onOpenWorldWorkshop }: { onOpenWorldWorkshop: (
   const multiplayerRoom = useMultiplayerStore((state) => state.room);
   const multiplayerSelf = useMultiplayerStore((state) => state.self);
   const world = campaign.world;
-  const canManageCharacterPresets = Boolean(multiplayerRoom && multiplayerSelf?.role === "admin");
+  const canManageCharacterPresets = Boolean(multiplayerRoom && isMultiplayerAdmin(multiplayerSelf));
   const visibleSection = canManageCharacterPresets ? activeSection : "world";
 
   function confirmRestart() {

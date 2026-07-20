@@ -5,6 +5,7 @@ import {
   describeCharacterPackage,
 } from "../multiplayer/characterOnboarding";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
+import { canPlayMultiplayerCharacter } from "../multiplayer/permissions";
 import { CharacterCreationStep } from "./CharacterCreationStep";
 import type { CharacterCreationPackage } from "./characterCreation";
 
@@ -28,7 +29,7 @@ export function CharacterCreationPage() {
   const [localError, setLocalError] = useState<string | null>(null);
   const context = useMemo(() => createMultiplayerCharacterContext(gameState), [gameState]);
   const isRemoteParticipant = Boolean(
-    room && self && (self.role === "player" || self.role === "admin"),
+    room && canPlayMultiplayerCharacter(self),
   );
 
   async function submit(operation: () => Promise<void> | void) {

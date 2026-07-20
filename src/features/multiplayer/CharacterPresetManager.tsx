@@ -3,6 +3,7 @@ import { useGameStore } from "../../store/useGameStore";
 import { CharacterCreationStep } from "../character/CharacterCreationStep";
 import type { CharacterCreationPackage } from "../character/characterCreation";
 import { createMultiplayerCharacterContext, describeCharacterPackage } from "./characterOnboarding";
+import { isMultiplayerAdmin } from "./permissions";
 import { useMultiplayerStore } from "./useMultiplayerStore";
 
 export function CharacterPresetManager() {
@@ -19,7 +20,7 @@ export function CharacterPresetManager() {
   const [notice, setNotice] = useState<string | null>(null);
   const context = useMemo(() => createMultiplayerCharacterContext(gameState), [gameState]);
 
-  if (!room || self?.role !== "admin") return null;
+  if (!room || !isMultiplayerAdmin(self)) return null;
 
   async function savePreset() {
     const character = setup?.characters[0];
