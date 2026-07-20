@@ -12,7 +12,7 @@ import {
 
 const STATE_PUBLISH_DELAY_MS = 450;
 
-/** Relie le store local au transport réseau. Le MJ demeure l'unique autorité :
+/** Relie le store local au transport réseau. Le Conteur demeure l'unique autorité :
  * les clients distants ne font que soumettre une intention. */
 export function MultiplayerBridge() {
   const initialize = useMultiplayerStore((state) => state.initialize);

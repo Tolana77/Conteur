@@ -45,6 +45,14 @@ export interface WorldTimelineEvent {
   trigger: string;
 }
 
+export interface WorldCharacterCreationGuidance {
+  playerRole: string;
+  partyConcept: string;
+  startingEquipment: string;
+  /** Résumé public figé au chargement, sans secrets réservés au Conteur. */
+  publicContext?: string[];
+}
+
 export interface World {
   name?: string;
   pitch?: string;
@@ -60,4 +68,5 @@ export interface World {
   hooks?: WorldHook[];
   timeline?: WorldTimelineEvent[];
   openingScene?: string;
+  characterCreation?: WorldCharacterCreationGuidance;
 }

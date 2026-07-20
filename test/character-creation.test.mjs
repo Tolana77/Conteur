@@ -9,6 +9,7 @@ const vite = await createServer({
 
 const {
   CHARACTER_POINT_BUY_BUDGET,
+  buildCharacterCreationPrompt,
   calculatePointBuyCost,
   createClassicCharacterPackage,
   createDefaultCharacterDraft,
@@ -36,6 +37,10 @@ const context = {
   campaignLevel: 1,
   worldName: "Ormeval",
   worldPitch: "Une frontière où les serments coûtent plus cher que l'or.",
+  campaignDetails: [
+    "Faits publics: le vieux pont est fermé depuis l'équinoxe.",
+    "Factions: les Veilleurs protègent la frontière.",
+  ],
   playerRole: "Des voyageurs encore peu connus",
   partyConcept: "Un personnage solitaire qui pourra rencontrer des alliés en jeu",
   startingEquipment: "Un paquetage modeste",
@@ -44,6 +49,11 @@ const context = {
   effectTemplates: initialEffectTemplates,
   enemyTemplates: initialEnemyTemplates,
 };
+
+const characterPrompt = buildCharacterCreationPrompt("Une messagère déchue", context);
+assert.match(characterPrompt, /CONTEXTE PUBLIC DE LA CAMPAGNE/u);
+assert.match(characterPrompt, /le vieux pont est fermé/u);
+assert.match(characterPrompt, /les Veilleurs protègent la frontière/u);
 
 const draft = {
   ...createDefaultCharacterDraft(1),
@@ -342,6 +352,32 @@ assert.equal(start.itemInstances[0].overrides.description, "Des galettes d'avoin
 assert.equal(start.abilityInstances[0].ownerId, start.characters[0].id);
 assert.ok(start.abilityTemplates.some((template) => template.id === "ability-spark-thread"));
 assert.ok(start.effectTemplates.some((template) => template.id === "effect-spark-thread"));
+
+const campaignOnlyStart = createCampaignStartFromBlueprint(
+  blueprint,
+  initialItemTemplates,
+  initialAbilityTemplates,
+  initialEffectTemplates,
+  initialEnemyTemplates,
+  undefined,
+  {
+    allowEmptyParty: true,
+    characterCreation: {
+      playerRole: "Émissaire toléré par les Veilleurs",
+      partyConcept: "Un groupe encore en formation",
+      startingEquipment: "Un paquetage de voyage discret",
+    },
+  },
+);
+assert.equal(campaignOnlyStart.characters.length, 0);
+assert.equal(campaignOnlyStart.itemInstances.length, 0);
+assert.equal(campaignOnlyStart.campaign.world.characterCreation.playerRole, "Émissaire toléré par les Veilleurs");
+assert.ok(campaignOnlyStart.campaign.world.characterCreation.publicContext.some((detail) => detail.startsWith("Faits publics:")));
+useGameStore.getState().startCampaign(campaignOnlyStart);
+const installedAfterCampaign = useGameStore.getState().addCharacterFromPackage(assisted.setup);
+assert.ok(installedAfterCampaign);
+assert.equal(useGameStore.getState().characters.length, 1);
+assert.equal(useGameStore.getState().campaignStartSnapshot.characters.length, 1);
 
 const wrongCampaignCharacter = { ...start.characters[0], campaignId: "campaign-foreign" };
 const rebound = createCampaignStartSnapshot({

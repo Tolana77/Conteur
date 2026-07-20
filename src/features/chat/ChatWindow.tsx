@@ -1,19 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "../../store/useGameStore";
 import { useMultiplayerStore } from "../multiplayer/useMultiplayerStore";
-import { IlluminatedInitial } from "../../ui/components/IlluminatedInitial";
-import { HighlightedGameText } from "../../ui/gameTerms";
 import { AnimatedDiceRollCard } from "../dice/DiceRollOverlay";
 import { PlayerCheckCard } from "../dice/PlayerCheckCard";
 import { isLegacyTechnicalCombatMessage } from "../combat/combatNarration";
 import { ChatInput } from "./ChatInput";
+import { CampaignSetupGuide } from "./CampaignSetupGuide";
 import { MessageBubble } from "./MessageBubble";
 import { useCombatNarration } from "./useCombatNarration";
 import { useScenePacing } from "./useScenePacing";
 
 const seenChatRollIds = new Set<string>();
 
-export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (intentId: string) => void }) {
+export function ChatWindow({
+  onOpenCharacterCreation,
+  onOpenWorldWorkshop,
+  onRequestMapTarget,
+}: {
+  onOpenCharacterCreation?: () => void;
+  onOpenWorldWorkshop?: () => void;
+  onRequestMapTarget?: (intentId: string) => void;
+}) {
   const storedMessages = useGameStore((state) => state.messages);
   const diceRolls = useGameStore((state) => state.diceRolls);
   const playerCheckRequests = useGameStore((state) => state.playerCheckRequests);
@@ -80,15 +87,10 @@ export function ChatWindow({ onRequestMapTarget }: { onRequestMapTarget?: (inten
         onWheel={markPlayerActivity}
         ref={scrollRef}
       >
-        <section className="parchment-reading reading-border mx-auto mb-4 max-w-[760px] rounded-sm p-5">
-          <p className="text-sm leading-7">
-            <IlluminatedInitial genre="fantasy">L</IlluminatedInitial>
-            <HighlightedGameText
-              mode="none"
-              text="La scène s'ouvre comme un chapitre enluminé. Le Conteur attend votre décision, les marges du récit déjà prêtes à se couvrir d'encre."
-            />
-          </p>
-        </section>
+        <CampaignSetupGuide
+          onOpenCharacterCreation={onOpenCharacterCreation}
+          onOpenWorldWorkshop={onOpenWorldWorkshop}
+        />
 
         <div className="mx-auto max-w-[760px] space-y-3">
           {feedItems.map((item) => (

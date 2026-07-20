@@ -19,7 +19,7 @@ export function CharacterPresetManager() {
   const [notice, setNotice] = useState<string | null>(null);
   const context = useMemo(() => createMultiplayerCharacterContext(gameState), [gameState]);
 
-  if (!room || (self?.role !== "host" && self?.role !== "admin")) return null;
+  if (!room || self?.role !== "admin") return null;
 
   async function savePreset() {
     const character = setup?.characters[0];

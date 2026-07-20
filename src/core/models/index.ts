@@ -20,4 +20,5 @@ export type {
   WorldHook,
   WorldSecret,
   WorldTimelineEvent,
+  WorldCharacterCreationGuidance,
 } from "./world";

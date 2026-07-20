@@ -38,7 +38,7 @@ export function CharacterList() {
                     </strong>
                   </span>
                   <span className="text-[10px] uppercase text-[#E4D8BE]/40">
-                    {member.role === "host" ? "MJ" : member.role === "admin" ? "Admin" : member.role === "spectator" ? "Spectateur" : "Joueur"}
+                    {member.role === "host" ? "Conteur" : member.role === "admin" ? "Admin" : member.role === "spectator" ? "Spectateur" : "Joueur"}
                   </span>
                 </span>
                 {character ? (

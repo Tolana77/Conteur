@@ -176,6 +176,16 @@ export interface CampaignPartySetup {
   effectTemplates?: EffectTemplate[];
 }
 
+export interface CampaignStartOptions {
+  /** Permet de charger le monde avant l'étape distincte de création du personnage. */
+  allowEmptyParty?: boolean;
+  characterCreation?: {
+    playerRole: string;
+    partyConcept: string;
+    startingEquipment: string;
+  };
+}
+
 export interface WorldBlueprintParseResult {
   blueprint: WorldBlueprint | null;
   errors: string[];
@@ -366,6 +376,7 @@ export function createCampaignFromBlueprint(
   blueprint: WorldBlueprint,
   characters?: Character[],
   campaignId = `campaign-${crypto.randomUUID()}`,
+  characterCreation?: CampaignStartOptions["characterCreation"],
 ): Campaign {
   const boundCharacters = (characters ?? blueprint.party.characters.map((character) => toCharacter(character, campaignId)))
     .map((character) => ({ ...character, campaignId }));
@@ -413,6 +424,12 @@ export function createCampaignFromBlueprint(
     hooks: blueprint.world.hooks,
     timeline: blueprint.world.timeline,
     openingScene: blueprint.campaign.openingScene,
+    ...(characterCreation ? {
+      characterCreation: {
+        ...characterCreation,
+        publicContext: createCharacterCreationPublicContext(blueprint),
+      },
+    } : {}),
   };
 
   return {
@@ -430,6 +447,25 @@ export function createCampaignFromBlueprint(
   };
 }
 
+function createCharacterCreationPublicContext(blueprint: WorldBlueprint): string[] {
+  return [
+    `Ton: ${blueprint.world.tone}`,
+    blueprint.world.themes.length ? `Thèmes: ${blueprint.world.themes.slice(0, 6).join(", ")}` : "",
+    blueprint.world.rules.length ? `Règles du monde: ${blueprint.world.rules.slice(0, 6).join("; ")}` : "",
+    blueprint.world.facts.length ? `Faits publics: ${blueprint.world.facts.slice(0, 10).join("; ")}` : "",
+    blueprint.world.factions.length
+      ? `Factions: ${blueprint.world.factions.slice(0, 8).map((faction) => `${faction.name} — ${faction.goal}`).join("; ")}`
+      : "",
+    blueprint.world.locations.length
+      ? `Lieux importants: ${blueprint.world.locations.slice(0, 8).map((location) => `${location.name} — ${location.description}`).join("; ")}`
+      : "",
+    blueprint.world.npcs.length
+      ? `Figures connues: ${blueprint.world.npcs.slice(0, 8).map((npc) => `${npc.name} — ${npc.role || npc.description}`).join("; ")}`
+      : "",
+    `Situation initiale: ${blueprint.campaign.openingScene}`,
+  ].filter(Boolean).map((detail) => detail.slice(0, 1600));
+}
+
 export function createCampaignStartFromBlueprint(
   blueprint: WorldBlueprint,
   itemCatalog: ItemTemplate[],
@@ -437,12 +473,26 @@ export function createCampaignStartFromBlueprint(
   effectCatalog: EffectTemplate[] = [],
   enemyCatalog: EnemyTemplate[] = [],
   partySetup?: CampaignPartySetup,
+  options: CampaignStartOptions = {},
 ): CampaignStartSnapshot {
   const campaignId = `campaign-${crypto.randomUUID()}`;
-  const sourceParty = partySetup?.characters.length ? partySetup : blueprint.party;
-  const fallbackParty = sourceParty.characters.length ? sourceParty : createFallbackParty(blueprint.campaign.level);
+  const sourceParty = options.allowEmptyParty
+    ? { characters: [], startingItems: [] }
+    : partySetup?.characters.length
+      ? partySetup
+      : blueprint.party;
+  const fallbackParty = sourceParty.characters.length
+    ? sourceParty
+    : options.allowEmptyParty
+      ? { characters: [], startingItems: [] }
+      : createFallbackParty(blueprint.campaign.level);
   const characters = fallbackParty.characters.map((character) => toCharacter(character, campaignId));
-  const campaign = createCampaignFromBlueprint(blueprint, characters, campaignId);
+  const campaign = createCampaignFromBlueprint(
+    blueprint,
+    characters,
+    campaignId,
+    options.characterCreation,
+  );
   const mergedEffectCatalog = mergeTemplatesById(effectCatalog, partySetup?.effectTemplates ?? []);
   const mergedAbilityCatalog = mergeTemplatesById(abilityCatalog, partySetup?.abilityTemplates ?? []);
   const mergedGameActionCatalog = mergeTemplatesById(initialGameActionTemplates, partySetup?.gameActionTemplates ?? []);

@@ -11,19 +11,22 @@ recollée dans l'application.
 3. La réponse est parsée sans `eval`, normalisée puis validée.
 4. Les ids, relations et références croisées sont réparés lorsque cela est sûr.
 5. En cas d'erreur, l'atelier génère un prompt de correction autonome.
-6. Un monde valide peut être conservé dans la bibliothèque locale ou activé.
-7. Avant activation, la campagne courante est sauvegardée comme restauration rapide.
+6. Un monde valide peut être conservé dans la bibliothèque locale ou chargé.
+7. Avant chargement, la campagne courante est sauvegardée comme restauration rapide.
+8. L'application revient ensuite dans Lecture et propose la création du
+   personnage dans un écran séparé occupant temporairement l'onglet Fiche.
 
 ## Activation
 
-Le contrat courant décrit séparément le monde et le groupe de départ.
-L'activation crée donc une partie neuve : personnages, caractéristiques,
-capacités de catalogue, inventaires, équipements, conversation et scène de
-combat. Aucune instance de la campagne précédente n'est recyclée. Les portraits
-et les réglages purement visuels restent locaux à l'interface.
+Le contrat courant impose un groupe de départ vide. Le chargement crée d'abord
+le monde, la conversation et la scène initiale, sans personnage ni inventaire.
+La fiche est ensuite créée depuis la campagne active. Son prompt reçoit les
+faits publics, factions, lieux, figures connues, situation initiale, rôle du
+joueur, concept du groupe et équipement attendu. Aucune instance de la campagne
+précédente n'est recyclée.
 
-Les objets de départ réutilisent un `templateId` du catalogue quand il existe.
-Un objet sans template correspondant reçoit un template simple propre au monde.
+Les objets de départ sont produits pendant cette seconde étape et réutilisent
+un `templateId` du catalogue quand il existe.
 
 ## Recommencer
 

@@ -168,8 +168,11 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
 
   assignCharacter: async (userId, characterId) => {
     const client = requireClient();
-    const { room } = get();
+    const { room, self } = get();
     if (!room) throw new Error("Aucune partie connectée.");
+    if (self?.role !== "host" && self?.role !== "admin") {
+      throw new Error("Un rôle administrateur est requis pour attribuer un personnage.");
+    }
     const { error } = await client.rpc("assign_multiplayer_character", {
       p_character_id: characterId,
       p_room_id: room.id,
@@ -187,7 +190,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   setMemberRole: async (userId, role) => {
     const client = requireClient();
     const { room, self } = get();
-    if (!room || self?.role !== "host") throw new Error("Seul le MJ peut modifier les rôles.");
+    if (!room || self?.role !== "host") throw new Error("Seul le Conteur peut modifier les rôles.");
     const { error } = await client.rpc("set_multiplayer_member_role", {
       p_role: role,
       p_room_id: room.id,
@@ -200,7 +203,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
   createCharacterPreset: async (name, summary, setup) => {
     const client = requireClient();
     const { room, self } = get();
-    if (!room || (self?.role !== "host" && self?.role !== "admin")) {
+    if (!room || self?.role !== "admin") {
       throw new Error("Un rôle administrateur est requis.");
     }
     const { error } = await client.rpc("create_multiplayer_character_preset", {
@@ -215,6 +218,9 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
 
   deleteCharacterPreset: async (presetId) => {
     const client = requireClient();
+    if (get().self?.role !== "admin") {
+      throw new Error("Un rôle administrateur est requis.");
+    }
     const { error } = await client.rpc("delete_multiplayer_character_preset", {
       p_preset_id: presetId,
     });
@@ -230,7 +236,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
       throw new Error("Cette participation ne peut pas créer de personnage.");
     }
     if (self.characterId) throw new Error("Un personnage vous est déjà attribué.");
-    if (pendingCharacterRequest) throw new Error("Votre personnage attend déjà la validation du MJ.");
+    if (pendingCharacterRequest) throw new Error("Votre personnage attend déjà sa validation.");
     if (kind === "custom" && !setup) throw new Error("Le personnage créé est absent.");
     if (kind === "preset" && !presetId) throw new Error("Choisissez un personnage préfabriqué.");
     const { data, error } = await client.rpc("submit_multiplayer_character_request", {
@@ -279,7 +285,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
       throw new Error("Seul un joueur peut envoyer une intention.");
     }
     if (!self.characterId) throw new Error("Choisissez d'abord un personnage.");
-    if (pendingTurn) throw new Error("Votre intention précédente attend encore le MJ.");
+    if (pendingTurn) throw new Error("Votre intention précédente attend encore le Conteur.");
     if (!content.trim() && actions.length === 0) throw new Error("L'intention est vide.");
 
     const { data, error } = await client.rpc("submit_multiplayer_turn", {
@@ -305,7 +311,7 @@ export const useMultiplayerStore = create<MultiplayerState>((set, get) => ({
     if (!room || !self || (self.role !== "player" && self.role !== "admin") || !self.characterId) {
       throw new Error("Un personnage joueur est requis pour lancer ce dé.");
     }
-    if (pendingTurn) throw new Error("Votre intention précédente attend encore le MJ.");
+    if (pendingTurn) throw new Error("Votre intention précédente attend encore le Conteur.");
     const request = useGameStore.getState().playerCheckRequests.find(
       (candidate) => candidate.id === requestId && candidate.status === "pending",
     );
@@ -482,7 +488,7 @@ async function connectToRoom(
         set({
           room: updatedRoom,
           ...(updatedRoom.status === "closed"
-            ? { phase: "error" as const, error: "Le MJ a fermé cette partie." }
+            ? { phase: "error" as const, error: "Le Conteur a fermé cette partie." }
             : {}),
         });
       } catch (error) {
@@ -515,7 +521,7 @@ async function connectToRoom(
           set({
             error: typeof payload.new.error === "string"
               ? `Personnage refusé : ${payload.new.error}`
-              : "Le MJ n'a pas pu installer ce personnage.",
+              : "Le Conteur n'a pas pu installer ce personnage.",
           });
         }
         void refreshPendingCharacterRequest(client, room.id, self.userId, set);
@@ -546,7 +552,7 @@ async function connectToRoom(
           set({
             error: typeof payload.new.error === "string"
               ? `Intention refusée : ${payload.new.error}`
-              : "Le MJ n'a pas pu résoudre cette intention.",
+              : "Le Conteur n'a pas pu résoudre cette intention.",
           });
         }
         void refreshPendingTurn(client, room.id, self.userId, set, get);
@@ -1063,8 +1069,15 @@ function isHexColor(value: unknown): value is string {
 }
 
 function readableError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (isRecord(error) && typeof error.message === "string") return error.message;
+  const message = error instanceof Error
+    ? error.message
+    : isRecord(error) && typeof error.message === "string"
+      ? error.message
+      : null;
+  if (message && /could not find the function|schema cache|PGRST202/iu.test(message)) {
+    return "Les fonctions multijoueur de Supabase ne sont pas à jour. Appliquez les migrations 002 à 004, puis rechargez le schéma PostgREST.";
+  }
+  if (message) return message;
   return "Erreur multijoueur inconnue.";
 }
 

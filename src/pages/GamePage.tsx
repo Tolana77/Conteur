@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CampaignConsole } from "../features/campaign/CampaignConsole";
+import { CharacterCreationPage } from "../features/character/CharacterCreationPage";
 import { CharacterList } from "../features/character/CharacterList";
 import { CharacterSheet } from "../features/character/CharacterSheet";
 import { ChatWindow } from "../features/chat/ChatWindow";
@@ -7,10 +8,10 @@ import { CombatMap } from "../features/combat/CombatMap";
 import { GenreSelection } from "../features/world/GenreSelection";
 import { WorldStatus } from "../features/world/WorldStatus";
 import {
-  CharacterOnboardingModal,
   MultiplayerPanel,
   useMultiplayerStore,
 } from "../features/multiplayer";
+import { useGameStore } from "../store/useGameStore";
 
 type PanelId = "left" | "center" | "right" | "combat" | "genre";
 
@@ -42,16 +43,28 @@ export function GamePage() {
   const multiplayerRoom = useMultiplayerStore((state) => state.room);
   const multiplayerSelf = useMultiplayerStore((state) => state.self);
   const multiplayerPhase = useMultiplayerStore((state) => state.phase);
+  const campaignId = useGameStore((state) => state.campaign.id);
+  const characterCount = useGameStore((state) => state.characters.length);
+  const isCampaignConfigured = campaignId !== "campaign-empty";
+  const needsCharacterCreation = isCampaignConfigured && (
+    multiplayerRoom
+      ? (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin") && !multiplayerSelf.characterId
+      : characterCount === 0
+  );
   const isRestrictedParticipant = Boolean(
     multiplayerRoom && multiplayerSelf?.role !== "host" && multiplayerSelf?.role !== "admin",
   );
-  const visiblePanels = isRestrictedParticipant
+  const visiblePanels = (isRestrictedParticipant
     ? panels.filter((panel) => panel.id !== "genre")
-    : panels;
+    : panels).map((panel) => panel.id === "right" && needsCharacterCreation
+      ? { ...panel, label: "Création", mobileLabel: "Créer" }
+      : panel);
 
   useEffect(() => {
-    if (isRestrictedParticipant && activePanel === "genre") setActivePanel("center");
-  }, [activePanel, isRestrictedParticipant]);
+    if (!isRestrictedParticipant) return;
+    if (activePanel === "genre") setActivePanel("center");
+    if (consoleView) setConsoleView(null);
+  }, [activePanel, consoleView, isRestrictedParticipant]);
 
   function handleTouchEnd(clientX: number) {
     if (touchStart === null) {
@@ -89,7 +102,11 @@ export function GamePage() {
     if (activePanel === "right") {
       return (
         <div className="h-full min-h-0">
-          <CharacterSheet onNavigateToReading={() => setActivePanel("center")} />
+          {needsCharacterCreation ? (
+            <CharacterCreationPage />
+          ) : (
+            <CharacterSheet onNavigateToReading={() => setActivePanel("center")} />
+          )}
         </div>
       );
     }
@@ -115,6 +132,8 @@ export function GamePage() {
     return (
       <div className="flex h-full min-h-0">
         <ChatWindow
+          onOpenCharacterCreation={() => setActivePanel("right")}
+          onOpenWorldWorkshop={() => setConsoleView("world")}
           onRequestMapTarget={(intentId) => {
             setMapTargetIntentId(intentId);
             setActivePanel("combat");
@@ -184,10 +203,16 @@ export function GamePage() {
       </div>
 
       {consoleView ? (
-        <CampaignConsole initialView={consoleView} onClose={() => setConsoleView(null)} />
+        <CampaignConsole
+          initialView={consoleView}
+          onCampaignActivated={() => {
+            setConsoleView(null);
+            setActivePanel("center");
+          }}
+          onClose={() => setConsoleView(null)}
+        />
       ) : null}
       {isMultiplayerOpen ? <MultiplayerPanel onClose={() => setIsMultiplayerOpen(false)} /> : null}
-      <CharacterOnboardingModal />
     </main>
   );
 }

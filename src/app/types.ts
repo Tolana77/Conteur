@@ -11,6 +11,7 @@ export type {
   LanguageMasteryLevel,
   SenseCapability,
   World,
+  WorldCharacterCreationGuidance,
 } from "../core/models";
 import type {
   CharacterStats,

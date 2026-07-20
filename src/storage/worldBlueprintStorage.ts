@@ -18,6 +18,7 @@ export interface SavedWorldBlueprint {
   name: string;
   savedAt: number;
   blueprint: WorldBlueprint;
+  brief?: WorldCreationBrief;
 }
 
 export interface CampaignBackup {
@@ -43,7 +44,10 @@ export function listWorldBlueprints(): SavedWorldBlueprint[] {
   }
 }
 
-export function saveWorldBlueprint(blueprint: WorldBlueprint): SavedWorldBlueprint {
+export function saveWorldBlueprint(
+  blueprint: WorldBlueprint,
+  brief?: WorldCreationBrief,
+): SavedWorldBlueprint {
   const current = listWorldBlueprints();
   const existing = current.find((item) => item.name === blueprint.campaign.name);
   const saved: SavedWorldBlueprint = {
@@ -51,6 +55,7 @@ export function saveWorldBlueprint(blueprint: WorldBlueprint): SavedWorldBluepri
     name: blueprint.campaign.name,
     savedAt: Date.now(),
     blueprint,
+    ...(brief ? { brief } : existing?.brief ? { brief: existing.brief } : {}),
   };
   localStorage.setItem(
     WORLD_LIBRARY_KEY,

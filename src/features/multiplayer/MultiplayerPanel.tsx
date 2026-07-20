@@ -203,7 +203,7 @@ type ConnectedRoomProps = {
 };
 
 function ConnectedRoom(props: ConnectedRoomProps) {
-  const canAssignOthers = props.self.role === "host";
+  const canAssignOthers = props.self.role === "admin";
   return (
     <div className="space-y-4">
       <section className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -216,9 +216,9 @@ function ConnectedRoom(props: ConnectedRoomProps) {
             <span className={`mt-1 h-2.5 w-2.5 rounded-full ${props.phase === "connected" ? "bg-[#5FA85A]" : "bg-[#B5612A]"}`} />
           </div>
           {props.awaitingHostState ? (
-            <p className="mt-2 text-xs text-[#E4D8BE]/55">En attente de la synchronisation du MJ.</p>
+            <p className="mt-2 text-xs text-[#E4D8BE]/55">En attente de la synchronisation du Conteur.</p>
           ) : props.pendingTurn ? (
-            <p className="mt-2 text-xs text-[#E4D8BE]/55">Votre intention attend la résolution du MJ.</p>
+            <p className="mt-2 text-xs text-[#E4D8BE]/55">Votre intention attend la résolution du Conteur.</p>
           ) : props.self.role === "host" && props.incomingTurnCount > 0 ? (
             <p className="mt-2 text-xs text-[#E4D8BE]/55">
               {props.incomingTurnCount} intention{props.incomingTurnCount > 1 ? "s" : ""} en attente.
@@ -256,7 +256,7 @@ function ConnectedRoom(props: ConnectedRoomProps) {
                     {member.userId === props.self.userId ? <span className="text-[10px] text-[#9C7A2E]">VOUS</span> : null}
                   </p>
                   <p className="ml-4 text-[11px] text-[#E4D8BE]/45">
-                    {member.role === "host" ? "MJ" : member.role === "admin" ? "Admin" : member.role === "player" ? "Joueur" : "Spectateur"}
+                    {member.role === "host" ? "Conteur" : member.role === "admin" ? "Admin" : member.role === "player" ? "Joueur" : "Spectateur"}
                   </p>
                   {props.self.role === "host" && member.role !== "host" ? (
                     <select

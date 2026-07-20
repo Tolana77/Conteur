@@ -46,15 +46,50 @@ export function createMultiplayerCharacterContext(
     campaignLevel: state.campaign.level,
     worldName: state.campaign.world.name ?? state.campaign.name,
     worldPitch: state.campaign.world.pitch ?? state.campaign.world.lore,
-    playerRole: "Un membre du groupe d'aventuriers",
-    partyConcept: state.characters?.map((character) => character.name).join(", ") || "Un groupe encore en formation",
-    startingEquipment: "Un équipement modeste adapté au concept du personnage",
+    campaignDetails: createPublicCampaignDetails(state.campaign),
+    playerRole: state.campaign.world.characterCreation?.playerRole
+      ?? "Un membre du groupe d'aventuriers",
+    partyConcept: state.campaign.world.characterCreation?.partyConcept
+      ?? (state.characters?.map((character) => character.name).join(", ")
+        || "Un groupe encore en formation"),
+    startingEquipment: state.campaign.world.characterCreation?.startingEquipment
+      ?? "Un équipement modeste adapté au concept du personnage",
     itemTemplates: mergeById(initialItemTemplates, state.itemTemplates),
     abilityTemplates: mergeById(initialAbilityTemplates, state.abilityTemplates),
     gameActionTemplates: mergeById(initialGameActionTemplates, state.gameActionTemplates),
     effectTemplates: mergeById(initialEffectTemplates, state.effectTemplates),
     enemyTemplates: mergeById(initialEnemyTemplates, state.enemyTemplates),
   };
+}
+
+function createPublicCampaignDetails(
+  campaign: Pick<GameState["campaign"], "history" | "world">,
+): string[] {
+  const world = campaign.world;
+  const details = [
+    world.tone ? `Ton: ${world.tone}` : "",
+    world.themes?.length ? `Thèmes: ${world.themes.slice(0, 6).join(", ")}` : "",
+    world.rules?.length ? `Règles du monde: ${world.rules.slice(0, 6).join("; ")}` : "",
+    world.facts.length ? `Faits publics: ${world.facts.slice(0, 10).join("; ")}` : "",
+    world.factions?.length
+      ? `Factions: ${world.factions.slice(0, 8).map((faction) => `${faction.name} — ${faction.goal}`).join("; ")}`
+      : "",
+    world.entities.locations.length
+      ? `Lieux importants: ${world.entities.locations.slice(0, 8).map((location) => `${location.name} — ${location.description}`).join("; ")}`
+      : "",
+    world.entities.npcs.length
+      ? `Figures connues: ${world.entities.npcs.slice(0, 8).map((npc) => `${npc.name} — ${npc.details?.role ?? npc.description}`).join("; ")}`
+      : "",
+    world.hooks?.length
+      ? `Pistes ouvertes: ${world.hooks.slice(0, 6).map((hook) => `${hook.title} — ${hook.premise}`).join("; ")}`
+      : "",
+    world.openingScene ? `Situation initiale: ${world.openingScene}` : "",
+    campaign.history.length ? `Enjeux fondateurs: ${campaign.history.slice(0, 4).join("; ")}` : "",
+  ];
+  return [...new Set([
+    ...(world.characterCreation?.publicContext ?? []),
+    ...details.filter(Boolean),
+  ])].slice(0, 24).map((detail) => detail.slice(0, 1600));
 }
 
 export function rebaseCharacterCreationPackage(

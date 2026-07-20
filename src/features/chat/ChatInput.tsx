@@ -62,7 +62,13 @@ export function ChatInput({
     multiplayerRoom && (multiplayerSelf?.role === "player" || multiplayerSelf?.role === "admin"),
   );
   const isSpectator = Boolean(multiplayerRoom && multiplayerSelf?.role === "spectator");
+  const isSetupBlocked = campaign.id === "campaign-empty" || (
+    multiplayerRoom
+      ? Boolean(isRemotePlayer && !multiplayerSelf?.characterId)
+      : characters.length === 0
+  );
   const isMultiplayerBlocked = isSpectator || awaitingHostState || Boolean(pendingMultiplayerTurn);
+  const isInteractionBlocked = isSetupBlocked || isMultiplayerBlocked;
   const selectedCharacter = characters.find((character) => character.id === selectedCharacterId);
   const selectedCombatant = combat.combatants.find((combatant) =>
     combatant.sourceType === "character" && combatant.sourceId === selectedCharacterId);
@@ -89,7 +95,7 @@ export function ChatInput({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isExternalBusy || hasPendingPlayerCheck || isMultiplayerBlocked) return;
+    if (isExternalBusy || hasPendingPlayerCheck || isInteractionBlocked) return;
     const playerInput = content.trim();
 
     if (!playerInput && pendingActionIntents.length === 0) {
@@ -158,7 +164,7 @@ export function ChatInput({
         ))}
         <input
           className="min-w-[120px] flex-1 bg-transparent px-1 py-1 text-sm text-[#E4D8BE] outline-none placeholder:text-[#E4D8BE]/45"
-          disabled={isExternalBusy || hasPendingPlayerCheck || isAwaitingNarration || isMultiplayerBlocked}
+          disabled={isExternalBusy || hasPendingPlayerCheck || isAwaitingNarration || isInteractionBlocked}
           onChange={(event) => {
             setContent(event.target.value);
             onPlayerActivity?.();
@@ -166,10 +172,14 @@ export function ChatInput({
           onFocus={onPlayerActivity}
           placeholder={isSpectator
             ? "Mode spectateur"
+            : isSetupBlocked
+              ? campaign.id === "campaign-empty"
+                ? "Créez d’abord une campagne…"
+                : "Créez d’abord votre personnage…"
             : awaitingHostState
-              ? "En attente de l'état du MJ..."
+              ? "En attente de l’état du Conteur…"
               : pendingMultiplayerTurn
-                ? "Intention transmise au MJ..."
+                ? "Intention transmise au Conteur…"
                 : hasPendingPlayerCheck
             ? "Lancez le dé pour poursuivre..."
             : isExternalBusy
@@ -178,7 +188,7 @@ export function ChatInput({
           value={content}
         />
       </div>
-      {isRemotePlayer ? (
+      {isRemotePlayer && !isSetupBlocked ? (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#E4D8BE]/60">
           <label className="sr-only" htmlFor="communication-channel">Canal de communication</label>
           <select
@@ -214,13 +224,15 @@ export function ChatInput({
       ) : null}
       <button
         className="fantasy-button mt-2 w-full rounded px-4 py-2 text-sm font-semibold sm:w-auto"
-        disabled={isAwaitingNarration || isExternalBusy || hasPendingPlayerCheck || isMultiplayerBlocked}
+        disabled={isAwaitingNarration || isExternalBusy || hasPendingPlayerCheck || isInteractionBlocked}
         type="submit"
       >
         {isSpectator
           ? "Spectateur"
+          : isSetupBlocked
+            ? "Mise en place"
           : pendingMultiplayerTurn
-            ? "En attente du MJ"
+            ? "En attente du Conteur"
             : awaitingHostState
               ? "Synchronisation..."
               : isExternalBusy

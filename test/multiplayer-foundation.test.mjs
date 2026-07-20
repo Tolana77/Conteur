@@ -11,6 +11,22 @@ const perceptionMigration = readFileSync(
   new URL("../supabase/migrations/202607190003_multiplayer_perception.sql", import.meta.url),
   "utf8",
 );
+const onboardingRepairMigration = readFileSync(
+  new URL("../supabase/migrations/202607190004_multiplayer_onboarding_repair.sql", import.meta.url),
+  "utf8",
+);
+const gamePageSource = readFileSync(
+  new URL("../src/pages/GamePage.tsx", import.meta.url),
+  "utf8",
+);
+const presetManagerSource = readFileSync(
+  new URL("../src/features/multiplayer/CharacterPresetManager.tsx", import.meta.url),
+  "utf8",
+);
+const multiplayerPanelSource = readFileSync(
+  new URL("../src/features/multiplayer/MultiplayerPanel.tsx", import.meta.url),
+  "utf8",
+);
 assert.match(onboardingMigration, /role in \('host', 'admin', 'player', 'spectator'\)/u);
 assert.match(onboardingMigration, /if not public\.is_multiplayer_host\(p_room_id\) then/u);
 assert.match(onboardingMigration, /multiplayer_character_presets/u);
@@ -18,6 +34,14 @@ assert.match(onboardingMigration, /multiplayer_character_requests/u);
 assert.match(perceptionMigration, /communication_channel in \('oral', 'written'\)/u);
 assert.match(perceptionMigration, /communication_language_id/u);
 assert.match(perceptionMigration, /submit_multiplayer_turn\(uuid, text, jsonb, text, text, text, text\)/u);
+assert.match(onboardingRepairMigration, /create or replace function public\.create_multiplayer_character_preset/u);
+assert.match(onboardingRepairMigration, /member\.role = 'admin'/u);
+assert.match(onboardingRepairMigration, /not public\.is_multiplayer_admin\(p_room_id\)/u);
+assert.match(onboardingRepairMigration, /notify pgrst, 'reload schema'/u);
+assert.match(gamePageSource, /<CharacterCreationPage/u);
+assert.doesNotMatch(gamePageSource, /CharacterOnboardingModal/u);
+assert.match(presetManagerSource, /self\?\.role !== "admin"/u);
+assert.match(multiplayerPanelSource, /canAssignOthers = props\.self\.role === "admin"/u);
 globalThis.localStorage = {
   getItem: (key) => localStorageData.get(key) ?? null,
   setItem: (key, value) => localStorageData.set(key, String(value)),

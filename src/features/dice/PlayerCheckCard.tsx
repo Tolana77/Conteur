@@ -80,7 +80,7 @@ export function PlayerCheckCard({
               type="button"
             >
               {pendingMultiplayerTurn
-                ? "En attente du MJ"
+                ? "En attente du Conteur"
                 : isResolving
                   ? "Lancer en cours…"
                   : "Lancer le d20"}

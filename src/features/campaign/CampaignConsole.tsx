@@ -41,10 +41,15 @@ type AdminSectionId = (typeof adminSections)[number]["id"];
 
 interface CampaignConsoleProps {
   onClose: () => void;
+  onCampaignActivated?: () => void;
   initialView?: "campaign" | "world";
 }
 
-export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignConsoleProps) {
+export function CampaignConsole({
+  onClose,
+  onCampaignActivated,
+  initialView = "campaign",
+}: CampaignConsoleProps) {
   const [newFact, setNewFact] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<AdminSectionId>("overview");
@@ -207,7 +212,9 @@ export function CampaignConsole({ onClose, initialView = "campaign" }: CampaignC
             </div>
           ) : null}
 
-          {initialView === "world" ? <WorldWorkshop /> : <>
+          {initialView === "world" ? (
+            <WorldWorkshop onCampaignActivated={onCampaignActivated} />
+          ) : <>
           <nav
             aria-label="Sections de la console administrateur"
             className="admin-tabs-scroll sticky top-0 z-10 -mx-4 -mt-4 mb-5 overflow-x-auto border-b border-[#9C7A2E]/20 bg-[#221E29]/95 px-4 py-3 backdrop-blur"

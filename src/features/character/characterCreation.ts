@@ -84,6 +84,8 @@ export interface CharacterCreationContext {
   campaignLevel: number;
   worldName: string;
   worldPitch: string;
+  /** Informations publiques compactes qui ancrent le personnage dans ce monde. */
+  campaignDetails: string[];
   playerRole: string;
   partyConcept: string;
   startingEquipment: string;
@@ -184,6 +186,11 @@ export function buildCharacterCreationPrompt(
     `Rôle attendu: ${context.playerRole}`,
     `Concept du groupe: ${context.partyConcept}`,
     `Équipement souhaité: ${context.startingEquipment}`,
+    "",
+    "CONTEXTE PUBLIC DE LA CAMPAGNE",
+    ...(context.campaignDetails.length
+      ? context.campaignDetails.map((detail) => `- ${detail}`)
+      : ["- Aucun détail public supplémentaire."]),
     "",
     "DESCRIPTION DU JOUEUR",
     playerDescription.trim(),

@@ -2098,7 +2098,7 @@ function formatAbilityRecharge(ability: ResolvedAbility): string {
     shortRest: "repos court",
     longRest: "repos long",
     encounter: "début de rencontre",
-    manual: "MJ",
+    manual: "Conteur",
     never: "jamais",
   };
 

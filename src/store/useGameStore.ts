@@ -337,7 +337,7 @@ function createInitialCombatScene(): CombatScene {
           visible: false,
           interactable: true,
           usableAs: ["projectile", "cover-wedge"],
-          rule: "Peut servir de projectile improvisé si le MJ valide l'action.",
+          rule: "Peut servir de projectile improvisé si le Conteur valide l'action.",
         },
         {
           id: "detail-glass-shards",

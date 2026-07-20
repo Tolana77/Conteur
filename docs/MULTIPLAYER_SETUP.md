@@ -12,7 +12,11 @@ l'autorité de jeu : lui seul exécute le moteur et appelle le narrateur.
 3. Dans **SQL Editor**, exécute dans l'ordre
    `supabase/migrations/202607190001_multiplayer_foundation.sql`, puis
    `supabase/migrations/202607190002_multiplayer_character_onboarding.sql`, puis
-   `supabase/migrations/202607190003_multiplayer_perception.sql`.
+   `supabase/migrations/202607190003_multiplayer_perception.sql`, puis
+   `supabase/migrations/202607190004_multiplayer_onboarding_repair.sql`.
+   La dernière migration recrée les RPC d'accueil de façon idempotente et force
+   le rechargement du cache PostgREST. Elle corrige notamment l'erreur
+   `Could not find the function create_multiplayer_character_preset`.
 4. Dans **Project Settings > API**, relève l'URL du projet et la clé
    publishable. La clé `service_role` ne doit jamais être utilisée ici.
 
@@ -34,14 +38,16 @@ relance Vite. Ce fichier ne doit pas être commité.
 
 1. Le MJ ouvre la campagne locale et crée un salon.
 2. Les autres navigateurs rejoignent avec le code à six caractères.
-3. Chaque nouveau joueur choisit un préfabriqué ou crée une fiche équilibrée.
-4. Le navigateur du MJ valide la demande, installe la fiche dans la campagne et
+3. Lecture guide d'abord la création de campagne, puis celle du personnage dans
+   l'onglet temporaire **Création**.
+4. Chaque nouveau joueur choisit un préfabriqué ou crée une fiche équilibrée.
+5. Le navigateur du Conteur valide la demande, installe la fiche dans la campagne et
    l'attribue à son auteur.
-5. Une intention est écrite dans `multiplayer_turns` avec l'identité Supabase
+6. Une intention est écrite dans `multiplayer_turns` avec l'identité Supabase
    réelle du joueur.
-6. Le navigateur du MJ traite les intentions dans l'ordre, appelle le moteur et
+7. Le navigateur du Conteur traite les intentions dans l'ordre, appelle le moteur et
    le narrateur, puis publie une projection filtrée par destinataire.
-7. Les joueurs ne reçoivent ni secrets du monde, ni traces IA, ni jets cachés,
+8. Les joueurs ne reçoivent ni secrets du monde, ni traces IA, ni jets cachés,
    ni inventaires privés des autres personnages.
 
 Les paroles et écrits cités sont projetés séparément pour chaque destinataire.
@@ -58,7 +64,7 @@ exécutée sans l'autorité du MJ.
 - Le MJ peut promouvoir un participant au rôle **Admin** depuis **Groupe**.
 - Un admin peut jouer et accède à **Univers**, à la console et à l'Atelier des
   mondes, sans devenir une seconde autorité du moteur.
-- Depuis **Univers** ou l'Atelier, le MJ et les admins peuvent publier des
-  personnages préfabriqués pour les prochaines arrivées.
+- Seul un joueur **Admin** peut publier ou supprimer les personnages
+  préfabriqués et choisir les attributions manuelles.
 - Une couleur stable identifie chaque participant dans le chat et l'annuaire
   **Personnages**.

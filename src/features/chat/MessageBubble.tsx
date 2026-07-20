@@ -28,7 +28,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       >
         <div className={`${isCheckSetup ? "mb-0.5 text-[0.62rem]" : "mb-1 text-xs"} flex items-center justify-between gap-3 font-semibold uppercase text-[#9C7A2E]`}>
           <span style={isPlayer ? { color: playerColor } : undefined}>
-            {isPlayer ? message.authorName ?? "Joueur" : isCheckSetup ? "Le Conteur" : "MJ"}
+            {isPlayer ? message.authorName ?? "Joueur" : "Le Conteur"}
           </span>
           <time>{new Date(message.timestamp).toLocaleTimeString("fr-FR")}</time>
         </div>
